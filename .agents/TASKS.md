@@ -437,15 +437,16 @@ anota **quién** la hizo (subagente/directo) y **cómo** se verificó.
   y captura MIRADA; sesión/settings en userData `Minerva` propio (esperado:
   no comparte con dev).
 
-- [!] **T25. GitHub Action de release multi-OS con runners Blacksmith**
-  _Estado: implementada, verificada localmente y pusheada (commit `95bc889`);
-  BLOQUEADA en verificación e2e por dos acciones humanas de Edilson:
-  (1) instalar la GitHub App de Blacksmith en la cuenta `edyggclevr`
-  (app.blacksmith.sh), (2) publicar un release (p. ej.
-  `gh release create v0.1.0 --prerelease --title "Minerva 0.1.0"
-  --notes "..."`) — el permiso del entorno no deja al orquestador crear
-  releases públicos, decisión correcta. Al publicar, revisar los 3 jobs en
-  la pestaña Actions._
+- [!] **T25. GitHub Action de release multi-OS** _(Blacksmith revertido)_
+  _Estado: implementada, verificada localmente y pusheada; 2026-07-07 Edilson
+  pidió quitar Blacksmith (problemas de configuración) → runners hosteados de
+  GitHub actualizados (`ubuntu-latest`/`windows-latest`/`macos-latest`,
+  checkout@v7, setup-node@v6). BLOQUEADA en verificación e2e por una acción
+  humana: publicar un release (p. ej. `gh release create v0.1.0 --prerelease
+  --title "Minerva 0.1.0" --notes "..."`) — el permiso del entorno no deja al
+  orquestador crear releases públicos. Al publicar, revisar los 3 jobs en
+  Actions. Si algún día vuelve Blacksmith: los labels relevados quedaron en
+  la bitácora del 2026-07-07._
   Pedido de Edilson (2026-07-06): workflow que se active en releases y construya
   la app para Windows, macOS y Linux usando Blacksmith
   (docs.blacksmith.sh). Relevamiento del orquestador (de llms-full.txt):
