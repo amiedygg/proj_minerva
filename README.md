@@ -116,6 +116,14 @@ npm run build
 - Verificación del empaquetado: `MINERVA_MOCK=1 ./dist/Minerva-<v>.AppImage
   --appimage-extract-and-run --remote-debugging-port=5175` y en otra terminal
   `node scripts/smoke-packaged.mjs captura.png`.
+- **Release multi-OS**: al publicar un release en GitHub, el workflow
+  `.github/workflows/release.yml` construye AppImage (Linux), instalador NSIS
+  (Windows x64) y DMG (macOS arm64+x64) en runners de
+  [Blacksmith](https://blacksmith.sh) y los adjunta al release. Requiere la
+  GitHub App de Blacksmith instalada en la cuenta (app.blacksmith.sh) — sin
+  eso los jobs quedan en cola. Los binarios de macOS/Windows salen **sin
+  firma de código** (Gatekeeper/SmartScreen mostrarán aviso). Conviene
+  bumpear `version` en `package.json` antes de taggear.
 
 ---
 

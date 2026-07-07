@@ -124,6 +124,18 @@ Hallazgo de entorno: esta máquina no tiene fuse2 → el AppImage requiere
 `--appimage-extract-and-run` (o instalar `fuse2`, o usar `dist/linux-unpacked/`).
 Pulido futuro: icono propio, desktopName. Detalle en la bitácora de TASKS.md.
 
+## Iteración actual (2026-07-06/07, noche 3b): CI de release multi-OS (T25)
+
+Pedido de Edilson: GitHub Action con runners **Blacksmith** que se active en
+releases y construya Windows + macOS + Linux. Relevamiento hecho (labels de
+runners, cache transparente, prerequisito de la GitHub App de Blacksmith en la
+cuenta). El repo ya vive en github.com/edyggclevr/proj_minerva (subido hoy).
+Diseño: matrix de 3 jobs (ubuntu-2404 / windows-2025 / macos-latest M4),
+electron-builder por SO con `--publish never` y `gh release upload` al release
+que disparó el workflow. macOS/Windows sin firma de código por ahora.
+Detalle completo en TASKS.md § T25. Implementación delegada a Sonnet;
+verificación del orquestador: YAML + release de prueba real mirando los runs.
+
 ## Objetivo de la iteración histórica (scaffold)
 
 Dejar un scaffold **funcional y verificado** de la app Electron: procesos main/preload/

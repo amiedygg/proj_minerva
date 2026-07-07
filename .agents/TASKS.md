@@ -437,6 +437,52 @@ anota **quién** la hizo (subagente/directo) y **cómo** se verificó.
   y captura MIRADA; sesión/settings en userData `Minerva` propio (esperado:
   no comparte con dev).
 
+- [~] **T25. GitHub Action de release multi-OS con runners Blacksmith**
+  Pedido de Edilson (2026-07-06): workflow que se active en releases y construya
+  la app para Windows, macOS y Linux usando Blacksmith
+  (docs.blacksmith.sh). Relevamiento del orquestador (de llms-full.txt):
+  labels `blacksmith-{2,4,8,16,32}vcpu-ubuntu-{2204,2404}[-arm]`,
+  `blacksmith-{2..32}vcpu-windows-2025` (beta pública),
+  `blacksmith-{6,12}vcpu-macos-{latest,15,26}` (solo Apple Silicon M4/arm64);
+  las actions de cache propias de Blacksmith están ARCHIVADAS — se usan las
+  estándar (`actions/setup-node` con `cache: npm`) que pegan al cache
+  colocado de Blacksmith sin cambios. PREREQUISITO humano: la GitHub App de
+  Blacksmith instalada en la cuenta `edyggclevr` (app.blacksmith.sh) — sin
+  eso los jobs quedan en cola para siempre.
+  Entregables:
+  (a) `.github/workflows/release.yml`: trigger `release: types: [published]`;
+  `permissions: contents: write`; matrix de 3 jobs con `fail-fast: false`:
+  - linux → `blacksmith-4vcpu-ubuntu-2404`, `npx electron-builder --linux`
+  - windows → `blacksmith-4vcpu-windows-2025`, `npx electron-builder --win`
+  - mac → `blacksmith-6vcpu-macos-latest`, `npx electron-builder --mac`
+  Pasos por job: checkout@v4, setup-node@v4 (node 22, cache npm), `npm ci`,
+  `npm run typecheck` (barato, corta builds rotos), `npm run build`
+  (electron-vite), electron-builder del SO con `--publish never`, y subida de
+  artefactos al release con `gh release upload "$GITHUB_REF_NAME" <archivos>
+  --clobber` (env `GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}`, `shell: bash`
+  también en Windows). Subir: `dist/*.AppImage` (linux), `dist/*.exe` (win),
+  `dist/*.dmg` (mac). `timeout-minutes: 30` por job. En mac exportar
+  `CSC_IDENTITY_AUTO_DISCOVERY: false` (sin firma; evita que electron-builder
+  busque certificados). Paso previo no bloqueante que avise si la versión de
+  package.json no coincide con el tag del release.
+  (b) `electron-builder.yml`: agregar targets `mac` (dmg, arch arm64 y x64 —
+  el runner M4 compila ambos) con `category: public.app-category.developer-tools`,
+  y `win` (nsis x64). NO tocar la sección linux ni `files` (la exclusión de
+  `.env` es requisito de seguridad).
+  (c) README: nota corta en la sección Empaquetado sobre el workflow de
+  release (cómo se dispara, dónde quedan los binarios, prerequisito
+  Blacksmith, y que macOS/Windows salen SIN firmar — Gatekeeper/SmartScreen
+  avisarán).
+  Gotchas: los artefactos toman la versión de package.json (bump antes de
+  taggear); no usar actions `useblacksmith/*` (archivadas); runner macOS es
+  arm64 (electron-builder baja los dist x64 para el arch cruzado dentro de
+  mac sin problema).
+  _Aceptación (verifica el orquestador):_ YAML válido (parseo + actionlint si
+  está disponible); typecheck/lint/tests locales intactos; push del workflow
+  y release de prueba `v0.1.0` (prerelease) disparando los 3 jobs; los
+  binarios quedan adjuntos al release — o, si Blacksmith no está instalado
+  aún, los jobs quedan en cola y se reporta la acción humana a Edilson.
+
 ---
 
 ## Log

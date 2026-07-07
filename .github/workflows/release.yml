@@ -1,0 +1,67 @@
+name: Release builds (Blacksmith)
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os-name: linux
+            runner: blacksmith-4vcpu-ubuntu-2404
+            flag: --linux
+            assets: dist/*.AppImage
+          - os-name: windows
+            runner: blacksmith-4vcpu-windows-2025
+            flag: --win
+            assets: dist/*.exe
+          - os-name: mac
+            runner: blacksmith-6vcpu-macos-latest
+            flag: --mac
+            assets: dist/*.dmg
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check version vs tag
+        shell: bash
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::warning::package.json version ($PKG_VERSION) does not match release tag ($GITHUB_REF_NAME)"
+          fi
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build (electron-vite)
+        run: npm run build
+
+      - name: Package (electron-builder)
+        run: npx electron-builder ${{ matrix.flag }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Upload release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" ${{ matrix.assets }} --clobber
