@@ -1,0 +1,59 @@
+import { useCallback, useEffect, useState } from 'react'
+import type { CommentThread, RepoRef } from '../../../shared/types'
+
+interface UseCommentThreadsResult {
+  threads: CommentThread[]
+  loading: boolean
+  error: string | null
+  /**
+   * Vuelve a pedir los hilos a `main`; se usa tras publicar un comentario.
+   * Devuelve los hilos recién obtenidos (además de dejarlos en `threads`)
+   * para que un llamador pueda ubicar de inmediato el hilo que acaba de
+   * crear/actualizar sin esperar al próximo render (p. ej. para expandirlo).
+   */
+  reload: () => Promise<CommentThread[]>
+}
+
+function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Hilos de comentarios de un PR vía `github:getCommentThreads`.
+ *
+ * `reload` llama a `setState` directamente (para poder usarse también desde
+ * el handler de "publicar comentario" en `ConversationTab`), así que el efecto
+ * inicial no debe invocarla como sentencia directa de su cuerpo: eso también
+ * dispara `react-hooks/set-state-in-effect` (la regla propaga el "esto llama
+ * a setState" a través de identificadores ya marcados, no solo llamadas
+ * literales a `setX`). Se invoca desde una función anidada en su lugar.
+ */
+export function useCommentThreads(repo: RepoRef, number: number): UseCommentThreadsResult {
+  const [threads, setThreads] = useState<CommentThread[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const reload = useCallback(async (): Promise<CommentThread[]> => {
+    setLoading(true)
+    setError(null)
+    try {
+      const result = await window.minerva.github.getCommentThreads({ repo, number })
+      setThreads(result)
+      return result
+    } catch (err: unknown) {
+      setError(toErrorMessage(err))
+      return []
+    } finally {
+      setLoading(false)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- se depende de campos primitivos de `repo`, no de su identidad de objeto.
+  }, [repo.owner, repo.name, number])
+
+  useEffect(() => {
+    void (async () => {
+      await reload()
+    })()
+  }, [reload])
+
+  return { threads, loading, error, reload }
+}

@@ -1,0 +1,224 @@
+import { useEffect, useId, useRef, useState } from 'react'
+import type { Mermaid } from 'mermaid'
+
+interface MermaidDiagramProps {
+  code: string
+  /**
+   * Modo lightbox (`MermaidZoomPan`): fija el SVG a su tamaño natural (el de
+   * su viewBox, en px) en vez del `width:100%` + `max-width` con el que lo
+   * emite mermaid. Necesario porque el wrapper del visor es `absolute` con
+   * ancho shrink-to-fit: con `width:100%` el SVG colapsaba a 0px y el visor
+   * se veía vacío.
+   */
+  naturalSize?: boolean
+  /** Se dispara cuando el SVG ya está montado en el DOM (para auto-ajustar zoom). */
+  onRendered?: () => void
+}
+
+/**
+ * Singleton perezoso del módulo `mermaid`: se importa dinámicamente
+ * (`import('mermaid')`) la primera vez que se monta un diagrama, en vez de
+ * en el boot de la app — `mermaid` pesa ~1MB y el panel didáctico es la
+ * única superficie que dibuja diagramas. `initialize()` solo se llama una
+ * vez pase lo que pase (llamarlo de nuevo reinicia estado interno de mermaid
+ * innecesariamente).
+ *
+ * Tema `neutral` (T16): los diagramas se renderizan SIEMPRE sobre fondo
+ * blanco (tarjeta inline y área del visor `MermaidZoomPan`, un solo tema),
+ * nunca sobre el fondo oscuro de la app — con `dark` las etiquetas de las
+ * flechas de los C4 quedaban ilegibles. La config de `c4`/`er`/`flowchart`
+ * de abajo abre el layout por defecto (más fila/margen/padding) para que las
+ * etiquetas largas de `Rel()` que genera la IA no se encimen entre sí ni con
+ * las cajas.
+ */
+let mermaidPromise: Promise<Mermaid> | null = null
+
+/** Margen (px de coordenadas SVG) alrededor del contenido al recortar el viewBox. */
+const TRIM_PADDING = 24
+
+/**
+ * Normaliza el markup del SVG que emite mermaid, sobre el STRING (antes de
+ * `dangerouslySetInnerHTML`) y no mutando el nodo ya montado: React puede
+ * re-insertar el innerHTML en cualquier re-render y una mutación post-mount
+ * se perdería en silencio. Dos arreglos:
+ *
+ * 1. Recorta el viewBox al bounding box real del contenido (+padding): el
+ *    motor C4 de mermaid emite un lienzo con bandas muertas de >100px por
+ *    lado, que encogen el diagrama tanto en el auto-fit del visor como en la
+ *    tarjeta inline (T16). Medir el bbox exige layout, así que el SVG se
+ *    monta un instante en un host oculto (visibility:hidden, NO display:none
+ *    — con display:none getBBox devuelve 0).
+ * 2. En modo `naturalSize` fija width/height a los px del viewBox en vez del
+ *    `width="100%"` + `max-width` de mermaid (dentro del wrapper `absolute`
+ *    del visor, `width:100%` colapsa a 0px — T15).
+ *
+ * Parseo como text/html y NO como image/svg+xml: los C4 de mermaid traen el
+ * person icon como <image xlink:href="data:..."> SIN declarar xmlns:xlink, y
+ * el parser XML rechaza el documento entero ("Namespace prefix xlink...") —
+ * con XML esta función devolvía el markup intacto y el visor volvía a
+ * colapsar (T16, regresión silenciosa del fix de T15). El parser HTML es
+ * tolerante y además es el mismo modelo con el que se consume el string
+ * después (dangerouslySetInnerHTML).
+ */
+function normalizeSvg(svgMarkup: string, naturalSize: boolean): string {
+  const doc = new DOMParser().parseFromString(svgMarkup, 'text/html')
+  const svg = doc.body.querySelector('svg')
+  if (!svg) return svgMarkup
+
+  const host = document.createElement('div')
+  host.style.cssText = 'position:absolute; left:-99999px; top:0; visibility:hidden'
+  host.appendChild(svg)
+  document.body.appendChild(host)
+  let content: { x: number; y: number; width: number; height: number } | null = null
+  try {
+    const bbox = (svg as unknown as SVGSVGElement).getBBox()
+    if (bbox.width > 0 && bbox.height > 0) content = bbox
+  } catch {
+    // getBBox puede lanzar en SVGs degenerados; se cae al viewBox original.
+  }
+  host.remove()
+
+  if (content) {
+    const x = content.x - TRIM_PADDING
+    const y = content.y - TRIM_PADDING
+    const w = content.width + TRIM_PADDING * 2
+    const h = content.height + TRIM_PADDING * 2
+    svg.setAttribute('viewBox', `${x} ${y} ${w} ${h}`)
+    if (!naturalSize) {
+      // La tarjeta inline conserva width:100%; solo se ajusta el tope.
+      svg.setAttribute('style', `max-width: ${Math.ceil(w)}px;`)
+    }
+  }
+
+  const viewBox = (svg.getAttribute('viewBox') ?? '').trim().split(/[\s,]+/).map(Number)
+  const width = viewBox.length === 4 ? viewBox[2] : 0
+  const height = viewBox.length === 4 ? viewBox[3] : 0
+  if (!(width > 0) || !(height > 0)) return svgMarkup
+  if (naturalSize) {
+    svg.setAttribute('width', String(width))
+    svg.setAttribute('height', String(height))
+    svg.setAttribute('style', `max-width: none; width: ${width}px; height: ${height}px;`)
+  }
+  return new XMLSerializer().serializeToString(svg)
+}
+
+function getMermaid(): Promise<Mermaid> {
+  if (!mermaidPromise) {
+    mermaidPromise = import('mermaid').then((mod) => {
+      const mermaid = mod.default
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: 'neutral',
+        securityLevel: 'strict',
+        c4: {
+          c4ShapeInRow: 3,
+          c4BoundaryInRow: 1,
+          // 110 y no menos: el hueco horizontal entre shapes debe caber una
+          // etiqueta de Rel de ~4 palabras sin pisar las cajas vecinas (el
+          // motor C4 centra la etiqueta en el punto medio de la flecha).
+          c4ShapeMargin: 110,
+          c4ShapePadding: 24,
+          diagramMarginX: 40,
+          diagramMarginY: 40,
+          messageFontSize: 14,
+        },
+        er: {
+          diagramPadding: 24,
+        },
+        flowchart: {
+          nodeSpacing: 60,
+          rankSpacing: 60,
+          diagramPadding: 16,
+        },
+      })
+      return mermaid
+    })
+  }
+  return mermaidPromise
+}
+
+/**
+ * Renderiza un diagrama Mermaid (C4, `erDiagram`, ...) generado por la IA a
+ * partir del DSL de texto — la IA nunca dibuja, solo escribe Mermaid (ver
+ * `CLAUDE.md`). Si el parse falla (DSL inválido, p. ej. por un modelo real
+ * que alucine sintaxis), cae a una tarjeta con el código fuente en vez de
+ * romper el panel.
+ *
+ * Nota: si `code` puede cambiar en un componente ya montado (no es el caso
+ * hoy: cada sección de un `DidacticAnalysis` trae su Mermaid fijo), quien lo
+ * use debe forzar remount con `key={code}` en vez de que este componente
+ * intente resetear su propio estado — comparar "código anterior" en un ref
+ * durante el render es justamente el antipatrón que marca el lint
+ * `react-hooks/refs`.
+ */
+export function MermaidDiagram({
+  code,
+  naturalSize = false,
+  onRendered,
+}: MermaidDiagramProps): React.JSX.Element {
+  const rawId = useId().replace(/:/g, '')
+  const elementId = `mermaid-${rawId}`
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const [svg, setSvg] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+
+    void (async () => {
+      try {
+        const mermaid = await getMermaid()
+        const { svg: rendered } = await mermaid.render(elementId, code)
+        if (!cancelled) setSvg(normalizeSvg(rendered, naturalSize))
+      } catch (error) {
+        // Log del motivo real: sin esto el fallback "no renderizable" es
+        // indistinguible entre DSL inválido de la IA y un bug nuestro (T16).
+        console.error('[MermaidDiagram] render falló:', error)
+        if (!cancelled) setFailed(true)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [code, elementId, naturalSize])
+
+  // Avisa cuando el SVG ya está montado en el DOM (corre tras el render que
+  // insertó `svg` vía dangerouslySetInnerHTML). Puede dispararse más de una
+  // vez (StrictMode): el consumidor debe ser idempotente.
+  useEffect(() => {
+    if (!svg) return
+    if (containerRef.current?.querySelector('svg')) onRendered?.()
+  }, [svg, onRendered])
+
+  if (failed) {
+    return (
+      <div className="rounded-md border border-warning/40 bg-warning/10 p-3">
+        <p className="mb-2 text-xs font-medium text-warning">Diagrama no renderizable.</p>
+        <pre className="overflow-x-auto text-[11px] whitespace-pre-wrap text-muted">{code}</pre>
+      </div>
+    )
+  }
+
+  if (!svg) {
+    return <div className="h-24 animate-pulse rounded-md border border-border bg-border/20" />
+  }
+
+  // El SVG viene de `mermaid.render(...)` con `securityLevel: 'strict'`: en
+  // ese modo mermaid sanitiza el markup que genera (sin <script>, sin
+  // handlers `on*` inline) incluso cuando el DSL de entrada proviene de un
+  // PR de terceros (entrada no confiable, ver frontera de seguridad en
+  // `CLAUDE.md`). Por eso, y solo por eso, es seguro insertarlo aquí con
+  // `dangerouslySetInnerHTML` en vez de con un parser SVG propio.
+  return (
+    <div
+      ref={containerRef}
+      className={
+        naturalSize
+          ? 'w-max'
+          : 'overflow-x-auto rounded-md border border-border bg-white p-3 [&_svg]:mx-auto'
+      }
+      dangerouslySetInnerHTML={{ __html: svg }}
+    />
+  )
+}

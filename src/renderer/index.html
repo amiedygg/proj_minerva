@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      CSP explícita (T11): `img-src` permite `data:` (icono de persona de los
+      diagramas C4 de mermaid es un PNG base64 — sin esto sale el icono roto)
+      y `https:` (avatares de GitHub e imágenes embebidas en comentarios de
+      PRs). `connect-src 'self'` cubre también el ws:// de HMR en dev (CSP3:
+      'self' matchea ws/wss del mismo host). Sin `frame-ancestors` porque en
+      <meta> se ignora (solo aplica vía header).
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Minerva</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

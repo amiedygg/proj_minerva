@@ -1,0 +1,17 @@
+appId: dev.edygg.minerva
+productName: Minerva
+directories:
+  output: dist
+files:
+  - out/**/*
+  - package.json
+  - '!**/.env'
+  - '!**/.env.*'
+asar: true
+npmRebuild: false
+linux:
+  target:
+    - AppImage
+  category: Development
+  executableName: minerva
+  maintainer: Edilson

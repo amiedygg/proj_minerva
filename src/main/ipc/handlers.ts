@@ -1,0 +1,199 @@
+import { BrowserWindow } from 'electron'
+import { handle } from './register'
+import { createGithubService } from '../github'
+import { createAiService } from '../ai'
+import { getEffectiveAiModel } from '../ai/env'
+import { analysisCache } from '../ai/analysis-cache'
+import { settingsStore } from '../settings/store'
+import { authManager } from '../auth/auth-manager'
+import { openDidacticWindow } from '../windows/didactic-window'
+import {
+  MINERVA_EVENTS,
+  type AnalysisProgressEvent,
+  type DraftDidacticSection,
+} from '../../shared/events'
+import type { IpcResponse } from '../../shared/ipc'
+import type { RepoRef } from '../../shared/types'
+
+/**
+ * Clave del registro de análisis EN CURSO (T22): mismo criterio
+ * (`owner/name#number`) que `../ai/analysis-cache.ts` y `../ai/mock-service.ts`,
+ * repetido acá en vez de importado porque `AnalysisCache` no expone su
+ * formato de clave (encapsulado a propósito, no hace falta acoplar los dos).
+ */
+function prKey(repo: RepoRef, number: number): string {
+  return repo.owner + '/' + repo.name + '#' + number
+}
+
+/** Empuja un snapshot de progreso a TODAS las ventanas abiertas (T13); el filtro por PR es cosa del hook del renderer, no de acá. */
+function broadcastProgress(payload: AnalysisProgressEvent): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send(MINERVA_EVENTS.analysisProgress, payload)
+    }
+  }
+}
+
+/**
+ * Registra los handlers IPC disponibles hoy. Los canales `github:*`/`ai:*`
+ * delegan a una única instancia de `GithubService`/`AiService` (real con
+ * Octokit desde T6 salvo `MINERVA_MOCK=1`; `AiService` real con OpenRouter
+ * desde T9-final si hay `OPENROUTER_API_KEY`, mock si no — ver
+ * `../ai/index.ts`). `createAiService` recibe `githubService` (la misma
+ * instancia usada por los canales `github:*`) para que el pipeline de IA
+ * pida el detalle/archivos del PR a lo que sea que esté activo, mock o real.
+ * Los canales `auth:*` delegan al `AuthManager` singleton
+ * (`../auth/auth-manager.ts`) — quien llama a `registerIpcHandlers` debe
+ * haber esperado `authManager.init()` antes, para que `auth:getStatus`
+ * refleje el token persistido (si lo hay) desde la primera llamada.
+ * `settings:get`/`settings:setAiModel` (T12) exponen el modelo de IA
+ * efectivo (`getEffectiveAiModel`, `../ai/env.ts`) y permiten persistirlo
+ * (`settingsStore.setAiModel`, `../settings/store.ts`); no delegan a una
+ * instancia de servicio porque no hay estado por-request que mantener.
+ */
+export function registerIpcHandlers(): void {
+  handle('minerva:ping', () => 'pong from main @ electron ' + process.versions.electron)
+
+  handle('auth:getStatus', () => authManager.getStatus())
+  handle('auth:startDeviceFlow', () => authManager.startDeviceFlow())
+  handle('auth:signOut', () => authManager.signOut())
+
+  const githubService = createGithubService()
+  handle('github:listPullRequests', (req) => githubService.listPullRequests(req))
+  handle('github:getPullRequestDetail', (req) => githubService.getPullRequestDetail(req))
+  handle('github:getPullRequestFiles', (req) => githubService.getPullRequestFiles(req))
+  handle('github:getCommentThreads', (req) => githubService.getCommentThreads(req))
+  handle('github:postComment', (req) => githubService.postComment(req))
+
+  const aiService = createAiService(githubService)
+
+  /**
+   * Registro de análisis EN CURSO por PR (T22). Sin esto, dos solicitudes
+   * simultáneas del mismo PR —un re-click de "Analizar PR" mientras el
+   * primero sigue en vuelo, o una ventana desacoplada abierta a mitad de un
+   * streaming— disparaban una SEGUNDA llamada al LLM cada una: el cache de
+   * abajo (`analysisCache`) solo ve análisis ya COMPLETOS, nunca uno a medio
+   * hacer. Vive local a esta función (no a nivel de módulo) porque
+   * conceptualmente es estado del registro de handlers, igual que
+   * `githubService`/`aiService` de arriba.
+   */
+  const inFlightAnalyses = new Map<
+    string,
+    { promise: Promise<IpcResponse<'ai:analyzePullRequest'>>; snapshot: DraftDidacticSection[] }
+  >()
+
+  handle('ai:analyzePullRequest', (req) => {
+    // Cache hit: como hoy, sin tocar el registro in-flight (ya está
+    // completo, no hay nada en vuelo que registrar).
+    const cached = analysisCache.get(req.repo, req.number)
+    if (cached) return Promise.resolve(cached)
+
+    const key = prKey(req.repo, req.number)
+
+    // In-flight hit: devolver LA MISMA promesa. Cero llamadas al AiService
+    // adicionales — así una ventana desacoplada abierta a mitad de un
+    // streaming, o un doble-click de "Analizar PR", no pagan el LLM dos veces.
+    const existing = inFlightAnalyses.get(key)
+    if (existing) return existing.promise
+
+    // `snapshotBox` se declara ANTES de arrancar el análisis: el mock
+    // (`../ai/mock-service.ts`) llama a `onProgress` de forma SÍNCRONA en su
+    // primer chunk, y esa llamada puede ocurrir mientras la promesa de abajo
+    // todavía se está construyendo (antes de que `entry` termine de
+    // registrarse en el Map) — mutar un objeto que ya existe evita cualquier
+    // orden de inicialización delicado.
+    const snapshotBox: { current: DraftDidacticSection[] } = { current: [] }
+
+    const promise = (async (): Promise<IpcResponse<'ai:analyzePullRequest'>> => {
+      try {
+        const result = await aiService.analyzePullRequest(req, {
+          onProgress: (sections, meta) => {
+            snapshotBox.current = sections
+            // El `{ done: true }` que emite el servicio en éxito se SUPRIME
+            // acá: se re-emite manualmente más abajo, DESPUÉS de poblar
+            // `analysisCache`, para garantizar que quien reciba `done: true`
+            // sin `error` ya encuentre el cache poblado (T22 — una ventana
+            // enganchada al streaming no debe ver nunca un "terminó" que
+            // todavía no se puede leer de `ai:getCachedAnalysis`).
+            if (meta.done) return
+            broadcastProgress({ repo: req.repo, number: req.number, sections, done: false })
+          },
+        })
+
+        analysisCache.set(req.repo, req.number, result)
+        broadcastProgress({
+          repo: req.repo,
+          number: req.number,
+          sections: snapshotBox.current,
+          done: true,
+        })
+        return result
+      } catch (error) {
+        // `OpenRouterAiService`/`MockAiService` NUNCA llaman a `onProgress`
+        // en el camino de error (solo lanzan) — sin este evento terminal
+        // manual, una ventana enganchada a este streaming se quedaría
+        // mostrando "analizando…" para siempre ante un fallo.
+        broadcastProgress({
+          repo: req.repo,
+          number: req.number,
+          sections: snapshotBox.current,
+          done: true,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        throw error
+      } finally {
+        inFlightAnalyses.delete(key)
+      }
+    })()
+
+    // `snapshot` es un getter sobre `snapshotBox.current`, no una copia: así
+    // `ai:getAnalysisState` (abajo) siempre lee el último valor, aunque haya
+    // llegado después de que esta entrada se registrara en el Map.
+    inFlightAnalyses.set(key, {
+      promise,
+      get snapshot() {
+        return snapshotBox.current
+      },
+    })
+
+    return promise
+  })
+
+  /**
+   * Estado actual de un análisis sin dispararlo ni pedir el resultado
+   * completo (T22): lo consulta el hook del renderer al montar para decidir
+   * entre quedarse en el placeholder (`idle`), engancharse a un streaming ya
+   * en curso mostrando el último snapshot conocido (`streaming`) o pintar
+   * directo un resultado ya pagado (`cached`).
+   */
+  handle('ai:getAnalysisState', (req) => {
+    const cached = analysisCache.get(req.repo, req.number)
+    if (cached) return { status: 'cached' as const, analysis: cached }
+
+    const inFlight = inFlightAnalyses.get(prKey(req.repo, req.number))
+    if (inFlight) return { status: 'streaming' as const, sections: inFlight.snapshot }
+
+    return { status: 'idle' as const }
+  })
+
+  // Lectura pura del cache (T14): la usa la ventana desacoplada para pintar
+  // un análisis ya pagado al montar, sin pasar por `ai:analyzePullRequest`
+  // (que además de leer el cache sabe cómo generar uno nuevo si hace falta,
+  // responsabilidad que este canal no necesita).
+  handle('ai:getCachedAnalysis', (req) => analysisCache.get(req.repo, req.number))
+  handle('ai:invalidateAnalysis', (req) => {
+    analysisCache.invalidate(req.repo, req.number)
+  })
+
+  handle('settings:get', () => getEffectiveAiModel())
+  handle('settings:setAiModel', (req) => {
+    settingsStore.setAiModel(req.aiModel)
+    return getEffectiveAiModel()
+  })
+
+  // Ventana didáctica desacoplada (T14, `../windows/didactic-window.ts`): una
+  // sola instancia a la vez, mismo preload/webPreferences que la principal.
+  handle('window:openDidactic', (req) => {
+    openDidacticWindow(req.repo, req.number, req.title)
+  })
+}
