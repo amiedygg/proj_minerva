@@ -437,16 +437,9 @@ anota **quién** la hizo (subagente/directo) y **cómo** se verificó.
   y captura MIRADA; sesión/settings en userData `Minerva` propio (esperado:
   no comparte con dev).
 
-- [!] **T25. GitHub Action de release multi-OS** _(Blacksmith revertido)_
-  _Estado: implementada, verificada localmente y pusheada; 2026-07-07 Edilson
-  pidió quitar Blacksmith (problemas de configuración) → runners hosteados de
-  GitHub actualizados (`ubuntu-latest`/`windows-latest`/`macos-latest`,
-  checkout@v7, setup-node@v6). BLOQUEADA en verificación e2e por una acción
-  humana: publicar un release (p. ej. `gh release create v0.1.0 --prerelease
-  --title "Minerva 0.1.0" --notes "..."`) — el permiso del entorno no deja al
-  orquestador crear releases públicos. Al publicar, revisar los 3 jobs en
-  Actions. Si algún día vuelve Blacksmith: los labels relevados quedaron en
-  la bitácora del 2026-07-07._
+- [x] **T25. GitHub Action de release multi-OS** _(Blacksmith revertido a
+  runners hosteados de GitHub por pedido de Edilson; verificada e2e con el
+  release real v0.1.0 — ver bitácora 2026-07-07)_
   Pedido de Edilson (2026-07-06): workflow que se active en releases y construya
   la app para Windows, macOS y Linux usando Blacksmith
   (docs.blacksmith.sh). Relevamiento del orquestador (de llms-full.txt):
@@ -1383,6 +1376,19 @@ Reproducir el descubrimiento: `codex app-server generate-ts --out /tmp/x/ts` y l
   disponible), typecheck/lint/290 tests verdes. El intento del orquestador
   de crear el release de prueba fue denegado por el clasificador de
   permisos (crear superficie pública) — queda como acción humana.
+- 2026-07-07: **T25 cerrada [x] — verificada e2e con release real.** Edilson
+  pidió quitar Blacksmith (problemas configurándolo) → runners hosteados de
+  GitHub (`ubuntu-latest`/`windows-latest`/`macos-latest`) con actions
+  vigentes (checkout@v7, setup-node@v6 — verificadas contra los releases de
+  GitHub). Con autorización explícita de Edilson el orquestador publicó el
+  prerelease `v0.1.0` → run 28837863415: **3/3 jobs verdes** (~2.5–4 min c/u)
+  y 4 assets adjuntos al release: `Minerva-0.1.0.AppImage` (130MB),
+  `Minerva.Setup.0.1.0.exe` (105MB, NSIS x64), `Minerva-0.1.0-arm64.dmg`
+  (122MB) y `Minerva-0.1.0.dmg` (124MB, x64). DATO: el repo ahora vive en
+  `amiedygg/proj_minerva` (Edilson lo movió desde `edyggclevr`; el remote
+  local sigue apuntando al nombre viejo y GitHub redirige — repuntar el
+  remote quedó denegado por permisos, puede hacerlo Edilson). En repos
+  públicos los runners hosteados no consumen minutos pagos.
 
 ---
 
