@@ -40,6 +40,7 @@ describe('SettingsStore', () => {
   it('devuelve null si no hay settings.json (defaults, sin crashear)', () => {
     const store = new SettingsStore()
     expect(store.getPersistedAiModel()).toBeNull()
+    expect(store.getPersistedSettings()).toBeNull()
   })
 
   it('devuelve null si el archivo tiene JSON inválido (corrupto, sin crashear)', () => {
@@ -48,13 +49,13 @@ describe('SettingsStore', () => {
     expect(store.getPersistedAiModel()).toBeNull()
   })
 
-  it('devuelve null si el JSON es válido pero no tiene aiModel', () => {
+  it('devuelve null si el JSON es válido pero no tiene ni aiModel ni aiProvider/models', () => {
     writeFileSync(settingsFilePath(), JSON.stringify({}), 'utf-8')
     const store = new SettingsStore()
     expect(store.getPersistedAiModel()).toBeNull()
   })
 
-  it('devuelve null si aiModel no es un string no vacío', () => {
+  it('devuelve null si aiModel (forma vieja) no es un string no vacío', () => {
     writeFileSync(settingsFilePath(), JSON.stringify({ aiModel: 42 }), 'utf-8')
     expect(new SettingsStore().getPersistedAiModel()).toBeNull()
 
@@ -68,6 +69,24 @@ describe('SettingsStore', () => {
 
     writeFileSync(settingsFilePath(), JSON.stringify('z-ai/glm-5.2'), 'utf-8')
     expect(new SettingsStore().getPersistedAiModel()).toBeNull()
+  })
+
+  it('devuelve null si aiProvider (forma nueva) no es un proveedor conocido', () => {
+    writeFileSync(
+      settingsFilePath(),
+      JSON.stringify({ aiProvider: 'gemini-cli', models: {} }),
+      'utf-8',
+    )
+    expect(new SettingsStore().getPersistedSettings()).toBeNull()
+  })
+
+  it('devuelve null si "models" (forma nueva) tiene una clave que no es un proveedor conocido', () => {
+    writeFileSync(
+      settingsFilePath(),
+      JSON.stringify({ aiProvider: 'openrouter', models: { 'not-a-provider': 'x' } }),
+      'utf-8',
+    )
+    expect(new SettingsStore().getPersistedSettings()).toBeNull()
   })
 
   it('roundtrip: setAiModel + getPersistedAiModel en la misma instancia (cache)', () => {
@@ -95,12 +114,101 @@ describe('SettingsStore', () => {
     expect(restarted.getPersistedAiModel()).toBe('moonshotai/kimi-k2.7-code')
   })
 
-  it('escribe settings.json en JSON plano/pretty sin dejar el archivo .tmp', () => {
+  it('escribe settings.json en la forma nueva (aiProvider + models), plano/pretty, sin dejar el archivo .tmp', () => {
     new SettingsStore().setAiModel('z-ai/glm-5.2')
 
     const raw = readFileSync(settingsFilePath(), 'utf-8')
-    expect(JSON.parse(raw)).toEqual({ aiModel: 'z-ai/glm-5.2' })
+    expect(JSON.parse(raw)).toEqual({
+      aiProvider: 'openrouter',
+      models: { openrouter: 'z-ai/glm-5.2' },
+    })
     expect(raw).toContain('\n') // pretty-printed, no todo en una línea
     expect(existsSync(settingsFilePath() + '.tmp')).toBe(false)
+  })
+
+  describe('migración de la forma vieja ({ aiModel }, pre-T26)', () => {
+    it('lee un settings.json viejo como OpenRouter + ese modelo, sin perder la selección', () => {
+      writeFileSync(settingsFilePath(), JSON.stringify({ aiModel: 'z-ai/glm-5.2' }), 'utf-8')
+
+      const store = new SettingsStore()
+      expect(store.getPersistedSettings()).toEqual({
+        aiProvider: 'openrouter',
+        models: { openrouter: 'z-ai/glm-5.2' },
+      })
+      expect(store.getPersistedAiModel()).toBe('z-ai/glm-5.2')
+      expect(store.getPersistedModel('openrouter')).toBe('z-ai/glm-5.2')
+      expect(store.getPersistedModel('claude-code')).toBeNull()
+    })
+
+    it('la migración es solo in-memory: no reescribe el settings.json viejo en disco hasta el próximo set*', () => {
+      writeFileSync(settingsFilePath(), JSON.stringify({ aiModel: 'openai/gpt-5.5' }), 'utf-8')
+
+      const store = new SettingsStore()
+      store.getPersistedSettings() // fuerza la carga/migración in-memory
+
+      const raw = readFileSync(settingsFilePath(), 'utf-8')
+      expect(JSON.parse(raw)).toEqual({ aiModel: 'openai/gpt-5.5' })
+    })
+
+    it('tras leer la forma vieja, setProviderModel para otro proveedor conserva el modelo migrado de OpenRouter', () => {
+      writeFileSync(settingsFilePath(), JSON.stringify({ aiModel: 'openai/gpt-5.5' }), 'utf-8')
+
+      const store = new SettingsStore()
+      store.setProviderModel('claude-code', 'claude-sonnet-5')
+
+      expect(store.getPersistedSettings()).toEqual({
+        aiProvider: 'openrouter',
+        models: { openrouter: 'openai/gpt-5.5', 'claude-code': 'claude-sonnet-5' },
+      })
+    })
+  })
+
+  describe('setAiProvider / setProviderModel (T26)', () => {
+    it('setAiProvider cambia el proveedor activo sin tocar los modelos ya elegidos', () => {
+      const store = new SettingsStore()
+      store.setProviderModel('openrouter', 'z-ai/glm-5.2')
+      store.setProviderModel('claude-code', 'claude-sonnet-5')
+      store.setAiProvider('claude-code')
+
+      expect(store.getPersistedSettings()).toEqual({
+        aiProvider: 'claude-code',
+        models: { openrouter: 'z-ai/glm-5.2', 'claude-code': 'claude-sonnet-5' },
+      })
+    })
+
+    it('setProviderModel para un proveedor no activo no cambia el proveedor activo', () => {
+      const store = new SettingsStore()
+      store.setAiProvider('openrouter')
+      store.setProviderModel('codex', 'gpt-5.5-codex')
+
+      expect(store.getPersistedSettings()).toEqual({
+        aiProvider: 'openrouter',
+        models: { codex: 'gpt-5.5-codex' },
+      })
+    })
+
+    it('setProviderModel sobreescribe solo el modelo de ESE proveedor (último guardado gana por proveedor)', () => {
+      const store = new SettingsStore()
+      store.setProviderModel('openrouter', 'openai/gpt-5.5')
+      store.setProviderModel('openrouter', 'z-ai/glm-5.2')
+      store.setProviderModel('claude-code', 'claude-opus-4-8')
+
+      expect(store.getPersistedSettings()).toEqual({
+        aiProvider: 'openrouter',
+        models: { openrouter: 'z-ai/glm-5.2', 'claude-code': 'claude-opus-4-8' },
+      })
+    })
+
+    it('roundtrip tras "reinicio": una instancia nueva lee proveedor y modelos persistidos', () => {
+      const store = new SettingsStore()
+      store.setProviderModel('codex', 'gpt-5.5-codex')
+      store.setAiProvider('codex')
+
+      const restarted = new SettingsStore()
+      expect(restarted.getPersistedSettings()).toEqual({
+        aiProvider: 'codex',
+        models: { codex: 'gpt-5.5-codex' },
+      })
+    })
   })
 })

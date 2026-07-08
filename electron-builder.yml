@@ -7,6 +7,16 @@ files:
   - package.json
   - '!**/.env'
   - '!**/.env.*'
+  # `@anthropic-ai/claude-agent-sdk` (dependency, T28) trae un binario nativo
+  # por plataforma (~250MB c/u: linux-x64, darwin-arm64, win32-x64, ...) como
+  # optionalDependency SOLO para poder correr el CLI bundleado si nadie pasa
+  # `pathToClaudeCodeExecutable`. Minerva SIEMPRE pasa esa opción apuntando al
+  # `claude` del sistema (`src/main/ai/providers/claude-code-service.ts` +
+  # `resolve-cli.ts`, T31) — bundlear esos binarios inflaría el instalador
+  # +250MB por SO sin que se usen nunca. El glob matchea "claude-agent-sdk-*"
+  # (los paquetes de plataforma) SIN matchear "claude-agent-sdk" a secas (el
+  # paquete JS principal, ~3.8MB, que sí hace falta: expone `query()`).
+  - '!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**'
 asar: true
 npmRebuild: false
 linux:

@@ -226,6 +226,67 @@ describe('payloadValidators', () => {
     })
   })
 
+  describe('settings:setAiProvider', () => {
+    const validate = payloadValidators['settings:setAiProvider']
+
+    it('acepta cada proveedor conocido', () => {
+      expect(validate({ provider: 'openrouter' })).toBe(true)
+      expect(validate({ provider: 'claude-code' })).toBe(true)
+      expect(validate({ provider: 'codex' })).toBe(true)
+    })
+
+    it('rechaza un proveedor desconocido', () => {
+      expect(validate({ provider: 'gemini-cli' })).toBe(false)
+    })
+
+    it('rechaza provider que no es string', () => {
+      expect(validate({ provider: 42 })).toBe(false)
+    })
+
+    it('rechaza claves desconocidas', () => {
+      expect(validate({ provider: 'openrouter', evil: true })).toBe(false)
+    })
+
+    it('rechaza payload sin provider o no-objeto', () => {
+      expect(validate({})).toBe(false)
+      expect(validate(undefined)).toBe(false)
+      expect(validate('x')).toBe(false)
+      expect(validate([])).toBe(false)
+    })
+  })
+
+  describe('settings:setProviderModel', () => {
+    const validate = payloadValidators['settings:setProviderModel']
+
+    it('acepta un payload válido', () => {
+      expect(validate({ provider: 'claude-code', model: 'claude-sonnet-5' })).toBe(true)
+    })
+
+    it('acepta un id de modelo fuera de cualquier lista curada (modo avanzado, mismo criterio que setAiModel)', () => {
+      expect(validate({ provider: 'openrouter', model: 'mistralai/mistral-large-2411' })).toBe(true)
+    })
+
+    it('rechaza un proveedor desconocido', () => {
+      expect(validate({ provider: 'gemini-cli', model: 'x' })).toBe(false)
+    })
+
+    it('rechaza model vacío o > 100 chars', () => {
+      expect(validate({ provider: 'codex', model: '' })).toBe(false)
+      expect(validate({ provider: 'codex', model: 'a'.repeat(101) })).toBe(false)
+    })
+
+    it('rechaza claves desconocidas', () => {
+      expect(validate({ provider: 'codex', model: 'gpt-5.5-codex', evil: true })).toBe(false)
+    })
+
+    it('rechaza payload incompleto o no-objeto', () => {
+      expect(validate({ provider: 'codex' })).toBe(false)
+      expect(validate({ model: 'gpt-5.5-codex' })).toBe(false)
+      expect(validate(undefined)).toBe(false)
+      expect(validate('x')).toBe(false)
+    })
+  })
+
   describe('window:openDidactic', () => {
     const validate = payloadValidators['window:openDidactic']
     const base = { repo: validRepo, number: 482, title: 'Add coupon support' }

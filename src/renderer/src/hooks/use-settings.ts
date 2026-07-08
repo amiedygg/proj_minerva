@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { EffectiveAiModelInfo } from '../../../shared/types'
+import type { AiProviderId } from '../../../shared/ai-providers'
+import type { AiSettingsInfo } from '../../../shared/types'
 import { useAppStore } from '../stores/app-store'
 
 function toErrorMessage(error: unknown): string {
@@ -8,20 +9,32 @@ function toErrorMessage(error: unknown): string {
 
 interface UseSettingsResult {
   /** `null` mientras no se haya cargado la primera vez (ver el efecto de abajo). */
-  info: EffectiveAiModelInfo | null
+  info: AiSettingsInfo | null
   loading: boolean
   error: string | null
-  /** `true` si se guardó bien; `false` si falló (revisar `error`). */
-  save: (aiModel: string) => Promise<boolean>
+  /**
+   * Cambia el proveedor de IA activo (persistencia inmediata, sin botón de
+   * guardar aparte — a diferencia de `saveModel`). `true` si se guardó bien;
+   * `false` si falló (revisar `error`).
+   */
+  selectProvider: (provider: AiProviderId) => Promise<boolean>
+  /**
+   * Guarda el modelo elegido para `provider` (normalmente `info.provider`,
+   * el proveedor activo). `true` si se guardó bien; `false` si falló
+   * (revisar `error`).
+   */
+  saveModel: (provider: AiProviderId, model: string) => Promise<boolean>
   reload: () => void
 }
 
 /**
- * Modelo de IA efectivo vía `settings:get`/`settings:setAiModel` (T12). El
- * valor cargado se guarda en `app-store` (`aiModelInfo`), no en estado local:
- * varios consumidores usan este mismo hook (`SettingsModal`/`ModelPicker` y
- * el hint sutil del panel didáctico) y todos deben ver el mismo valor sin
- * refetchear cada uno por su lado — mismo patrón que `authStatus`/`useAuth`.
+ * Selección de proveedor+modelo de IA vía `settings:get`/`settings:setAiProvider`/
+ * `settings:setProviderModel` (T12; forma multi-proveedor desde T26, `AiSettingsInfo`;
+ * UI de proveedor+modelo en T30). El valor cargado se guarda en `app-store`
+ * (`aiModelInfo`), no en estado local: varios consumidores usan este mismo hook
+ * (`SettingsModal`/`ProviderPicker`/`ModelPicker` y el hint sutil del panel
+ * didáctico) y todos deben ver el mismo valor sin refetchear cada uno por su
+ * lado — mismo patrón que `authStatus`/`useAuth`.
  *
  * Carga automáticamente una vez si `aiModelInfo` todavía es `null` (primer
  * montaje de cualquier consumidor). El efecto de carga inicial lee el store
@@ -66,23 +79,35 @@ export function useSettings(): UseSettingsResult {
       .finally(() => setLoading(false))
   }, [setInfo])
 
-  const save = useCallback(
-    async (aiModel: string): Promise<boolean> => {
-      setLoading(true)
+  const selectProvider = useCallback(
+    async (provider: AiProviderId): Promise<boolean> => {
       setError(null)
       try {
-        const result = await window.minerva.settings.setAiModel({ aiModel })
+        const result = await window.minerva.settings.setAiProvider({ provider })
         setInfo(result)
         return true
       } catch (err) {
         setError(toErrorMessage(err))
         return false
-      } finally {
-        setLoading(false)
       }
     },
     [setInfo],
   )
 
-  return { info, loading, error, save, reload }
+  const saveModel = useCallback(
+    async (provider: AiProviderId, model: string): Promise<boolean> => {
+      setError(null)
+      try {
+        const result = await window.minerva.settings.setProviderModel({ provider, model })
+        setInfo(result)
+        return true
+      } catch (err) {
+        setError(toErrorMessage(err))
+        return false
+      }
+    },
+    [setInfo],
+  )
+
+  return { info, loading, error, selectProvider, saveModel, reload }
 }

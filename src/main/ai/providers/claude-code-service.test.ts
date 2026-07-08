@@ -1,0 +1,334 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { GithubService } from '../../github/service'
+import type { DiffFile, PullRequestDetail } from '../../../shared/types'
+import type { DraftDidacticSection } from '../../../shared/events'
+
+/**
+ * `ClaudeCodeAiService` (T28) habla con `@anthropic-ai/claude-agent-sdk`
+ * (`query()`), NUNCA con una sesión real de Claude — se mockea el paquete
+ * completo para simular el `AsyncGenerator<SDKMessage>` que devuelve `query()`
+ * sin depender de que quien corre los tests tenga `claude` instalado/logueado
+ * (mismo espíritu que `../openrouter-service.test.ts` mockeando `fetch`).
+ *
+ * También se mockea `../env` (`getEffectiveAiSelection`) para no pasar por
+ * `settingsStore`/Electron real, igual que `../index.test.ts`.
+ */
+const getEffectiveAiSelectionMock = vi.fn()
+vi.mock('../env', () => ({
+  getEffectiveAiSelection: (...args: unknown[]) => getEffectiveAiSelectionMock(...args),
+}))
+
+/**
+ * `resolveCliPath` (T31) se mockea para no depender de si la máquina que
+ * corre los tests tiene `claude` instalado: por defecto "lo encuentra" en
+ * una ruta absoluta fake, así el resto de los tests (a los que no les
+ * importa la resolución en sí) siguen viendo un `query()` normal.
+ */
+const resolveCliPathMock = vi.fn()
+vi.mock('./resolve-cli', () => ({
+  resolveCliPath: (...args: unknown[]) => resolveCliPathMock(...args),
+}))
+
+/** Misma forma que la clase real exportada por el SDK: `class AbortError extends Error {}`, sin `.name` custom. */
+class FakeAbortError extends Error {}
+
+const queryMock = vi.fn()
+vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
+  AbortError: FakeAbortError,
+  query: (...args: unknown[]) => queryMock(...args),
+}))
+
+const { ClaudeCodeAiService } = await import('./claude-code-service')
+
+const repo = { owner: 'shopwave', name: 'api', fullName: 'shopwave/api' }
+
+const detail: PullRequestDetail = {
+  id: 'shopwave/api#482',
+  number: 482,
+  title: 'Add apply-coupon endpoint',
+  author: { login: 'jdoe', avatarUrl: 'https://example.com/a.png' },
+  repo,
+  state: 'open',
+  isDraft: false,
+  createdAt: '2026-07-01T00:00:00.000Z',
+  updatedAt: '2026-07-01T00:00:00.000Z',
+  headRef: 'feat/apply-coupon',
+  baseRef: 'main',
+  commentCount: 0,
+  reviewDecision: null,
+  ciStatus: 'success',
+  additions: 40,
+  deletions: 2,
+  changedFiles: 2,
+  bodyMarkdown: 'Adds a coupon endpoint.',
+  labels: [{ name: 'feature', color: '00ff00' }],
+  reviewers: [],
+  commits: 1,
+}
+
+const files: DiffFile[] = [
+  {
+    path: 'src/routes/carts.ts',
+    status: 'modified',
+    additions: 30,
+    deletions: 2,
+    isBinary: false,
+    patch: '@@ -1,1 +1,1 @@\n-old\n+new',
+  },
+]
+
+function makeGithubService(): GithubService {
+  return {
+    listPullRequests: vi.fn(),
+    getPullRequestDetail: vi.fn().mockResolvedValue(detail),
+    getPullRequestFiles: vi.fn().mockResolvedValue(files),
+    getCommentThreads: vi.fn(),
+    postComment: vi.fn(),
+  } as unknown as GithubService
+}
+
+interface FakeSdkMessage {
+  type: string
+  [key: string]: unknown
+}
+
+/** `content_block_delta` de texto, la forma exacta que consume el servicio (`event.delta.type === 'text_delta'`). */
+function textDeltaMessage(text: string): FakeSdkMessage {
+  return {
+    type: 'stream_event',
+    event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } },
+    parent_tool_use_id: null,
+    uuid: 'u1',
+    session_id: 's1',
+  }
+}
+
+/** Delta de "pensamiento" (extended thinking): debe ser IGNORADO por el servicio, nunca llega al parser. */
+function thinkingDeltaMessage(text: string): FakeSdkMessage {
+  return {
+    type: 'stream_event',
+    event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: text } },
+    parent_tool_use_id: null,
+    uuid: 'u-thinking',
+    session_id: 's1',
+  }
+}
+
+function systemInitMessage(): FakeSdkMessage {
+  return { type: 'system', subtype: 'init', session_id: 's1', uuid: 'u-init' }
+}
+
+function resultSuccessMessage(): FakeSdkMessage {
+  return { type: 'result', subtype: 'success', is_error: false, session_id: 's1', uuid: 'u-result' }
+}
+
+/** Construye un `query()` mock que devuelve un `AsyncGenerator` sobre `messages`, exponiendo qué `options` recibió. */
+function fakeQuery(messages: FakeSdkMessage[]): void {
+  queryMock.mockImplementation(function fakeQueryImpl() {
+    return (async function* generator() {
+      for (const message of messages) {
+        yield message
+      }
+    })()
+  })
+}
+
+/** `query()` mock cuya iteración lanza `error` inmediatamente (simula un spawn fallido o un abort). */
+function fakeQueryThrows(error: unknown): void {
+  queryMock.mockImplementation(function fakeQueryImpl() {
+    // eslint-disable-next-line require-yield -- a propósito: simula que `query()` rechaza antes de emitir ningún mensaje.
+    return (async function* generator() {
+      throw error
+    })()
+  })
+}
+
+describe('ClaudeCodeAiService.analyzePullRequest', () => {
+  beforeEach(() => {
+    getEffectiveAiSelectionMock.mockReturnValue({ provider: 'claude-code', model: 'claude-sonnet-5' })
+    resolveCliPathMock.mockReset()
+    resolveCliPathMock.mockReturnValue('/home/test-user/.local/bin/claude')
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    queryMock.mockReset()
+  })
+
+  it('mapea un stream de deltas de texto a DidacticAnalysis', async () => {
+    process.env.OPENROUTER_API_KEY = 'sk-secret'
+    process.env.GITHUB_TOKEN = 'gh-secret'
+    try {
+      fakeQuery([
+        systemInitMessage(),
+        textDeltaMessage('@@@SECTION kind=summary\n'),
+        textDeltaMessage('Resumen del PR\n'),
+        resultSuccessMessage(),
+      ])
+
+      const service = new ClaudeCodeAiService(makeGithubService())
+      const result = await service.analyzePullRequest({ repo, number: 482 })
+
+      expect(result.prId).toBe('shopwave/api#482')
+      expect(result.sections).toEqual([{ kind: 'summary', markdown: 'Resumen del PR' }])
+      expect(typeof result.generatedAt).toBe('string')
+      expect(() => new Date(result.generatedAt).toISOString()).not.toThrow()
+
+      // Verifica la forma EXACTA de las opciones pasadas a `query()`.
+      const [call] = queryMock.mock.calls[0] as [
+        { prompt: string; options: Record<string, unknown> },
+      ]
+      expect(call.options.model).toBe('claude-sonnet-5')
+      expect(call.options.pathToClaudeCodeExecutable).toBe('/home/test-user/.local/bin/claude')
+      expect(call.options.systemPrompt).toEqual(expect.any(String))
+      expect(call.options.tools).toEqual([])
+      expect(call.options.persistSession).toBe(false)
+      expect(call.options.settingSources).toEqual([])
+      expect(call.options.includePartialMessages).toBe(true)
+      expect(call.options.maxTurns).toBe(1)
+      expect(call.options.abortController).toBeInstanceOf(AbortController)
+      expect(call.prompt).toContain(detail.title)
+
+      // El entorno del subproceso que arma el SDK internamente no debe traer
+      // secretos de otros proveedores (frontera de seguridad, T31).
+      const env = call.options.env as NodeJS.ProcessEnv
+      expect(env.OPENROUTER_API_KEY).toBeUndefined()
+      expect(env.GITHUB_TOKEN).toBeUndefined()
+    } finally {
+      delete process.env.OPENROUTER_API_KEY
+      delete process.env.GITHUB_TOKEN
+    }
+  })
+
+  it('lanza un mensaje accionable si resolveCliPath no encuentra "claude" instalado, sin llamar a query()', async () => {
+    resolveCliPathMock.mockReturnValue(null)
+
+    const service = new ClaudeCodeAiService(makeGithubService())
+    await expect(service.analyzePullRequest({ repo, number: 482 })).rejects.toThrow(
+      'No se encontró el CLI "claude" instalado',
+    )
+    expect(queryMock).not.toHaveBeenCalled()
+  })
+
+  it('reconstruye una sección aunque el delta llegue partido en varios chunks', async () => {
+    fakeQuery([
+      textDeltaMessage('@@@SEC'),
+      textDeltaMessage('TION kind=sum'),
+      textDeltaMessage('mary\nhola '),
+      textDeltaMessage('mundo\n'),
+    ])
+
+    const service = new ClaudeCodeAiService(makeGithubService())
+    const result = await service.analyzePullRequest({ repo, number: 482 })
+    expect(result.sections).toEqual([{ kind: 'summary', markdown: 'hola mundo' }])
+  })
+
+  it('ignora eventos que no son texto (init, thinking, result) sin romper el parseo', async () => {
+    fakeQuery([
+      systemInitMessage(),
+      thinkingDeltaMessage('pensando...'),
+      textDeltaMessage('@@@SECTION kind=summary\nok\n'),
+      resultSuccessMessage(),
+    ])
+
+    const service = new ClaudeCodeAiService(makeGithubService())
+    const result = await service.analyzePullRequest({ repo, number: 482 })
+    expect(result.sections).toEqual([{ kind: 'summary', markdown: 'ok' }])
+  })
+
+  it('llama a onProgress con snapshots parciales y una vez final con done:true', async () => {
+    fakeQuery([
+      textDeltaMessage('@@@SECTION kind=summary\n'),
+      textDeltaMessage('primera parte '),
+      textDeltaMessage('segunda parte\n'),
+    ])
+
+    const progressCalls: Array<[DraftDidacticSection[], { done: boolean }]> = []
+    const service = new ClaudeCodeAiService(makeGithubService())
+    const result = await service.analyzePullRequest(
+      { repo, number: 482 },
+      { onProgress: (sections, meta) => progressCalls.push([sections, meta]) },
+    )
+
+    expect(result.sections).toEqual([{ kind: 'summary', markdown: 'primera parte segunda parte' }])
+    expect(progressCalls.length).toBeGreaterThan(0)
+
+    const [lastSections, lastMeta] = progressCalls[progressCalls.length - 1]
+    expect(lastMeta.done).toBe(true)
+    expect(lastSections).toEqual(result.sections)
+    expect(progressCalls.slice(0, -1).every(([, meta]) => meta.done === false)).toBe(true)
+  })
+
+  it('lanza un mensaje accionable de login cuando el assistant reporta authentication_failed', async () => {
+    fakeQuery([
+      {
+        type: 'assistant',
+        message: { content: [] },
+        parent_tool_use_id: null,
+        error: 'authentication_failed',
+        uuid: 'u-err',
+        session_id: 's1',
+      },
+    ])
+
+    const service = new ClaudeCodeAiService(makeGithubService())
+    await expect(service.analyzePullRequest({ repo, number: 482 })).rejects.toThrow('claude login')
+  })
+
+  it('lanza un mensaje claro cuando el result final viene con is_error', async () => {
+    fakeQuery([
+      textDeltaMessage('@@@SECTION kind=summary\nok\n'),
+      {
+        type: 'result',
+        subtype: 'error_during_execution',
+        is_error: true,
+        errors: ['algo salió mal en el turno'],
+        session_id: 's1',
+        uuid: 'u-result-err',
+      },
+    ])
+
+    const service = new ClaudeCodeAiService(makeGithubService())
+    await expect(service.analyzePullRequest({ repo, number: 482 })).rejects.toThrow(
+      'algo salió mal en el turno',
+    )
+  })
+
+  it('lanza si el CLI/binario del Agent SDK no se pudo lanzar', async () => {
+    fakeQueryThrows(
+      new Error(
+        'Claude Code executable not found at claude. Is options.pathToClaudeCodeExecutable set?',
+      ),
+    )
+
+    const service = new ClaudeCodeAiService(makeGithubService())
+    await expect(service.analyzePullRequest({ repo, number: 482 })).rejects.toThrow(
+      'no encontró un binario ejecutable',
+    )
+  })
+
+  it('mapea el AbortError propio del SDK a un mensaje de timeout accionable', async () => {
+    fakeQueryThrows(new FakeAbortError('Claude Code process aborted by user'))
+
+    const service = new ClaudeCodeAiService(makeGithubService())
+    await expect(service.analyzePullRequest({ repo, number: 482 })).rejects.toThrow(
+      'Claude Code no respondió a tiempo',
+    )
+  })
+
+  it('lanza si el modelo no emite ningún delta de texto', async () => {
+    fakeQuery([systemInitMessage(), resultSuccessMessage()])
+
+    const service = new ClaudeCodeAiService(makeGithubService())
+    await expect(service.analyzePullRequest({ repo, number: 482 })).rejects.toThrow(
+      'no devolvió contenido de streaming',
+    )
+  })
+
+  it('lanza si todas las secciones emitidas son inválidas', async () => {
+    fakeQuery([textDeltaMessage('@@@SECTION kind=nope\ncontenido\n')])
+
+    const service = new ClaudeCodeAiService(makeGithubService())
+    await expect(service.analyzePullRequest({ repo, number: 482 })).rejects.toThrow('Ninguna sección')
+  })
+})

@@ -3,6 +3,152 @@
 > Sandbox del plan de la tarea actual. Se actualiza al empezar/terminar cada fase.
 > Control de tareas y bitácora: `TASKS.md`. Estrategia multi-agente: `WORKFLOW.md`.
 
+## Iteración actual (2026-07-07): IA multi-proveedor (OpenRouter + Claude Code + Codex) — F7
+
+> **Estado: T26–T30 + T32 HECHAS Y VERIFICADAS E2E (2026-07-07). Falta solo T31
+> (empaquetado).** Rama `feature/multi-provider-ai`. Los tres proveedores conviven y son
+> seleccionables desde Settings; la inferencia real por suscripción funciona:
+> - **Claude Code** (Agent SDK oficial, plan Max de Edilson): análisis real de un PR mock
+>   en ~20s, 4 secciones.
+> - **Codex** (`codex app-server` JSON-RPC, cuenta ChatGPT de Edilson): análisis real en
+>   ~28s, 4 secciones. El protocolo se descubrió con `codex app-server generate-ts`
+>   (auto-genera su contrato) — el subagente lo había adivinado mal; reescrito por el
+>   orquestador y validado en vivo (ver bitácora TASKS.md § "Gotcha clave").
+> - **OpenRouter** (API key): intacto + ahora con campo persistente (safeStorage).
+> El cambio de proveedor surte efecto sin reiniciar (fix del handler: `createAiService` se
+> resuelve por análisis). 378 tests unit verdes; captura mirada de la pantalla en 2 estados.
+> Rama de trabajo: `feature/multi-provider-ai` (creada desde `origin/main`).
+
+### Pedido de Edilson
+
+Poder elegir, desde una pantalla en Settings, **qué proveedor de IA** usa el panel
+didáctico y **qué modelo** dentro de ese proveedor. Los tres deben convivir:
+
+- **OpenRouter** (lo actual, por API key) — la lista de modelos curada de hoy aplica
+  SOLO a este proveedor.
+- **Claude Code** (la suscripción Claude Pro/Max de Anthropic).
+- **Codex** (la suscripción ChatGPT Plus/Pro de OpenAI).
+
+Cada proveedor tiene su propio login; hay que soportarlos y mantener **varias sesiones
+vivas a la vez** (OpenRouter con key + Claude logueado + Codex logueado simultáneamente).
+
+### Investigación previa (3 subagentes, 2026-07-07)
+
+- **`pingdotgg/t3code`**: NO reimplementa OAuth. **Spawnea los binarios oficiales**
+  (`claude` vía `@anthropic-ai/claude-agent-sdk`; `codex app-server` vía JSON-RPC sobre
+  stdio) y deja login/tokens/refresh dentro de esos binarios. Lee el estado de cuenta del
+  handshake de inicialización (`query().initializationResult().account` en Claude;
+  `account/read` RPC en Codex). Multi-cuenta = aislar `HOME`/`CODEX_HOME` por instancia
+  (Codex usa "shadow-home" con symlinks para no duplicar estado). Modelos: Claude
+  hardcode (`BUILT_IN_MODELS`, filtrado por versión del CLI); Codex dinámico vía
+  `model/list` RPC. Patrón "Driver" uniforme: provider = instancia de driver configurada;
+  model = `{slug, capabilities}`; selección = `{instanceId, model, options}`.
+- **`sst/opencode` (fork `anomalyco/opencode`)**: SÍ reimplementaba OAuth in-app
+  (PKCE, loopback :1455 para OpenAI, `auth.json` 0600). PERO **removió el flujo de
+  Anthropic en agosto 2025** cuando Anthropic bloqueó el uso de tokens OAuth de Claude
+  Code por terceros. Ese flujo dependía de **suplantar al cliente oficial**: header
+  `anthropic-beta: oauth-2025-04-20` + system prompt obligatorio
+  `"You are Claude Code, Anthropic's official CLI for Claude."`. El de Codex (vigente)
+  reescribe la URL a `https://chatgpt.com/backend-api/codex/responses`, manda
+  `ChatGPT-Account-Id`, usa `instructions` en vez de mensajes `system` y `store:false`.
+- **Mapa interno de Minerva**: la interfaz `AiService` (`src/main/ai/service.ts:45`) y
+  TODO el pipeline de streaming (`stream-parser.ts` protocolo `@@@SECTION`,
+  `analysis-cache.ts` LRU, `use-didactic-analysis.ts`) son **agnósticos del proveedor**.
+  El trabajo se concentra en: el factory `createAiService` (`src/main/ai/index.ts:26`,
+  hoy un `if key → OpenRouter : mock`), los settings (hoy solo guardan `{aiModel}`,
+  `src/main/settings/store.ts`), la lista curada (`src/shared/ai-models.ts`, plana, sin
+  campo de proveedor), y **replicar el patrón `src/main/auth/`** (auth-manager +
+  token-store con `safeStorage`) para las sesiones nuevas.
+
+### Decisión de arquitectura: CLIs/SDK oficiales, NO OAuth suplantado
+
+Se implementa el **enfoque t3code** (orquestar binarios oficiales), NO el enfoque
+opencode de reimplementar el OAuth de Anthropic/OpenAI.
+
+**Por qué se descarta el OAuth in-app estilo opencode (Anthropic):** para que el backend
+de Anthropic acepte un token de suscripción Claude Pro/Max hay que mandar el header
+`anthropic-beta: oauth-...` y el system prompt `"You are Claude Code..."` — es decir,
+hacer pasar Minerva por el cliente oficial. Eso **evade los controles de acceso de
+Anthropic y viola sus Términos**; es exactamente lo que Anthropic bloqueó y por lo que
+opencode borró ese código. Implementarlo arriesga el **baneo de la cuenta de Edilson**.
+No se implementa. (Si en el futuro Anthropic publica un flujo OAuth soportado para
+terceros, se reabre esta decisión.)
+
+**Enfoque adoptado (limpio y sin suplantación):**
+
+- **Claude Code**: depender de `@anthropic-ai/claude-agent-sdk` y llamar `query()` con el
+  prompt de análisis (una sola vuelta, sin tools). El login lo hace el binario `claude`
+  del usuario (`claude login`), Anthropic maneja token/refresh, y Minerva lee el estado de
+  cuenta del handshake. No falsificamos nada: usamos la herramienta oficial tal como
+  Anthropic la distribuye, con la sesión que el usuario ya autorizó.
+- **Codex**: spawnear `codex app-server` (binario oficial de OpenAI) y hablar JSON-RPC por
+  stdio (`initialize` → `account/read` → `thread/start` → `turn/start`), capturando los
+  deltas de texto. Login por `codex login`. Igual: cero reimplementación de OAuth.
+- **OpenRouter**: intacto, por API key (lo actual).
+- **Sesiones simultáneas**: cada proveedor persiste su propia sesión donde ya la guarda
+  (OpenRouter: key en env/`.env`, futuro safeStorage; Claude: `~/.claude`; Codex:
+  `~/.codex`). Minerva solo persiste **qué proveedor+modelo está activo** y detecta el
+  estado de login de cada uno por probe. Los tres pueden estar autenticados a la vez sin
+  conflicto porque viven en almacenes distintos.
+
+Cada proveedor nuevo es una clase que implementa `AiService` y **emite el mismo protocolo
+`@@@SECTION`** (alimentando `StreamSectionParser` delta a delta con la salida del SDK/RPC),
+así el panel didáctico, la cache y la ventana desacoplada no se tocan.
+
+### Diseño técnico (fases, detalle de tareas en TASKS.md § F7)
+
+1. **T26 — Modelo de datos de proveedor+modelo (shared + settings).** Extender
+   `ai-models.ts` a un catálogo por proveedor (`{provider, models[]}`); extender
+   `PersistedSettings` a `{ aiProvider, models: {openrouter?, claudeCode?, codex?} }` con
+   **migración** del `{aiModel}` viejo (→ `provider:'openrouter', models.openrouter`);
+   nuevos canales IPC `settings:setAiProvider` / `settings:setProviderModel` + validadores;
+   precedencia settings > env (`MINERVA_AI_PROVIDER`/`MINERVA_AI_MODEL`) > default.
+2. **T27 — Abstracción de proveedores + probe de estado.** `src/main/ai/providers/`:
+   `registry.ts` (metadata: id, nombre, cómo se autentica, cómo lista modelos),
+   `cli-probe.ts` (¿está instalado `claude`/`codex`? ¿logueado? email/plan del handshake),
+   canal `ai:getProviderStatus` (por proveedor: `unavailable|installed|authenticated` +
+   cuenta). Refactor de `createAiService` para elegir implementación por proveedor activo,
+   con fallback a mock si el activo no tiene credenciales.
+3. **T28 — `ClaudeCodeAiService`.** Adaptador sobre `@anthropic-ai/claude-agent-sdk`:
+   `query()` con `ANALYZE_PR_SYSTEM_PROMPT` + `buildUserMessage`, capturar deltas de texto
+   → `parser.push(delta)`, mismos timeouts. Modelos hardcode (Fable 5, Opus 4.8, Sonnet 5,
+   Haiku 4.5) filtrables por versión del CLI. Login: detectar y, si falta, guiar/spawnear.
+4. **T29 — `CodexAiService`.** Cliente JSON-RPC de `codex app-server` (stdio): initialize →
+   account/read → thread/start → turn/start; mapear item deltas de texto → parser. Modelos
+   vía `model/list` RPC (o hardcode de fallback). Login por `codex login`.
+5. **T30 — UI de selección de proveedor y modelo (Settings).** Nueva vista en
+   `SettingsModal`: lista de proveedores con su **estado de login** (chip + botón
+   "Conectar" que dispara el login del proveedor), y al elegir proveedor, sus modelos
+   disponibles. `ActiveModelHint` muestra proveedor+modelo. Hook `use-provider-status`.
+6. **T31 — Empaquetado y frontera de seguridad.** El Agent SDK trae binarios nativos por
+   plataforma → `asarUnpack` en electron-builder; spawnear procesos hijos desde `main` con
+   entorno saneado; nunca exponer tokens de los CLIs al renderer; revisar CSP/child-process.
+7. **T32 — `OPENROUTER_API_KEY` persistente vía safeStorage + campo en Settings.** Cierra
+   el pendiente histórico. Backend: reutilizar el patrón `src/main/auth/token-store.ts`
+   (cifrado `safeStorage`, archivo `.bin` en userData) para la key; precedencia
+   safeStorage > env `OPENROUTER_API_KEY` en `ai/env.ts`. UI: campo en la pantalla de
+   proveedores (T30) para pegar/borrar la key, con estado "configurada / no configurada"
+   (nunca se re-muestra la key). La key sigue viviendo SOLO en `main`.
+
+### Riesgos / decisiones abiertas
+
+- **Dependencia de binarios externos**: el usuario debe tener `claude` y `codex`
+  instalados y logueados. Es una **acción humana** ineludible con este enfoque (a cambio
+  de no violar ToS ni mantener OAuth propio). Minerva debe degradar con gracia (proveedor
+  marcado "no disponible", no crash) cuando falten.
+- **Codex `app-server`**: protocolo interno; conviene fijar una versión mínima del CLI y
+  detectar incompat. `packages/effect-codex-app-server` de t3code es la referencia del wire.
+- **Empaquetado**: binarios nativos del Agent SDK dentro del AppImage (asarUnpack + tamaño).
+- **Latencia de arranque**: el probe de CLIs no debe bloquear el arranque de la app.
+
+### Acción humana pendiente (Edilson)
+
+1. **Confirmar el enfoque** (CLIs oficiales, sin OAuth suplantado) antes de implementar.
+2. Instalar y loguear los CLIs que quiera usar: `claude` (probablemente ya) y `codex`.
+3. Verificación por proveedor: correr un análisis real de un PR con cada proveedor elegido.
+
+---
+
 ## Estado al 2026-07-06
 
 MVP + F4 completos y verificados (T1–T15): GitHub real (Device Flow, sesión

@@ -74,7 +74,7 @@ void app.whenReady().then(async () => {
   // `signed_in` sin que nada haya disparado ese cambio.
   await authManager.init()
 
-  registerIpcHandlers()
+  await registerIpcHandlers()
 
   createWindow()
 

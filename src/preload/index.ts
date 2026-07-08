@@ -69,10 +69,15 @@ const minervaApi = {
     getCachedAnalysis: invoke('ai:getCachedAnalysis'),
     invalidateAnalysis: invoke('ai:invalidateAnalysis'),
     getAnalysisState: invoke('ai:getAnalysisState'),
+    getProviderStatus: invoke('ai:getProviderStatus'),
   },
   settings: {
     get: invoke('settings:get'),
     setAiModel: invoke('settings:setAiModel'),
+    setAiProvider: invoke('settings:setAiProvider'),
+    setProviderModel: invoke('settings:setProviderModel'),
+    setOpenRouterKey: invoke('settings:setOpenRouterKey'),
+    getOpenRouterKeyStatus: invoke('settings:getOpenRouterKeyStatus'),
   },
   window: {
     openDidactic: invoke('window:openDidactic'),

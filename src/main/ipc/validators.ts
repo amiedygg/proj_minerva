@@ -14,6 +14,7 @@
  * indexada por canal, así el tipado (`Record<IpcChannel, ...>`) obliga a
  * cubrir cualquier canal nuevo del contrato.
  */
+import { isAiProviderId } from '../../shared/ai-providers'
 import type { IpcChannel } from '../../shared/ipc'
 
 const MAX_SEARCH_LEN = 256
@@ -24,6 +25,7 @@ const MAX_PATH_LEN = 500
 const MAX_PR_NUMBER = 1_000_000
 const MAX_AI_MODEL_LEN = 100
 const MAX_PR_TITLE_LEN = 300
+const MAX_OPENROUTER_KEY_LEN = 500
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -40,6 +42,11 @@ function isNonEmptyString(value: unknown, maxLen: number): value is string {
 
 function isOptionalString(value: unknown, maxLen: number): boolean {
   return value === undefined || (typeof value === 'string' && value.length <= maxLen)
+}
+
+/** String obligatorio pero que SÍ puede venir vacío (a diferencia de `isNonEmptyString`) — p. ej. `key` de `settings:setOpenRouterKey`, donde un string vacío es la señal de "borrar". */
+function isStringUpToLen(value: unknown, maxLen: number): value is string {
+  return typeof value === 'string' && value.length <= maxLen
 }
 
 function isIntInRange(value: unknown, min: number, max: number): value is number {
@@ -105,6 +112,37 @@ function isSetAiModelPayload(value: unknown): boolean {
   return isNonEmptyString(value.aiModel, MAX_AI_MODEL_LEN)
 }
 
+/** `settings:setAiProvider` (T26): un `provider` conocido del catálogo, sin claves extra. */
+function isSetAiProviderPayload(value: unknown): boolean {
+  if (!isPlainObject(value)) return false
+  if (!hasOnlyKeys(value, ['provider'])) return false
+  return isAiProviderId(value.provider)
+}
+
+/**
+ * `settings:setProviderModel` (T26): mismo criterio que `isSetAiModelPayload`
+ * para `model` (string no vacío, acotado, sin validar contra la lista curada
+ * de ESE proveedor — el modo "avanzado" de OpenRouter debe seguir
+ * funcionando), más `provider` conocido del catálogo.
+ */
+function isSetProviderModelPayload(value: unknown): boolean {
+  if (!isPlainObject(value)) return false
+  if (!hasOnlyKeys(value, ['provider', 'model'])) return false
+  if (!isAiProviderId(value.provider)) return false
+  return isNonEmptyString(value.model, MAX_AI_MODEL_LEN)
+}
+
+/**
+ * `settings:setOpenRouterKey` (T32): `key` debe ser string (puede venir vacío
+ * o solo espacios — esa es la señal para borrar, ver `handlers.ts`), acotado
+ * a `MAX_OPENROUTER_KEY_LEN`.
+ */
+function isSetOpenRouterKeyPayload(value: unknown): boolean {
+  if (!isPlainObject(value)) return false
+  if (!hasOnlyKeys(value, ['key'])) return false
+  return isStringUpToLen(value.key, MAX_OPENROUTER_KEY_LEN)
+}
+
 /** `window:openDidactic` (T14): mismo `repo`/`number` que `isRepoAndNumberPayload`, más el título humano del PR. */
 function isOpenDidacticWindowPayload(value: unknown): boolean {
   if (!isPlainObject(value)) return false
@@ -133,7 +171,12 @@ export const payloadValidators: Record<IpcChannel, (payload: unknown) => boolean
   'ai:getCachedAnalysis': isRepoAndNumberPayload,
   'ai:invalidateAnalysis': isRepoAndNumberPayload,
   'ai:getAnalysisState': isRepoAndNumberPayload,
+  'ai:getProviderStatus': isVoidPayload,
   'settings:get': isVoidPayload,
   'settings:setAiModel': isSetAiModelPayload,
+  'settings:setAiProvider': isSetAiProviderPayload,
+  'settings:setProviderModel': isSetProviderModelPayload,
+  'settings:setOpenRouterKey': isSetOpenRouterKeyPayload,
+  'settings:getOpenRouterKeyStatus': isVoidPayload,
   'window:openDidactic': isOpenDidacticWindowPayload,
 }

@@ -108,8 +108,22 @@ npm run build
 - `npm run dist` — build + AppImage en `dist/Minerva-<versión>.AppImage`
   (`npm run dist:dir` genera solo `dist/linux-unpacked/`, más rápido para probar).
 - El `.env` queda **excluido** del paquete a propósito (la key de OpenRouter no
-  viaja en el binario); en producción la key llega por variable de entorno
-  hasta que exista el campo en Settings (roadmap).
+  viaja en el binario); en producción la key llega por variable de entorno o
+  por el campo cifrado (safeStorage) de Settings.
+- **Proveedores Claude Code y Codex: requieren los CLIs oficiales instalados y
+  logueados en la máquina donde corre Minerva.** La app NO los bundlea ni
+  reimplementa su OAuth: usa la sesión que ya autenticaste con `claude login`
+  (Claude Pro/Max) o `codex login` (ChatGPT Plus/Pro). Sin el CLI instalado el
+  selector de proveedor en Settings muestra "No disponible"; instalado pero sin
+  sesión, muestra "Instalado, sin sesión". OpenRouter no necesita nada de esto
+  (va por API key). El paquete `@anthropic-ai/claude-agent-sdk` trae un binario
+  nativo por plataforma (~250MB) que tampoco se bundlea — `electron-builder.yml`
+  lo excluye explícitamente (`!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**`)
+  porque Minerva siempre apunta al `claude` del sistema vía
+  `pathToClaudeCodeExecutable` (resuelto por `src/main/ai/providers/resolve-cli.ts`,
+  que busca en `PATH` y en ubicaciones comunes como `~/.local/bin` — necesario
+  porque una app GUI lanzada desde el launcher no siempre hereda el `PATH`
+  completo de una terminal).
 - En sistemas sin `libfuse.so.2` (Arch trae fuse3): correr el AppImage con
   `--appimage-extract-and-run`, instalar el paquete `fuse2`, o usar
   `dist/linux-unpacked/minerva` directo.

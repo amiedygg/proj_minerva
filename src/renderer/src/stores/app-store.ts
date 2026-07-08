@@ -11,7 +11,7 @@
  * en vez de desestructurar el store completo, para no re-renderizar de más.
  */
 import { create } from 'zustand'
-import type { AuthStatus, EffectiveAiModelInfo, PullRequestSummary } from '../../../shared/types'
+import type { AiSettingsInfo, AuthStatus, PullRequestSummary } from '../../../shared/types'
 
 export type CenterTab = 'conversation' | 'files'
 export type DiffViewMode = 'split' | 'inline'
@@ -86,15 +86,16 @@ interface AppState {
   authStatus: AuthStatus
 
   /**
-   * Modal de settings (T12, engrane en TitleBar). `aiModelInfo` es la última
-   * respuesta conocida de `settings:get`/`settings:setAiModel` (modelo de IA
-   * efectivo + su procedencia): se guarda en el store en vez de en estado
+   * Modal de settings (T12, engrane en TitleBar; forma multi-proveedor desde
+   * T26). `aiModelInfo` es la última respuesta conocida de
+   * `settings:get`/`settings:setAiModel` (selección efectiva de
+   * proveedor+modelo + catálogo): se guarda en el store en vez de en estado
    * local de un solo hook para que todos los consumidores (el modal y el
    * hint sutil del panel didáctico, `useSettings` en ambos) compartan el
    * mismo valor sin refetchear cada uno por su lado innecesariamente.
    */
   settingsOpen: boolean
-  aiModelInfo: EffectiveAiModelInfo | null
+  aiModelInfo: AiSettingsInfo | null
 
   selectPr: (pr: PullRequestSummary | null) => void
   setSearchQuery: (query: string) => void
@@ -113,7 +114,7 @@ interface AppState {
   setAuthStatus: (status: AuthStatus) => void
   openSettings: () => void
   closeSettings: () => void
-  setAiModelInfo: (info: EffectiveAiModelInfo) => void
+  setAiModelInfo: (info: AiSettingsInfo) => void
 }
 
 export const useAppStore = create<AppState>((set) => ({

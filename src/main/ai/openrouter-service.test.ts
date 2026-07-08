@@ -10,10 +10,18 @@ import type { DraftDidacticSection } from '../../shared/events'
  * objeto de la API — sin este mock, ese acceso lanzaría. Se apunta a un
  * directorio vacío (sin `settings.json`) para que la precedencia caiga en
  * `MINERVA_AI_MODEL` (env), que es lo que estos tests ya asumían antes de T12.
+ * `safeStorage.isEncryptionAvailable` se mockea a `false` (T32,
+ * `./openrouter-key-store.ts`, que `getAiEnv` consulta antes que el entorno):
+ * sin persistencia disponible, `loadApiKey()` devuelve `null` de inmediato y
+ * la key sigue resolviéndose desde `process.env.OPENROUTER_API_KEY`, que es
+ * lo que estos tests ya asumían antes de T32.
  */
 vi.mock('electron', () => ({
   app: {
     getPath: () => '/tmp/proj-minerva-openrouter-service-test-no-settings',
+  },
+  safeStorage: {
+    isEncryptionAvailable: () => false,
   },
 }))
 
