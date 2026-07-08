@@ -152,6 +152,7 @@ const detail: PullRequestDetail = {
   updatedAt: '2026-07-01T00:00:00.000Z',
   headRef: 'feat/apply-coupon',
   baseRef: 'main',
+  headSha: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
   commentCount: 0,
   reviewDecision: null,
   ciStatus: 'success',

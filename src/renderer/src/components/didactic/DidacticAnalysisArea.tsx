@@ -1,6 +1,16 @@
 import { useState } from 'react'
-import { BookOpen, Building2, Database, Globe, Loader2, RefreshCw, Rocket } from 'lucide-react'
+import {
+  AlertTriangle,
+  BookOpen,
+  Building2,
+  Database,
+  Globe,
+  Loader2,
+  RefreshCw,
+  Rocket,
+} from 'lucide-react'
 import { useDidacticAnalysis } from '../../hooks/use-didactic-analysis'
+import { isAnalysisStale } from '../../lib/staleness'
 import { DidacticSectionCard } from './DidacticSectionCard'
 import { Markdown } from '../ui/Markdown'
 import { MermaidDiagram } from './MermaidDiagram'
@@ -128,6 +138,16 @@ function renderDraftSection(
 interface DidacticAnalysisAreaProps {
   repo: RepoRef
   number: number
+  /**
+   * SHA ACTUAL del head del PR (T42, Issue 2), para comparar contra el
+   * `analysis.headSha` sellado al generar (`isAnalysisStale`, en
+   * `../../lib/staleness.ts`) y avisar si el PR recibió commits nuevos.
+   * `DidacticPanel` lo pasa directo desde `selectedPr.headSha` (ya lo tiene
+   * del summary); la ventana desacoplada no tiene ese summary, así que lo
+   * consigue con el hook `use-pr-head-sha` (fetch único al montar). `undefined`
+   * mientras no se sepa aún — la barra simplemente no aparece hasta entonces.
+   */
+  currentHeadSha?: string
 }
 
 /**
@@ -160,12 +180,17 @@ interface DidacticAnalysisAreaProps {
 export function DidacticAnalysisArea({
   repo,
   number,
+  currentHeadSha,
 }: DidacticAnalysisAreaProps): React.JSX.Element {
   const { analysis, streamingSections, checkingCache, loading, error, analyze, reanalyze } =
     useDidacticAnalysis({ repo, number })
   const [viewerResource, setViewerResource] = useState<ViewerResource | null>(null)
 
   const hasResult = analysis !== null || streamingSections !== null
+  // Derivado en render (no estado): reacciona solo cuando `analysis` o
+  // `currentHeadSha` cambian, sin efectos que "resetear" (T42, ver
+  // comentario de la prop `currentHeadSha` arriba).
+  const isStale = isAnalysisStale(analysis, currentHeadSha)
 
   let body: React.JSX.Element
   if (error) {
@@ -210,7 +235,7 @@ export function DidacticAnalysisArea({
     <>
       {hasResult && !error && (
         <div className="flex items-center justify-between gap-2">
-          <ActiveModelHint />
+          <ActiveModelHint generatedWith={analysis?.generatedWith} />
           <button
             type="button"
             onClick={reanalyze}
@@ -220,6 +245,23 @@ export function DidacticAnalysisArea({
           >
             <RefreshCw size={12} className={loading ? 'animate-spin' : undefined} />
             Re-analizar
+          </button>
+        </div>
+      )}
+      {isStale && analysis && currentHeadSha && (
+        <div className="flex items-center justify-between gap-3 rounded-md border border-warning/40 bg-warning/10 p-2.5 text-xs">
+          <span className="flex items-center gap-2 text-warning">
+            <AlertTriangle size={14} className="shrink-0" />
+            Este PR recibió commits nuevos desde que se generó este resumen (
+            {analysis.headSha.slice(0, 7)} → {currentHeadSha.slice(0, 7)}).
+          </span>
+          <button
+            type="button"
+            onClick={reanalyze}
+            disabled={loading}
+            className="shrink-0 rounded-md border border-warning/40 px-2 py-1 font-medium text-warning transition-colors hover:bg-warning/15 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Actualizar
           </button>
         </div>
       )}

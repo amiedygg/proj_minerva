@@ -1,6 +1,7 @@
 import { GraduationCap } from 'lucide-react'
 import type { DidacticRouteTarget } from '../../shared/didactic-route'
 import { DidacticAnalysisArea } from './components/didactic/DidacticAnalysisArea'
+import { usePrHeadSha } from './hooks/use-pr-head-sha'
 
 interface DidacticWindowAppProps {
   target: DidacticRouteTarget
@@ -23,6 +24,10 @@ interface DidacticWindowAppProps {
  */
 export function DidacticWindowApp({ target }: DidacticWindowAppProps): React.JSX.Element {
   const prLabel = target.repo.fullName + '#' + target.number
+  // T42 (Issue 2): esta ventana no recibe el `PullRequestSummary` (solo
+  // `repo`+`number`+`title` en el hash), así que no tiene `headSha` gratis
+  // como `DidacticPanel` — un fetch liviano y único al montar lo consigue.
+  const { headSha: currentHeadSha } = usePrHeadSha(target.repo, target.number)
 
   return (
     <div className="flex h-full flex-col items-center overflow-y-auto bg-bg">
@@ -35,7 +40,11 @@ export function DidacticWindowApp({ target }: DidacticWindowAppProps): React.JSX
           <span className="text-xs text-muted">{prLabel}</span>
         </header>
 
-        <DidacticAnalysisArea repo={target.repo} number={target.number} />
+        <DidacticAnalysisArea
+          repo={target.repo}
+          number={target.number}
+          currentHeadSha={currentHeadSha ?? undefined}
+        />
       </div>
     </div>
   )

@@ -18,8 +18,8 @@
  * "shopwave") para poder armar un resumen genérico con datos reales del PR
  * (título, contadores, labels) cuando no hay sección enriquecida para él.
  */
-import type { IpcRequest, IpcResponse } from '../../shared/ipc'
-import type { DidacticSection, RepoRef } from '../../shared/types'
+import type { IpcRequest } from '../../shared/ipc'
+import type { DidacticSection, GeneratedAnalysis, RepoRef } from '../../shared/types'
 import { prFixtures } from '../github/fixtures'
 import { genericSummarySection, richDidacticSections } from './fixtures'
 import type { AiService, AnalyzePullRequestOptions } from './service'
@@ -83,7 +83,7 @@ export class MockAiService implements AiService {
   async analyzePullRequest(
     req: IpcRequest<'ai:analyzePullRequest'>,
     options?: AnalyzePullRequestOptions,
-  ): Promise<IpcResponse<'ai:analyzePullRequest'>> {
+  ): Promise<GeneratedAnalysis> {
     const prId = prKey(req.repo, req.number)
     const rich = richDidacticSections[prId]
 

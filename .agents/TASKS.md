@@ -1383,3 +1383,254 @@ Reproducir el descubrimiento: `codex app-server generate-ts --out /tmp/x/ts` y l
   disponible), typecheck/lint/290 tests verdes. El intento del orquestador
   de crear el release de prueba fue denegado por el clasificador de
   permisos (crear superficie pública) — queda como acción humana.
+
+---
+
+## F9 — Persistencia del análisis + metadata de generación + staleness por SHA — 2026-07-07
+
+> Rama `feature/analysis-persistence` (desde `feature/model-effort`/F8). Diseño completo en
+> `PLAN.md` § "Iteración actual (2026-07-07): F9". Dos issues de Edilson: (1) el banner
+> "vía proveedor·modelo·esfuerzo" del panel didáctico miente cuando cambio la config
+> después de generar un análisis (lee la config vigente, no con qué se generó); (2) el
+> último resumen de un PR debe persistir entre sesiones, y si el head del PR recibe commits
+> nuevos (cambia el SHA) hay que avisar y sugerir actualizar.
+>
+> Invariantes: pipeline de streaming AGNÓSTICO (protocolo `@@@SECTION`) intacto; secretos
+> solo en main; gotchas de main (sin backticks en strings largos, `import.meta.dirname`,
+> preload CJS, reiniciar `npm run dev` al tocar `src/main/**`); persistir SOLO análisis
+> completos.
+
+- [x] **T39. Backbone de datos: `DidacticAnalysis` con `headSha`+`generatedWith`, `PullRequestSummary.headSha`, GitHub `oid`**
+  _Hecha y verificada (2026-07-07, subagente `a0456b1ca98053cd8`). Split limpio
+  `GeneratedAnalysis` (lo que produce el `AiService`) vs `DidacticAnalysis extends
+  GeneratedAnalysis` (+`headSha`+`generatedWith: AnalysisGenerationInfo`, lo que cachea/
+  devuelve el handler); `service.ts` retorna `Promise<GeneratedAnalysis>` (los 4 servicios
+  solo cambian la anotación); `shared/ipc.ts` sin tocar (res sigue `DidacticAnalysis`).
+  `PullRequestSummary.headSha` + GraphQL `oid` en ambas queries + mapping `?? ''`. Fixtures:
+  8 PRs con headSha hex estable. El subagente además dejó un SELLADO PUENTE en handlers.ts
+  (`headSha:''` + `generatedWith: getEffectiveAiSelection()`) para que compile — bien marcado
+  como "headSha real y persistencia = T40". Verificado por el orquestador: typecheck (node+web),
+  lint, 451 tests verdes. E2e de headSha del mock diferido a T40 (reinicia la app igual)._
+  Contexto: hoy `DidacticAnalysis` (`src/shared/types.ts`) es `{ prId, sections, generatedAt }`
+  — sin proveedor/modelo/effort ni SHA. `PullRequestSummary` tiene `headRef` (nombre de
+  rama) pero NO el SHA del commit. Las queries GraphQL de `real-service.ts` piden
+  `lastCommit: commits(last:1) { nodes { commit { statusCheckRollup { state } } } }` pero
+  NO `oid`. Esta tarea sienta el modelo de datos SIN cambiar comportamiento observable aún
+  (T40 hace el sellado real; T41/T42 la UI).
+  Entregables:
+  (a) `src/shared/types.ts`:
+    - Nuevo `interface GeneratedAnalysis { prId: string; sections: DidacticSection[]; generatedAt: string }`
+      (exactamente la forma vieja de `DidacticAnalysis`).
+    - Nuevo `interface AnalysisGenerationInfo { provider: AiProviderId; model: string; options: Record<string, string> }`
+      (importar `AiProviderId` de `./ai-providers`, ya se importa ahí).
+    - `DidacticAnalysis` pasa a `extends GeneratedAnalysis` + `headSha: string` +
+      `generatedWith: AnalysisGenerationInfo`. Documentar en JSDoc que SOLO el handler
+      (`ipc/handlers.ts`) construye el objeto enriquecido; los servicios producen
+      `GeneratedAnalysis`.
+    - `PullRequestSummary` gana `headSha: string` (SHA del último commit del head; `''` si
+      GitHub no lo devolviera). `PullRequestDetail` lo hereda.
+  (b) DESACOPLAR lo que produce el servicio de lo que recibe el renderer. HOY
+    `src/main/ai/service.ts` declara `AiService.analyzePullRequest(...): Promise<IpcResponse<'ai:analyzePullRequest'>>`
+    y `IpcResponse<'ai:analyzePullRequest'>` (en `shared/ipc.ts`, L54) es `DidacticAnalysis`.
+    Si `DidacticAnalysis` exige ahora `headSha`+`generatedWith`, los servicios (que solo
+    construyen `{prId, sections, generatedAt}`) dejarían de compilar. Fix:
+    - `service.ts`: `AiService.analyzePullRequest` pasa a retornar `Promise<GeneratedAnalysis>`
+      (importar `GeneratedAnalysis` de `../../shared/types`), NO `IpcResponse<...>`. Actualizar
+      el JSDoc: el servicio produce el CONTENIDO; el handler (`ipc/handlers.ts`) lo enriquece a
+      `DidacticAnalysis` (con headSha+generatedWith) antes de cachear/devolver (T40).
+    - `shared/ipc.ts`: `'ai:analyzePullRequest'.res` SIGUE siendo `DidacticAnalysis` (es lo que
+      el renderer recibe, ya enriquecido por el handler). NO cambiar. Igual `ai:getCachedAnalysis`.
+    - Los 4 servicios (`openrouter-service.ts`, `providers/claude-code-service.ts`,
+      `providers/codex-service.ts`, `mock-service.ts`): cambiar la anotación de retorno de
+      `Promise<IpcResponse<'ai:analyzePullRequest'>>` a `Promise<GeneratedAnalysis>`. El objeto
+      que ya construyen (`{prId, sections, generatedAt}`) es un `GeneratedAnalysis` válido —
+      NO añadir headSha/generatedWith en los servicios. Revisar helpers internos del mock
+      (`streamAndReturn`/`final`) que tipen el retorno.
+  (c) `src/main/github/real-service.ts`: añadir `oid` dentro de `commit { ... }` en el
+    `lastCommit` de AMBAS queries (`SEARCH_PULL_REQUESTS_QUERY` y `PULL_REQUEST_DETAIL_QUERY`).
+    Extender los tipos GraphQL locales (los `interface` de nodo, ~L55-100) para incluir
+    `lastCommit.nodes[].commit.oid?: string`. En `mapSearchNode` y `mapDetailNode` mapear
+    `headSha: node.lastCommit?.nodes?.[0]?.commit?.oid ?? ''`.
+  (d) `src/main/github/fixtures.ts`: cada PR fixture gana un `headSha` estable y realista
+    (40 hex chars, distinto por PR; p. ej. derivar algo determinista y legible como
+    `'a1b2c3d4e5f6...'` — NO usar backticks). `mock-service.ts`: propagar ese `headSha` en
+    lo que devuelven summary/detail (revisar cómo arma los `PrRecord`/summaries; si el
+    fixture ya se spreadea, con añadir el campo al fixture basta, pero VERIFICAR que el
+    summary construido lo incluye).
+  (e) Ajustar TODOS los sitios que construyen `PullRequestSummary`/`PullRequestDetail` de
+    prueba (fixtures de tests, helpers de smoke si aplican) para incluir `headSha` — el
+    typecheck de tests dirá cuáles.
+  Gotchas: sin backticks en strings largos de main (fixtures — usar comillas simples/dobles
+  concatenadas); `import.meta.dirname` si tocaras rutas (no debería). NO tocar el pipeline
+  de streaming ni `stream-parser`/`section-mapper`.
+  _Aceptación (orquestador):_ typecheck (node+web)/lint/`npm test` verdes; con `MINERVA_MOCK=1`
+  el detalle de un PR mock trae `headSha` no vacío (verificable por CDP:
+  `window.minerva.github.getPullRequestDetail`); no hay cambio visible en el panel todavía.
+
+- [x] **T40. Sellado en el handler + persistencia a disco del análisis**
+  _Hecha y verificada (2026-07-07, subagente `a3351e226a110f125`). `analysis-store.ts` nuevo
+  (persistencia atómica `analyses.json` en userData, patrón de settings/store: filePath
+  perezoso, load tolerante, writeAtomic tmp+rename; forma `{version:1, entries:[{key,analysis}]}`,
+  cap 20 aplicado en saveEntries y defensivamente en load, valida cada entry completa y
+  descarta inválidas). `AnalysisCache` disk-backed: hidrata perezoso en 1er acceso, write-
+  through en set/invalidate serializando el Map (orden LRU) — evict reflejado en disco.
+  Store inyectado por constructor (interfaz `AnalysisStoreLike`) para test con fake en
+  memoria. Handler completa el sellado de T39: fetch `getPullRequestDetail(req)` en try/catch
+  propio (cae a `''` si falla) → headSha real. Verificado por el orquestador: typecheck/lint,
+  468 tests. **E2E REAL (mock AI, provider openrouter forzado)**: analizar shopwave/api#482 →
+  headSha sellado `a482f001…`, generatedWith `{openrouter, glm-5.2}`, cached; `analyses.json`
+  escrito en userData con esos datos; **MATAR app → RELANZAR → `getAnalysisState` da `cached`
+  hidratado de disco SIN re-analizar**, headSha+generatedWith persistidos. Provider restaurado
+  a claude-code. Smoke reusable: `scripts/smoke-persistence.mjs` (modos provider-openrouter/
+  analyze/check/restore)._
+  Contexto: `AnalysisCache` (`src/main/ai/analysis-cache.ts`) es SOLO en memoria (Map,
+  cap 20, LRU) — se pierde al cerrar la app. El handler `ai:analyzePullRequest`
+  (`src/main/ipc/handlers.ts`) hoy cachea el `GeneratedAnalysis` tal cual. Esta tarea:
+  (1) sella `headSha`+`generatedWith` al generar, (2) persiste el análisis a disco para que
+  sobreviva reinicios. Depende de T39.
+  Entregables:
+  (a) `src/main/ai/analysis-store.ts` (NUEVO): persistencia atómica en disco, MISMO patrón
+    que `src/main/settings/store.ts` (leelo de referencia):
+    - `analyses.json` en `join(app.getPath('userData'), 'analyses.json')` — `filePath()`
+      perezoso, NUNCA en construcción (app puede no estar ready; igual que settings store).
+    - Forma en disco: `{ version: 1, entries: Array<{ key: string; analysis: DidacticAnalysis }> }`,
+      orden del array = recencia (menos reciente primero, más reciente último), cap 20.
+    - `load()`: readFileSync tolerante (archivo ausente → vacío sin log; corrupto/forma
+      inválida → vacío + `console.warn`). VALIDAR cada entry: `key` string no vacío +
+      `analysis` con la forma completa de `DidacticAnalysis` (incluidos `headSha` string y
+      `generatedWith` con provider/model/options) — entries que no validan se DESCARTAN
+      (no crashear). Cachear en memoria como settings store (`loaded`/`cache`).
+    - `writeAtomic(entries)`: tmp + rename, igual que settings.
+    - API mínima: `loadEntries(): Array<{ key, analysis }>` y `saveEntries(entries)`.
+  (b) `src/main/ai/analysis-cache.ts`: `AnalysisCache` disk-backed:
+    - Hidrata de disco perezosamente en el PRIMER acceso (`get`/`set`/`invalidate`): un flag
+      `hydrated`; al hidratar, `analysisStore.loadEntries()` puebla el `Map` en orden.
+    - `set` e `invalidate` hacen write-through: tras mutar el `Map`, serializar sus entries
+      (`[...this.entries.entries()].map(([key, analysis]) => ({ key, analysis }))`) y
+      `analysisStore.saveEntries(...)`. El LRU/evict ya existente se refleja en disco.
+    - Mantener la API pública actual (`get`/`set`/`invalidate`/`size`) intacta para no tocar
+      el handler más de lo necesario. Inyectar el store como dependencia del constructor con
+      default al singleton real (para testear con un store fake en memoria).
+    - Cuidado con la CLAVE: hoy `prKey` está DUPLICADA (en cache y en handler). Al serializar
+      a disco la key debe ser la MISMA (`owner/name#number`). Mantener `prKey` como está.
+  (c) `src/main/ipc/handlers.ts`, `ai:analyzePullRequest` (camino de cache-miss). NOTA: T39
+    YA dejó un sellado-PUENTE ahí (`const result: DidacticAnalysis = { ...generated,
+    headSha: '', generatedWith: getEffectiveAiSelection() }` antes de `analysisCache.set`).
+    T40 COMPLETA ese bloque: reemplazar el `headSha: ''` por el SHA real del PR. NO duplicar
+    el bloque, MODIFICARLO:
+    - `generatedWith` ya sale de `getEffectiveAiSelection()` (bien — es la selección real).
+    - `headSha`: fetchear una vez el detalle del PR para el SHA:
+      `const detail = await githubService.getPullRequestDetail(req)` → `detail.headSha`.
+      Hacerlo dentro del `try`, cerca de generar (best-effort: si fallara, `headSha: ''` y
+      seguir — NO tumbar el análisis por no poder leer el SHA; envolver ese fetch en su
+      propio try/catch que caiga a `''`).
+    - El objeto `result: DidacticAnalysis` pasa a llevar el `headSha` real. Se sigue
+      cacheando/devolviendo `result` (ya es `DidacticAnalysis`). El evento terminal y el
+      snapshot NO cambian.
+  (d) Tests unit: `analysis-store` (persist→load round-trip; cap 20 y orden LRU en disco;
+    archivo ausente → vacío; JSON corrupto → vacío + warn; entry con forma inválida se
+    descarta pero las válidas sobreviven; escritura atómica deja el archivo final íntegro).
+    `analysis-cache` con store fake (hidratación en primer acceso; write-through en
+    set/invalidate; evict del más antiguo se persiste). Handler: que el objeto cacheado y
+    devuelto lleve `headSha` y `generatedWith` correctos (mock de `getEffectiveAiSelection`
+    y `getPullRequestDetail`).
+  Gotchas: sin backticks; `app.getPath` solo perezoso; el mock de IA llama `onProgress`
+  síncrono (no romper el registro in-flight ya existente); persistir SOLO en el `set` de
+  éxito (ya es el único lugar que llama `set`).
+  _Aceptación (orquestador):_ typecheck/lint/`npm test` verdes; e2e: analizar un PR mock,
+  MATAR la app, reabrir, seleccionar el MISMO PR → el análisis aparece SIN pulsar "Analizar
+  PR" y SIN nueva llamada al LLM (verificable: `ai:getAnalysisState` da `cached` al montar,
+  y el `analyses.json` en userData contiene la entrada con `headSha`+`generatedWith`).
+
+- [x] **T41. Banner del panel didáctico sellado con la config de generación (Issue 1)**
+  _Hecha y verificada (2026-07-07, subagente `a3ffc31af237a9b90`). `ActiveModelHint` acepta
+  `generatedWith?: AnalysisGenerationInfo`; helper `resolveModelHintLabels(catalog, provider,
+  model, effortValue)` compartido por ambos caminos (sello del análisis vs config vigente en
+  streaming); `DidacticAnalysisArea` pasa `analysis?.generatedWith`. Verificado por el
+  orquestador: typecheck/lint/468 tests. **E2E REAL (`scripts/smoke-f9-ui.mjs banner`)**:
+  analizar #482 con provider openrouter → banner "vía OpenRouter · z-ai/glm-5.2"; cambiar la
+  config VIGENTE a claude-code (persist + reload del renderer) → el banner del análisis YA
+  generado SIGUE mostrando "OpenRouter · z-ai/glm-5.2" (leído del DOM real: `span[title*=
+  'Proveedor y modelo activos']`), NO claude-code. Bug del Issue 1 confirmado arreglado.
+  NOTA: captura de pixeles no posible (hyprlock activo → grim muestra el lockscreen y CDP
+  captureScreenshot se cuelga, gotcha conocido); el banner es texto plano sin clipping, así
+  que el assert de DOM innerText ES el contenido que ve el usuario._
+  Contexto: `src/renderer/src/components/didactic/ActiveModelHint.tsx` lee proveedor/modelo/
+  effort de `useSettings()` (config VIGENTE). Debe, cuando hay un análisis mostrado, leerlos
+  del `analysis.generatedWith` (sellado en T40). Depende de T39/T40.
+  Entregables:
+  (a) `ActiveModelHint.tsx`: nueva prop opcional `generatedWith?: AnalysisGenerationInfo`.
+    - Si `generatedWith` viene: `provider`/`model`/`options.effort` salen de él. Los LABELS
+      (label del proveedor, label del effort) se resuelven contra `useSettings().info.catalog`
+      (catálogo ESTÁTICO — los labels no cambian con la selección; `getModelOption(catalog,
+      provider, model)` para el descriptor `effort`, buscar la choice con
+      `value === generatedWith.options.effort`). Si el modelo ya no está en el catálogo (id
+      viejo), mostrar el id crudo sin effort (degradar, no romper).
+    - Si NO viene (streaming en curso, aún sin análisis final): comportamiento ACTUAL (config
+      vigente). Extraer la lógica de "resolver labels a partir de (provider, model, effort)"
+      en un helper local reutilizado por ambos caminos para no duplicar.
+    - Sigue devolviendo `null` si `info` (catálogo) aún no cargó.
+  (b) `DidacticAnalysisArea.tsx` (L211-213): pasar `generatedWith={analysis?.generatedWith}`
+    al `ActiveModelHint`. Cuando se muestra `analysis`, el prop lleva el sello; en streaming
+    `analysis` es `null` → `undefined` → banner cae a config vigente (correcto: se está
+    generando con esa config AHORA).
+  (c) Import del tipo `AnalysisGenerationInfo` desde `shared/types`.
+  Gotchas: `ActiveModelHint` NO debe hacer su propio fetch de settings distinto —
+  `useSettings` ya comparte el store; solo se usa `info.catalog` para labels. No tocar
+  `DidacticWindowApp` (usa el mismo `DidacticAnalysisArea`, hereda el fix).
+  _Aceptación (orquestador):_ typecheck/lint/`npm test` verdes; e2e + captura MIRADA:
+  analizar un PR con el proveedor/effort A; cambiar en Settings a proveedor/effort B; el
+  banner del análisis YA generado sigue mostrando A (no B). Al re-analizar (config B), el
+  banner pasa a B.
+
+- [x] **T42. Detección de staleness por SHA + prompt de actualización (Issue 2)**
+  _Hecha y verificada (2026-07-07, subagente `af762b9d594c37881`). SOLO renderer: `lib/
+  staleness.ts` (`isAnalysisStale` puro + 6 tests), hook `use-pr-head-sha.ts` (fetch único de
+  detail al montar, patrón de use-pull-request-detail), y wiring en `DidacticAnalysisArea`
+  (prop `currentHeadSha`, `isStale` derivado en render, barra `border-warning/40 bg-warning/10`
+  con SHAs cortos `A→B` y botón "Actualizar"→`reanalyze()`), `DidacticPanel` (pasa
+  `selectedPr.headSha`) y `DidacticWindowApp` (usa el hook). Verificado por el orquestador:
+  typecheck/lint/474 tests. **E2E REAL (`scripts/smoke-f9-ui.mjs stale-check`)**: se editó el
+  `analyses.json` persistido poniendo headSha `0000dead…` en #482 (≠ fixture `a482f001…`),
+  reinicio → al seleccionar #482 aparece la barra "commits nuevos" (DOM: /commits nuevos/) +
+  botón "Actualizar"; pulsar "Actualizar" → reanaliza (mock) → sella el headSha actual →
+  barra desaparece. Bug del Issue 2 confirmado resuelto. (Captura de pixeles no posible por
+  hyprlock, ídem T41; verificado por contenido del DOM.)_
+  Contexto: con T39/T40, `analysis.headSha` guarda el SHA de cuando se generó. Falta
+  comparar contra el SHA ACTUAL del PR y avisar. Depende de T39/T40. **SOLO renderer** (más
+  un hook nuevo): NO se toca main ni el contrato IPC — la condición de staleness se prueba
+  e2e manipulando el `analyses.json` persistido (headSha viejo ≠ el del fixture actual), sin
+  ninguna afordance de código de producción (ver Aceptación).
+  Entregables:
+  (a) `DidacticAnalysisArea.tsx`: nueva prop opcional `currentHeadSha?: string`.
+    - `DidacticPanel.tsx` (`src/renderer/src/components/layout/`, L116-120): pasa
+      `currentHeadSha={selectedPr.headSha}` (ya tiene el summary con headSha desde T39).
+    - Ventana desacoplada (`DidacticWindowApp.tsx`): no tiene el summary → un hook nuevo
+      `use-pr-head-sha.ts` que hace `window.minerva.github.getPullRequestDetail({repo,number})`
+      UNA vez al montar y devuelve `headSha` (best-effort, `null` mientras carga o si falla).
+      `DidacticWindowApp` lo usa y pasa el resultado como `currentHeadSha`. (No sobre-pedir:
+      es un fetch liviano, una vez.)
+    - `isStale = analysis != null && !!currentHeadSha && !!analysis.headSha && analysis.headSha !== currentHeadSha`.
+  (b) Barra de aviso NO destructiva encima del análisis (solo cuando `isStale`, junto al
+    toolbar del resultado): estilo de aviso (p. ej. `border-warning/40 bg-warning/10` si
+    existe el token; si no, reusar el patrón de `border-danger/40 bg-danger/10` pero en tono
+    informativo — revisar tokens en `styles.css`). Texto: "Este PR recibió commits nuevos
+    desde que se generó este resumen." + SHAs cortos (`analysis.headSha.slice(0,7)` →
+    `currentHeadSha.slice(0,7)`). Botón "Actualizar" que llama `reanalyze()` (ya expuesto por
+    `useDidacticAnalysis`). El análisis viejo permanece visible debajo. La barra desaparece
+    cuando el re-análisis termina (el nuevo `analysis.headSha` == `currentHeadSha`).
+  (c) Tests unit: extraé la comparación en una función pura (p. ej. `isAnalysisStale(analysis,
+    currentHeadSha)` o helper local) y testeala (igual→no stale; distinto→stale; headSha
+    vacío en cualquiera→no stale; analysis null→no stale). El hook `use-pr-head-sha` si es
+    testeable con un mock de `window.minerva`.
+  Gotchas: NO resetear estado por efecto (regla del linter) — el `isStale` es derivado en
+  render, no estado; la barra reacciona sola cuando cambian `analysis`/`currentHeadSha`. El
+  hook `use-pr-head-sha` sigue el patrón de los otros hooks de datos (`use-pull-request-detail.ts`):
+  setState solo en callbacks de promesa, cleanup con flag `cancelled`. SOLO renderer.
+  _Aceptación (orquestador):_ typecheck/lint/`npm test` verdes; e2e + captura MIRADA (el
+  orquestador crea la condición de staleness escribiendo en `analyses.json` de userData una
+  entrada del PR con un `headSha` distinto al del fixture, luego lanza la app): al
+  seleccionar el PR aparece la barra "commits nuevos" con `A→B`; pulsar "Actualizar" →
+  re-analiza (mock) y la barra desaparece (el nuevo análisis sella el headSha del fixture ==
+  current). En la ventana desacoplada la barra también aparece (el hook fetchea el headSha
+  actual vía `getPullRequestDetail`).

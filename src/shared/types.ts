@@ -34,6 +34,13 @@ export interface PullRequestSummary {
   updatedAt: string
   headRef: string
   baseRef: string
+  /**
+   * SHA del último commit del head (T39). Se usa para detectar staleness de
+   * un análisis ya generado (`DidacticAnalysis.headSha` sellado al generar
+   * vs. este valor ACTUAL del PR, ver T41/T42). `''` si GitHub no lo
+   * devolviera (defensivo, no debería pasar en la práctica).
+   */
+  headSha: string
   commentCount: number
   reviewDecision: ReviewDecision
   ciStatus: CiStatus
@@ -111,10 +118,47 @@ export type DidacticSection =
   | ({ kind: 'endpoint'; snippets: DidacticSnippet[] } & DidacticSectionCommon)
   | ({ kind: 'schema'; mermaid: string } & DidacticSectionCommon)
 
-export interface DidacticAnalysis {
+/**
+ * Lo que produce un `AiService.analyzePullRequest` (T39): el contenido puro
+ * del análisis, sin metadata de generación. Forma idéntica a la vieja
+ * `DidacticAnalysis` (pre-T39) — el split existe para que los servicios
+ * (`openrouter-service.ts`, `providers/claude-code-service.ts`,
+ * `providers/codex-service.ts`, `mock-service.ts`) no necesiten conocer
+ * `headSha`/`generatedWith`, que solo el handler (`ipc/handlers.ts`) sella
+ * (T40) antes de cachear/persistir/devolver al renderer.
+ */
+export interface GeneratedAnalysis {
   prId: string
   sections: DidacticSection[]
   generatedAt: string
+}
+
+/**
+ * Metadata de CON QUÉ se generó un análisis (T39): proveedor+modelo+opciones
+ * (p. ej. `effort`) EFECTIVOS en el momento de generar, capturados por el
+ * handler vía `getEffectiveAiSelection()` — NUNCA la config vigente en el
+ * momento de mostrar el análisis (eso es precisamente el Issue 1 que motiva
+ * F9, ver `.agents/PLAN.md`).
+ */
+export interface AnalysisGenerationInfo {
+  provider: AiProviderId
+  model: string
+  options: Record<string, string>
+}
+
+/**
+ * Análisis didáctico completo, CACHEADO/PERSISTIDO y devuelto al renderer
+ * (T39): extiende `GeneratedAnalysis` con `headSha` (SHA del head del PR al
+ * momento de generar, para detectar staleness — T41/T42) y `generatedWith`
+ * (con qué proveedor/modelo/opciones se generó, para que el banner del panel
+ * didáctico no mienta si el usuario cambia la config después — Issue 1 de
+ * F9). SOLO el handler (`ipc/handlers.ts`) construye este objeto enriquecido
+ * a partir del `GeneratedAnalysis` que produce el `AiService`; los servicios
+ * NUNCA tocan `headSha`/`generatedWith` directamente.
+ */
+export interface DidacticAnalysis extends GeneratedAnalysis {
+  headSha: string
+  generatedWith: AnalysisGenerationInfo
 }
 
 /**
