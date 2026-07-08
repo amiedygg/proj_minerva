@@ -162,8 +162,14 @@ export interface EffectiveAiModelInfo {
  * `perProviderModel` es el mapa persistido completo (para que la UI, aunque
  * cambie de proveedor sin guardar, pueda recordar el último modelo elegido de
  * cada uno); `catalog` es el catálogo completo de proveedores+modelos
- * (`shared/ai-providers.ts`) para que el renderer pinte las opciones sin un
- * segundo roundtrip.
+ * (`shared/ai-providers.ts`, con los `options` por modelo desde T34) para que
+ * el renderer pinte las opciones sin un segundo roundtrip.
+ *
+ * `selectedOptions` (T34, F8): las opciones de modelo (p. ej. `effort`) YA
+ * RESUELTAS (`main/ai/env.ts`, `getEffectiveAiSelection().options`) para el
+ * proveedor+modelo ACTIVO — indexado por proveedor (mínimo: la entrada del
+ * `provider` de arriba) para que T37 pinte el selector de opciones sin tener
+ * que resolver nada del lado del renderer.
  */
 export interface AiSettingsInfo {
   provider: AiProviderId
@@ -171,6 +177,7 @@ export interface AiSettingsInfo {
   modelSource: AiModelSource
   perProviderModel: Partial<Record<AiProviderId, string>>
   catalog: Record<AiProviderId, AiProviderCatalogEntry>
+  selectedOptions?: Partial<Record<AiProviderId, Record<string, string>>>
 }
 
 /**

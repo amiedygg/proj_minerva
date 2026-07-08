@@ -187,7 +187,7 @@ function makeGithubService(): GithubService {
 
 describe('CodexAiService.analyzePullRequest', () => {
   beforeEach(() => {
-    getEffectiveAiSelectionMock.mockReturnValue({ provider: 'codex', model: 'gpt-5.5' })
+    getEffectiveAiSelectionMock.mockReturnValue({ provider: 'codex', model: 'gpt-5.5', options: {} })
   })
 
   afterEach(() => {
@@ -346,6 +346,42 @@ describe('CodexAiService.analyzePullRequest', () => {
 
     const service = new CodexAiService(makeGithubService())
     await expect(service.analyzePullRequest({ repo, number: 482 })).rejects.toThrow('Ninguna sección')
+  })
+
+  it('agrega "effort" a los params de turn/start cuando la selección efectiva trae uno (T36)', async () => {
+    getEffectiveAiSelectionMock.mockReturnValue({
+      provider: 'codex',
+      model: 'gpt-5.5',
+      options: { effort: 'high' },
+    })
+    const fake = setupFakeClient({
+      requestResults: happyPathResults(),
+      notifications: [itemDelta('@@@SECTION kind=summary\nok\n')],
+    })
+
+    const service = new CodexAiService(makeGithubService())
+    await service.analyzePullRequest({ repo, number: 482 })
+
+    const turnStartCall = fake.requestCalls.find((c) => c.method === 'turn/start')!
+    expect(turnStartCall.params).toEqual({
+      threadId: 't-1',
+      input: [{ type: 'text', text: expect.stringContaining(detail.title), text_elements: [] }],
+      effort: 'high',
+    })
+  })
+
+  it('NO manda "effort" en turn/start cuando la selección efectiva no trae uno (sin regresión)', async () => {
+    getEffectiveAiSelectionMock.mockReturnValue({ provider: 'codex', model: 'gpt-5.5', options: {} })
+    const fake = setupFakeClient({
+      requestResults: happyPathResults(),
+      notifications: [itemDelta('@@@SECTION kind=summary\nok\n')],
+    })
+
+    const service = new CodexAiService(makeGithubService())
+    await service.analyzePullRequest({ repo, number: 482 })
+
+    const turnStartCall = fake.requestCalls.find((c) => c.method === 'turn/start')!
+    expect(turnStartCall.params).not.toHaveProperty('effort')
   })
 
   it('siempre mata el proceso hijo, incluso en el camino de error', async () => {

@@ -255,6 +255,31 @@ describe('payloadValidators', () => {
     })
   })
 
+  describe('ai:getProviderModels', () => {
+    const validate = payloadValidators['ai:getProviderModels']
+
+    it('acepta cada proveedor conocido', () => {
+      expect(validate({ provider: 'openrouter' })).toBe(true)
+      expect(validate({ provider: 'claude-code' })).toBe(true)
+      expect(validate({ provider: 'codex' })).toBe(true)
+    })
+
+    it('rechaza un proveedor desconocido', () => {
+      expect(validate({ provider: 'gemini-cli' })).toBe(false)
+    })
+
+    it('rechaza claves desconocidas', () => {
+      expect(validate({ provider: 'codex', evil: true })).toBe(false)
+    })
+
+    it('rechaza payload sin provider o no-objeto', () => {
+      expect(validate({})).toBe(false)
+      expect(validate(undefined)).toBe(false)
+      expect(validate('x')).toBe(false)
+      expect(validate([])).toBe(false)
+    })
+  })
+
   describe('settings:setProviderModel', () => {
     const validate = payloadValidators['settings:setProviderModel']
 
@@ -284,6 +309,55 @@ describe('payloadValidators', () => {
       expect(validate({ model: 'gpt-5.5-codex' })).toBe(false)
       expect(validate(undefined)).toBe(false)
       expect(validate('x')).toBe(false)
+    })
+  })
+
+  describe('settings:setModelOption', () => {
+    const validate = payloadValidators['settings:setModelOption']
+
+    it('acepta un payload válido', () => {
+      expect(validate({ provider: 'codex', optionId: 'effort', value: 'high' })).toBe(true)
+    })
+
+    it('rechaza un proveedor desconocido', () => {
+      expect(validate({ provider: 'gemini-cli', optionId: 'effort', value: 'high' })).toBe(false)
+    })
+
+    it('rechaza optionId vacío o > 50 chars', () => {
+      expect(validate({ provider: 'codex', optionId: '', value: 'high' })).toBe(false)
+      expect(validate({ provider: 'codex', optionId: 'a'.repeat(51), value: 'high' })).toBe(false)
+    })
+
+    it('acepta optionId justo en el límite (50)', () => {
+      expect(validate({ provider: 'codex', optionId: 'a'.repeat(50), value: 'high' })).toBe(true)
+    })
+
+    it('rechaza value vacío o > 50 chars', () => {
+      expect(validate({ provider: 'codex', optionId: 'effort', value: '' })).toBe(false)
+      expect(validate({ provider: 'codex', optionId: 'effort', value: 'a'.repeat(51) })).toBe(false)
+    })
+
+    it('acepta value justo en el límite (50)', () => {
+      expect(validate({ provider: 'codex', optionId: 'effort', value: 'a'.repeat(50) })).toBe(true)
+    })
+
+    it('rechaza optionId/value que no son string', () => {
+      expect(validate({ provider: 'codex', optionId: 42, value: 'high' })).toBe(false)
+      expect(validate({ provider: 'codex', optionId: 'effort', value: 42 })).toBe(false)
+    })
+
+    it('rechaza claves desconocidas', () => {
+      expect(validate({ provider: 'codex', optionId: 'effort', value: 'high', evil: true })).toBe(
+        false,
+      )
+    })
+
+    it('rechaza payload incompleto o no-objeto', () => {
+      expect(validate({ provider: 'codex', optionId: 'effort' })).toBe(false)
+      expect(validate({ optionId: 'effort', value: 'high' })).toBe(false)
+      expect(validate(undefined)).toBe(false)
+      expect(validate('x')).toBe(false)
+      expect(validate([])).toBe(false)
     })
   })
 

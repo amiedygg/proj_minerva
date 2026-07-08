@@ -5,6 +5,7 @@ import { createAiService } from '../ai'
 import { getAiSettingsInfo, getOpenRouterKeyStatus } from '../ai/env'
 import { clearApiKey, saveApiKey } from '../ai/openrouter-key-store'
 import { getAiProviderStatusMap } from '../ai/providers/provider-status'
+import { getProviderModels } from '../ai/providers/provider-models'
 import { analysisCache } from '../ai/analysis-cache'
 import { settingsStore } from '../settings/store'
 import { authManager } from '../auth/auth-manager'
@@ -208,6 +209,13 @@ export async function registerIpcHandlers(): Promise<void> {
   // probe de CLI cacheado con TTL corto, nunca bloqueante.
   handle('ai:getProviderStatus', () => getAiProviderStatusMap())
 
+  // Modelos disponibles por proveedor (T35, F8): estáticos para OpenRouter/
+  // Claude Code, dinámicos (con cache TTL + fallback al curado) para Codex —
+  // ver `../ai/providers/provider-models.ts`. Canal SEPARADO de
+  // `settings:get` (síncrono): esto puede tardar/fallar por spawnear un
+  // proceso externo.
+  handle('ai:getProviderModels', (req) => getProviderModels(req.provider))
+
   handle('settings:get', () => getAiSettingsInfo())
   handle('settings:setAiModel', (req) => {
     settingsStore.setAiModel(req.aiModel)
@@ -219,6 +227,13 @@ export async function registerIpcHandlers(): Promise<void> {
   })
   handle('settings:setProviderModel', (req) => {
     settingsStore.setProviderModel(req.provider, req.model)
+    return getAiSettingsInfo()
+  })
+  // Opción de modelo (T34, F8 — p. ej. `effort`): persiste el valor elegido
+  // para `provider`/`optionId` (`settingsStore.setModelOption`) y responde el
+  // `AiSettingsInfo` actualizado, mismo patrón que los dos handlers de arriba.
+  handle('settings:setModelOption', (req) => {
+    settingsStore.setModelOption(req.provider, req.optionId, req.value)
     return getAiSettingsInfo()
   })
 

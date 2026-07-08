@@ -37,7 +37,9 @@ import {
   AI_PROVIDER_CATALOG,
   DEFAULT_AI_PROVIDER,
   DEFAULT_MODEL_BY_PROVIDER,
+  getModelOption,
   isAiProviderId,
+  resolveOptionValue,
   type AiProviderId,
 } from '../../shared/ai-providers'
 import type { AiSettingsInfo, EffectiveAiModelInfo, OpenRouterKeyStatus } from '../../shared/types'
@@ -146,13 +148,47 @@ export function getEffectiveAiModel(): EffectiveAiModelInfo {
 export interface EffectiveAiSelection {
   provider: AiProviderId
   model: string
+  /**
+   * Opciones RESUELTAS (T34, F8) para el modelo activo: una entrada por cada
+   * `ModelOptionDescriptor` que el modelo declare en el catálogo
+   * (`../../shared/ai-providers.ts`), p. ej. `{ effort: 'high' }`. `{}` si el
+   * modelo activo no tiene ningún descriptor de opción. Los servicios (T36)
+   * leen `options.effort` para decidir si (y qué) reasoning effort mandarle
+   * al proveedor.
+   */
+  options: Record<string, string>
 }
 
 /**
- * Selección efectiva de proveedor+modelo (T26): igual espíritu que
- * `getEffectiveAiModel`, pero generalizado a los tres proveedores
- * (`../../shared/ai-providers.ts`). Precedencia evaluada de forma
- * INDEPENDIENTE para el proveedor y para el modelo, de mayor a menor
+ * Resuelve las opciones (T34) del modelo activo contra lo persistido en
+ * `settings.json` (`settingsStore.getPersistedModelOptions`): por cada
+ * descriptor que el modelo declare en el catálogo, `resolveOptionValue`
+ * decide el valor efectivo — el guardado si sigue siendo una choice válida
+ * de ESE modelo, si no el choice `isDefault`, si no el primero. Esto es lo
+ * que hace la resolución "robusta": un `effort` guardado para un modelo
+ * anterior que ya no aplica al modelo activo (p. ej. `xhigh` guardado y
+ * luego el usuario cambia a un modelo que no lo soporta) nunca se filtra tal
+ * cual, siempre cae a algo que el modelo activo sí soporta. Un modelo sin
+ * descriptores (o que no está en el catálogo curado, p. ej. un id
+ * "avanzado" de OpenRouter) resuelve a `{}`.
+ */
+function resolveModelOptions(provider: AiProviderId, model: string): Record<string, string> {
+  const descriptors = getModelOption(AI_PROVIDER_CATALOG, provider, model)?.options ?? []
+  if (descriptors.length === 0) return {}
+
+  const saved = settingsStore.getPersistedModelOptions(provider)
+  const resolved: Record<string, string> = {}
+  for (const descriptor of descriptors) {
+    resolved[descriptor.id] = resolveOptionValue(descriptor, saved[descriptor.id])
+  }
+  return resolved
+}
+
+/**
+ * Selección efectiva de proveedor+modelo+opciones (T26; `options` desde
+ * T34): igual espíritu que `getEffectiveAiModel`, pero generalizado a los
+ * tres proveedores (`../../shared/ai-providers.ts`). Precedencia evaluada de
+ * forma INDEPENDIENTE para el proveedor y para el modelo, de mayor a menor
  * prioridad:
  * 1. `settings.json` (`settingsStore.getPersistedSettings()`): `aiProvider`
  *    para el proveedor, `models[provider]` para el modelo de ESE proveedor.
@@ -161,6 +197,12 @@ export interface EffectiveAiSelection {
  *    (persistido o de entorno), no queda forzado a OpenRouter.
  * 3. Default del catálogo: `DEFAULT_AI_PROVIDER` y
  *    `DEFAULT_MODEL_BY_PROVIDER[provider]`.
+ *
+ * `options` (T34) se resuelve SIEMPRE contra el `provider`+`model` ya
+ * resueltos arriba (ver `resolveModelOptions`), sin precedencia propia: no
+ * tiene sentido "options de settings" vs "options de env", solo existe la
+ * persistida (`modelOptions` en `settings.json`) resuelta contra las choices
+ * del modelo activo.
  *
  * Igual que `getEffectiveAiModel`, se recalcula en cada llamada (sin cache
  * del resultado combinado).
@@ -179,31 +221,29 @@ export function getEffectiveAiSelection(): EffectiveAiSelection {
   const provider: AiProviderId = persisted?.aiProvider ?? envProvider ?? DEFAULT_AI_PROVIDER
 
   const persistedModel = persisted?.models[provider]
-  if (persistedModel) {
-    return { provider, model: persistedModel }
-  }
-
   const envModel = (process.env.MINERVA_AI_MODEL ?? dotEnv.MINERVA_AI_MODEL ?? '').trim()
-  if (envModel.length > 0) {
-    return { provider, model: envModel }
-  }
+  const model = persistedModel || (envModel.length > 0 ? envModel : DEFAULT_MODEL_BY_PROVIDER[provider])
 
-  return { provider, model: DEFAULT_MODEL_BY_PROVIDER[provider] }
+  return { provider, model, options: resolveModelOptions(provider, model) }
 }
 
 /**
  * Agregado que consume el canal IPC `settings:get` (y las respuestas de
- * `settings:setAiProvider`/`settings:setProviderModel`/`settings:setAiModel`,
- * T26): la selección efectiva (`getEffectiveAiSelection`) más `modelSource`
- * (de dónde vino el modelo resuelto, mismo significado que en
- * `getEffectiveAiModel` pero para el proveedor activo, no solo OpenRouter),
- * el mapa persistido completo (`perProviderModel`, para que la UI recuerde la
- * última elección de cada proveedor aunque no esté activo) y el catálogo
- * completo (para pintar la UI sin un roundtrip adicional).
+ * `settings:setAiProvider`/`settings:setProviderModel`/`settings:setAiModel`/
+ * `settings:setModelOption`, T26/T34): la selección efectiva
+ * (`getEffectiveAiSelection`) más `modelSource` (de dónde vino el modelo
+ * resuelto, mismo significado que en `getEffectiveAiModel` pero para el
+ * proveedor activo, no solo OpenRouter), el mapa persistido completo
+ * (`perProviderModel`, para que la UI recuerde la última elección de cada
+ * proveedor aunque no esté activo), el catálogo completo (para pintar la UI
+ * sin un roundtrip adicional, ahora con los `options` por modelo desde T34) y
+ * `selectedOptions` (T34): las opciones YA RESUELTAS del proveedor+modelo
+ * activo (mismo `options` de `getEffectiveAiSelection`), indexadas por
+ * proveedor para dejar espacio a exponer más de uno si T37 lo necesita.
  */
 export function getAiSettingsInfo(): AiSettingsInfo {
   const persisted = settingsStore.getPersistedSettings()
-  const { provider, model } = getEffectiveAiSelection()
+  const { provider, model, options } = getEffectiveAiSelection()
 
   let modelSource: EffectiveAiModelInfo['aiModelSource']
   if (persisted?.models[provider]) {
@@ -220,6 +260,7 @@ export function getAiSettingsInfo(): AiSettingsInfo {
     modelSource,
     perProviderModel: persisted?.models ?? {},
     catalog: AI_PROVIDER_CATALOG,
+    selectedOptions: { [provider]: options },
   }
 }
 

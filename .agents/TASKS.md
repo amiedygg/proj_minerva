@@ -784,6 +784,106 @@ anota **quién** la hizo (subagente/directo) y **cómo** se verificó.
 
 ---
 
+## F8 — Selector de modelo dinámico + reasoning effort — 2026-07-07
+
+> Rama `feature/model-effort` (desde `feature/multi-provider-ai`). Diseño y respuestas a las
+> dos preguntas de Edilson: `PLAN.md` § "PROPUESTA F8". Aprobado por Edilson (F8 completo).
+> Patrón base (de t3code): **descriptores de opción autocontenidos por modelo** — cada modelo
+> declara sus choices válidas + default; la UI es genérica sobre eso; al cambiar de modelo el
+> valor se recalcula (si el guardado no aplica → default). Se implementa SOLO el descriptor
+> `effort` (extensible a service tier / thinking / context window después).
+>
+> Datos del protocolo REAL ya relevados (F7 + esta investigación):
+> - Codex `model/list` (paginado `{data, nextCursor}`): tu cuenta expone `gpt-5.5`,`gpt-5.4`,
+>   `gpt-5.4-mini`,`gpt-5.3-codex-spark`; cada `Model` trae `supportedReasoningEfforts`
+>   (array de `{reasoningEffort, description}`), `defaultReasoningEffort`, `displayName`,
+>   `hidden`. Regenerar esquema: `codex app-server generate-ts --out DIR`.
+> - Codex effort se pasa en `turn/start.effort` (string low|medium|high|xhigh).
+> - Claude Agent SDK: `EffortLevel = low|medium|high|xhigh|max`, campo `effort` en las options
+>   de `query()`, `supportsEffort`/`supportedEffortLevels` por modelo (en `sdk.d.ts`).
+> - OpenRouter: `reasoning: { effort }` en el body (verificar por-modelo cuáles lo aceptan).
+> Gotchas de main vigentes: `import.meta.dirname`, sin backticks en strings largos, preload CJS.
+
+- [x] **T34. Modelo de datos: option descriptors + selección con opciones**
+  _HECHA Y VERIFICADA (2026-07-07, subagente `a60898bc8ab417210`). typecheck/lint/424 tests. Resolución robusta con test (xhigh en haiku-4-5 -> default high; max en sonnet-5 respetado; modelo sin descriptor -> options vacío). Bug arreglado de paso: setAiProvider/setProviderModel preservan modelOptions._
+  `src/shared/ai-providers.ts`: `AiModelOption` gana `options?: ModelOptionDescriptor[]`,
+  con `ModelOptionDescriptor = { id: string (por ahora 'effort'), label: string, choices:
+  { value: string, label: string, description?: string, isDefault?: boolean }[] }`. Poblar el
+  descriptor `effort` HARDCODE para Claude Code (matriz por modelo: fable-5/opus-4.8/sonnet-5
+  soportan low|medium|high|xhigh|max; los demás según t3code — sin xhigh en varios; anotar los
+  remapeos de compat para T36) y OpenRouter (qué modelos soportan reasoning + sus choices
+  low|medium|high). Codex queda con su curado (los efforts reales llegan dinámicos en T35).
+  `src/main/settings/store.ts`: `PersistedSettings` gana
+  `modelOptions?: Partial<Record<AiProviderId, Record<string, string>>>` (p.ej.
+  `{codex:{effort:'high'}}`). MIGRACIÓN aditiva: settings sin `modelOptions` → `{}` (usa
+  defaults); no romper la migración de `{aiModel}` de T26 ni la forma `{aiProvider, models}`.
+  Setter `setModelOption(provider, optionId, value)`. `src/main/ai/env.ts`:
+  `getEffectiveAiSelection()` → `{ provider, model, options: Record<string,string> }`
+  resolviendo cada opción contra las choices del modelo activo (si el valor guardado no está
+  en las choices → default del modelo; si el modelo no tiene esa opción → se omite). IPC
+  `settings:setModelOption` ({provider, optionId, value}) + guard + handler + preload.
+  Extender `AiSettingsInfo` (respuesta de `settings:get`) con las opciones seleccionadas
+  actuales (`selectedOptions` por proveedor) para que la UI pinte el estado.
+  _Gotchas:_ TS estricto; la resolución robusta es el corazón (test explícito: guardar
+  effort='max' para Codex —que no lo soporta— y verificar que resuelve al default del modelo).
+  _Aceptación:_ typecheck/lint/tests (incl. migración aditiva + resolución robusta). Sin UI aún.
+
+- [x] **T35. Catálogo dinámico de Codex (corregir `codex-model-catalog.ts` + cablear)**
+  _HECHA (2026-07-07, subagente `a8a8cb6600a0f1583`). codex-model-catalog.ts reescrito con protocolo real (initialize con params, data/nextCursor, Model.supportedReasoningEfforts -> descriptor effort). provider-models.ts (canal `ai:getProviderModels` con cache TTL 60s + fallback). typecheck/lint/450 tests. Falta verificación e2e (4 modelos reales) que hace el orquestador en T37._
+  Reescribir `src/main/ai/providers/codex-model-catalog.ts` con el protocolo REAL: `initialize`
+  con `{clientInfo, capabilities:{experimentalApi:true}}`; `initialized`; paginar `model/list`
+  leyendo `result.data` (NO `.models`) y `result.nextCursor`; por cada `Model` construir un
+  `AiModelOption` con `id`, `label`=`displayName`, `vendor`='OpenAI', y `options`=[descriptor
+  `effort` armado desde `supportedReasoningEfforts` (choices) + `defaultReasoningEffort`
+  (isDefault)]. NO filtrar por `hidden`/plan (lección t3code: exponer lo que da la RPC).
+  Fallback al curado (`AI_PROVIDER_CATALOG.codex.models`) ante cualquier fallo. Cablear a la UI
+  con un canal IPC NUEVO async `ai:getProviderModels` (o `ai:getCodexModels`) con **cache TTL**
+  (p.ej. 60s) + fallback — NO meter async en el `settings:get` síncrono de T26. El renderer lo
+  consume aparte (con loading/fallback). Reutilizar el `CodexAppServerClient` (ya resuelve el
+  binario del sistema vía resolve-cli). Tests contra la forma real (mock del cliente devolviendo
+  `{data:[...], nextCursor}`).
+  _Aceptación:_ typecheck/lint/tests; verificación e2e del orquestador (con la sesión de Edilson,
+  los 4 modelos reales aparecen); fallback al curado si no hay sesión.
+
+- [x] **T36. Pasar el reasoning effort a los tres servicios**
+  _HECHA (2026-07-07, subagente `ad31a67d2cf7d79f5`). Codex turn/start.effort; Claude query effort + normalizeClaudeEffort (hook de compat, hoy identidad); OpenRouter body.reasoning.effort (formato verificado en docs). Solo se manda si hay effort resuelto (sin effort = comportamiento actual). typecheck/lint/450 tests. Falta e2e con effort alto real (coordinar sesión)._
+  Leer `options.effort` de `getEffectiveAiSelection()` (T34) e inyectarlo:
+  - `codex-service.ts`: agregar `effort` a los params de `turn/start` (solo si hay valor).
+  - `claude-code-service.ts`: pasar `effort` en las `options` de `query()`, con un ÚNICO punto
+    de normalización de compatibilidad (estilo `normalizeClaudeCliEffort` de t3code: p.ej.
+    `xhigh`→`max` para modelos que no soportan xhigh nativo; `max`→`high` donde no exista).
+    Documentar la matriz.
+  - `openrouter-service.ts`: agregar `reasoning: { effort }` al body JSON (solo para modelos que
+    lo soporten según T34; no mandarlo si no). Verificar el formato exacto contra la API de
+    OpenRouter al implementar.
+  _Gotchas:_ no romper el análisis actual cuando no hay effort seleccionado (comportamiento por
+  defecto idéntico a hoy). Sin backticks en strings largos de main.
+  _Aceptación:_ typecheck/lint/tests (cada servicio inyecta el effort cuando corresponde y lo
+  omite si no); verificación e2e del orquestador: análisis real con effort alto en cada proveedor
+  (coordinar sesión con Edilson para Claude/Codex).
+  Puede ir en paralelo con T35 (archivos disjuntos: servicios vs catalog/ipc).
+
+- [x] **T37. UI: selector de effort + modelos dinámicos de Codex**
+  _HECHA Y VERIFICADA e2e (2026-07-07, subagente `a1579dcf0725db3fc` + verificación del orquestador). use-provider-models (fetch dinámico con fallback estático), ModelPicker dinámico, ModelOptionPicker (segmented de effort, genérico sobre descriptores, remount por key), setModelOption, ActiveModelHint con effort. **BUG destapado por la verificación e2e y ARREGLADO por el orquestador**: getEffectiveAiSelection (main) resolvía el effort contra el catálogo ESTÁTICO, donde Codex no tenía descriptor effort (solo el dinámico lo traía) -> el effort guardado se descartaba (selectedOptions.codex={}). Fix: poblar el estático de Codex (ai-providers.ts) con los 4 modelos + descriptor effort comun [low,medium,high,xhigh]; el dinámico sigue siendo la fuente de verdad para la UI. Verificado: selectedOptions.codex={effort:xhigh} tras setear; Codex ACEPTA effort xhigh en turn/start (turno corre, solo que xhigh es lento >2min). Captura mirada del selector RAZONAMIENTO con los 4 modelos Codex. 451 tests. OBSERVACIÓN: xhigh puede rozar el timeout total de 120s -> pulido futuro. **HECHA.**_
+  En `src/renderer/src/components/settings/`: bajo el `ModelPicker`, un selector GENÉRICO sobre
+  los `options` (descriptores) del modelo SELECCIONADO — por ahora renderiza el descriptor
+  `effort` como radios/segmented con sus choices (label + description), marca el default,
+  persiste vía `settings:setModelOption`. Remount por `key` al cambiar modelo/proveedor (para
+  que el valor se recalcule contra el nuevo modelo). Para Codex, poblar el `ModelPicker` con los
+  modelos DINÁMICOS de T35 (`ai:getProviderModels`) con estado de carga + fallback al curado.
+  Componente reutilizable (`ModelOptionPicker` o similar) para poder sumar service tier/thinking
+  después sin reescribir.
+  _Gotchas:_ linter react-hooks (reset por remount, no setState-en-efecto); estados de carga/error
+  visibles; el selector solo muestra choices soportadas por el modelo actual (vienen del descriptor).
+  _Aceptación:_ typecheck/lint/tests; smoke e2e CDP (cambiar modelo/effort, persistencia tras
+  reabrir, Codex muestra 4 modelos); **captura mirada** del selector de effort en cada proveedor.
+
+- [ ] **T38. (Opcional/diferible) Gating por versión del CLI**
+  Ofrecer solo modelos/efforts soportados por la versión instalada de `claude`/`codex` (semver,
+  estilo `getBuiltInClaudeModelsForVersion` de t3code). Pulido; se decide al final de F8.
+
+---
+
 ## Log F7 — Gotcha clave: el protocolo de `codex app-server` se AUTO-GENERA
 
 **2026-07-07 (T29).** El binario `codex` puede emitir su propio contrato del app-server:

@@ -26,6 +26,8 @@ const MAX_PR_NUMBER = 1_000_000
 const MAX_AI_MODEL_LEN = 100
 const MAX_PR_TITLE_LEN = 300
 const MAX_OPENROUTER_KEY_LEN = 500
+const MAX_OPTION_ID_LEN = 50
+const MAX_OPTION_VALUE_LEN = 50
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -101,6 +103,13 @@ function isPostCommentPayload(value: unknown): boolean {
   return true
 }
 
+/** `ai:getProviderModels` (T35): un `provider` conocido del catálogo, sin claves extra. */
+function isGetProviderModelsPayload(value: unknown): boolean {
+  if (!isPlainObject(value)) return false
+  if (!hasOnlyKeys(value, ['provider'])) return false
+  return isAiProviderId(value.provider)
+}
+
 /**
  * `aiModel` no se valida contra la lista curada (`shared/ai-models.ts`): la
  * opción "Otro (avanzado)" de la UI permite cualquier id de OpenRouter, así
@@ -130,6 +139,21 @@ function isSetProviderModelPayload(value: unknown): boolean {
   if (!hasOnlyKeys(value, ['provider', 'model'])) return false
   if (!isAiProviderId(value.provider)) return false
   return isNonEmptyString(value.model, MAX_AI_MODEL_LEN)
+}
+
+/**
+ * `settings:setModelOption` (T34): `provider` conocido del catálogo,
+ * `optionId` (id del descriptor, p. ej. `'effort'`) y `value` (id del choice
+ * elegido) strings no vacíos y acotados — no se valida contra las choices
+ * REALES del descriptor de ese modelo (eso es responsabilidad de la lectura,
+ * `getEffectiveAiSelection` en `../ai/env.ts`, ver `resolveOptionValue`).
+ */
+function isSetModelOptionPayload(value: unknown): boolean {
+  if (!isPlainObject(value)) return false
+  if (!hasOnlyKeys(value, ['provider', 'optionId', 'value'])) return false
+  if (!isAiProviderId(value.provider)) return false
+  if (!isNonEmptyString(value.optionId, MAX_OPTION_ID_LEN)) return false
+  return isNonEmptyString(value.value, MAX_OPTION_VALUE_LEN)
 }
 
 /**
@@ -172,10 +196,12 @@ export const payloadValidators: Record<IpcChannel, (payload: unknown) => boolean
   'ai:invalidateAnalysis': isRepoAndNumberPayload,
   'ai:getAnalysisState': isRepoAndNumberPayload,
   'ai:getProviderStatus': isVoidPayload,
+  'ai:getProviderModels': isGetProviderModelsPayload,
   'settings:get': isVoidPayload,
   'settings:setAiModel': isSetAiModelPayload,
   'settings:setAiProvider': isSetAiProviderPayload,
   'settings:setProviderModel': isSetProviderModelPayload,
+  'settings:setModelOption': isSetModelOptionPayload,
   'settings:setOpenRouterKey': isSetOpenRouterKeyPayload,
   'settings:getOpenRouterKeyStatus': isVoidPayload,
   'window:openDidactic': isOpenDidacticWindowPayload,

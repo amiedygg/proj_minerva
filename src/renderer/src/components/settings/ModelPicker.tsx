@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { Check, Loader2 } from 'lucide-react'
+import type { AiModelOption, AiProviderId } from '../../../../shared/ai-providers'
 import type { AiModelSource, AiSettingsInfo } from '../../../../shared/types'
+import { useProviderModels } from '../../hooks/use-provider-models'
+import { ModelOptionPicker } from './ModelOptionPicker'
 
 const SOURCE_HINT: Record<AiModelSource, string | null> = {
   settings: null,
@@ -12,26 +15,95 @@ interface ModelPickerProps {
   info: AiSettingsInfo
   error: string | null
   onSave: (model: string) => Promise<boolean>
+  onSetModelOption: (provider: AiProviderId, optionId: string, value: string) => Promise<boolean>
 }
 
 /**
  * Formulario de selección de MODELO dentro del proveedor activo
- * (`info.provider`, radio-cards curadas del catálogo de ese proveedor,
- * `info.catalog[info.provider].models`, T26). "Otro (avanzado)" se mantiene
- * SOLO para OpenRouter: los CLIs (`claude-code`/`codex`) solo aceptan los
- * ids curados que el SDK/RPC de cada uno resuelve, un id libre no significa
- * nada para ellos.
+ * (`info.provider`, radio-cards). Los modelos vienen de
+ * `useProviderModels` (T35/T37, canal async `ai:getProviderModels`):
+ * DINÁMICOS de la cuenta real para Codex (los 4 modelos reales, con su
+ * `options.effort` propio de cada uno), estáticos (`info.catalog`, T26) para
+ * el resto — con el catálogo estático como fallback inicial/ante error para
+ * que el picker nunca quede vacío mientras carga. "Otro (avanzado)" se
+ * mantiene SOLO para OpenRouter: los CLIs (`claude-code`/`codex`) solo
+ * aceptan los ids curados que el SDK/RPC de cada uno resuelve, un id libre no
+ * significa nada para ellos.
  *
- * `ProviderPicker` monta este componente con `key={info.provider}` (ver
- * `SettingsModal`): cambiar de proveedor fuerza un remount completo en vez
- * de sincronizar el estado local con un efecto, así que puede seguir
- * inicializando su selección/borrador con un lazy initializer de
- * `useState` a partir de `info` sin caer en el antipatrón
- * `set-state-in-effect` (mismo criterio que `useDidacticAnalysis`/
- * `DidacticPanel`, ver sus comentarios).
+ * Debajo de la lista de modelos se monta `ModelOptionPicker` con las
+ * opciones (hoy `effort`) del modelo actualmente SELECCIONADO en el
+ * formulario (`selectedId`, borrador — no hace falta que ya esté guardado
+ * con "Guardar": persiste inmediato, igual que el proveedor).
+ *
+ * `SettingsModal` monta este componente con `key={info.provider}`: cambiar
+ * de proveedor fuerza un remount completo en vez de sincronizar el estado
+ * local con un efecto, así que puede seguir inicializando su selección/
+ * borrador con un lazy initializer de `useState` a partir de `info` sin caer
+ * en el antipatrón `set-state-in-effect` (mismo criterio que
+ * `useDidacticAnalysis`/`DidacticPanel`, ver sus comentarios). Internamente,
+ * el formulario se remonta una vez más (`key={modelsLoading}`) cuando el
+ * fetch dinámico pasa de "cargando" a "resuelto/falló": así, si el modelo
+ * activo persistido solo existe en la lista dinámica (p. ej. un modelo de
+ * Codex que no está en el catálogo curado), el borrador se recalcula contra
+ * la lista final en vez de quedarse pegado al primer ítem del catálogo
+ * estático que se usó mientras cargaba.
  */
-export function ModelPicker({ info, error, onSave }: ModelPickerProps): React.JSX.Element {
-  const models = info.catalog[info.provider].models
+export function ModelPicker({ info, error, onSave, onSetModelOption }: ModelPickerProps): React.JSX.Element {
+  const fallbackModels = info.catalog[info.provider].models
+  const { models, loading: modelsLoading, error: modelsError } = useProviderModels(
+    info.provider,
+    fallbackModels,
+  )
+
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Modelo de IA</h3>
+        {modelsLoading && <Loader2 size={12} className="animate-spin text-muted" />}
+      </div>
+      <p className="mb-3 text-xs text-muted">
+        Modelo usado por el panel didáctico para analizar Pull Requests con{' '}
+        {info.catalog[info.provider].label}.
+      </p>
+
+      {modelsError && (
+        <p className="mb-2 text-xs text-muted">
+          No se pudo actualizar la lista de modelos ({modelsError}); mostrando el catálogo curado.
+        </p>
+      )}
+
+      <ModelPickerForm
+        key={String(modelsLoading)}
+        info={info}
+        models={models}
+        error={error}
+        onSave={onSave}
+        onSetModelOption={onSetModelOption}
+      />
+    </div>
+  )
+}
+
+interface ModelPickerFormProps {
+  info: AiSettingsInfo
+  models: readonly AiModelOption[]
+  error: string | null
+  onSave: (model: string) => Promise<boolean>
+  onSetModelOption: (provider: AiProviderId, optionId: string, value: string) => Promise<boolean>
+}
+
+/**
+ * Cuerpo del formulario (radios de modelo + "Otro (avanzado)" + Guardar +
+ * `ModelOptionPicker`), separado de `ModelPicker` para poder remontarlo
+ * (`key={modelsLoading}`, ver arriba) sin perder el spinner/hint del header.
+ */
+function ModelPickerForm({
+  info,
+  models,
+  error,
+  onSave,
+  onSetModelOption,
+}: ModelPickerFormProps): React.JSX.Element {
   const allowCustom = info.provider === 'openrouter'
   const curated = models.find((m) => m.id === info.model)
 
@@ -44,6 +116,7 @@ export function ModelPicker({ info, error, onSave }: ModelPickerProps): React.JS
   const draft = isCustom ? customValue.trim() : selectedId
   const canSave = draft.length > 0 && draft.length <= 100
   const hint = SOURCE_HINT[info.modelSource]
+  const selectedModel = isCustom ? undefined : models.find((m) => m.id === selectedId)
 
   async function handleSave(): Promise<void> {
     if (!canSave) return
@@ -62,14 +135,6 @@ export function ModelPicker({ info, error, onSave }: ModelPickerProps): React.JS
   return (
     <div>
       <div>
-        <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">
-          Modelo de IA
-        </h3>
-        <p className="mb-3 text-xs text-muted">
-          Modelo usado por el panel didáctico para analizar Pull Requests con{' '}
-          {info.catalog[info.provider].label}.
-        </p>
-
         {hint && (
           <p className="mb-3 rounded-md border border-warning/30 bg-warning/10 px-2.5 py-2 text-xs text-warning">
             {hint}
@@ -138,6 +203,16 @@ export function ModelPicker({ info, error, onSave }: ModelPickerProps): React.JS
             </label>
           )}
         </div>
+
+        {selectedModel && (
+          <ModelOptionPicker
+            key={info.provider + '/' + selectedModel.id}
+            provider={info.provider}
+            model={selectedModel}
+            selected={info.selectedOptions?.[info.provider] ?? {}}
+            onSelect={onSetModelOption}
+          />
+        )}
       </div>
 
       <div className="mt-3 flex items-center justify-between gap-3 border-t border-border pt-3">

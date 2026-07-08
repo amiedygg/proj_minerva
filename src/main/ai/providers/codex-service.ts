@@ -35,11 +35,16 @@
  *        GENERE el texto del análisis, sin tocar el disco. El id del hilo sale
  *        de `result.thread.id`.
  *      - `turn/start` (request) con `input` = `Array<UserInput>` (un solo
- *        bloque `{ type: 'text', text, text_elements: [] }`). CLAVE: `turn/start`
- *        RESUELVE DE INMEDIATO con un ack (`turn.status: 'inProgress'`), NO
- *        espera a que el turno termine — el fin llega por la notificación
- *        `turn/completed`. (El bug original de esta clase era matar el proceso
- *        apenas resolvía `turn/start`, antes de recibir un solo delta.)
+ *        bloque `{ type: 'text', text, text_elements: [] }`) y, desde T36,
+ *        `effort` (string `'low'|'medium'|'high'|'xhigh'`) SOLO si
+ *        `getEffectiveAiSelection().options.effort` resolvió a algo — el
+ *        modelo activo sin descriptor de effort (T34) deja `options` vacío y
+ *        el campo se omite, comportamiento idéntico a antes de T36. CLAVE:
+ *        `turn/start` RESUELVE DE INMEDIATO con un ack (`turn.status:
+ *        'inProgress'`), NO espera a que el turno termine — el fin llega por
+ *        la notificación `turn/completed`. (El bug original de esta clase era
+ *        matar el proceso apenas resolvía `turn/start`, antes de recibir un
+ *        solo delta.)
  * 3. Durante el turno, el servidor emite notificaciones; los deltas de texto
  *    del asistente llegan como `item/agentMessage/delta` con `params.delta`
  *    (string) y se empujan al `StreamSectionParser` (`../stream-parser.ts`),
@@ -137,7 +142,7 @@ export class CodexAiService implements AiService {
     req: IpcRequest<'ai:analyzePullRequest'>,
     options?: AnalyzePullRequestOptions,
   ): Promise<IpcResponse<'ai:analyzePullRequest'>> {
-    const { model } = getEffectiveAiSelection()
+    const { model, options: modelOptions } = getEffectiveAiSelection()
 
     const [detail, files] = await Promise.all([
       this.github.getPullRequestDetail(req),
@@ -241,6 +246,13 @@ export class CodexAiService implements AiService {
         await client.request('turn/start', {
           threadId,
           input: [{ type: 'text', text: userMessage, text_elements: [] }],
+          // `effort` (T36) SOLO se manda si `modelOptions.effort` resolvió a
+          // algo (T34 ya lo valida contra las choices reales del modelo
+          // activo, vía `model/list`/T35): si el modelo activo no tiene
+          // descriptor de effort, `modelOptions.effort` es `undefined` y el
+          // campo se omite ENTERO — mismo comportamiento de hoy (Codex decide
+          // su default).
+          ...(modelOptions.effort ? { effort: modelOptions.effort } : {}),
         })
         await turnDone
       } finally {

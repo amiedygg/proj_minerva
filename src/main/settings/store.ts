@@ -40,10 +40,19 @@ import { DEFAULT_AI_PROVIDER, isAiProviderId, type AiProviderId } from '../../sh
 
 const SETTINGS_FILE_NAME = 'settings.json'
 
-/** Forma persistida desde T26: proveedor activo + modelo elegido por proveedor. */
+/**
+ * Forma persistida desde T26: proveedor activo + modelo elegido por
+ * proveedor. `modelOptions` (T34, F8): valores elegidos por el usuario para
+ * los option descriptors del modelo de cada proveedor (p. ej.
+ * `{ codex: { effort: 'high' } }`) — ADITIVO sobre la forma de T26, ver
+ * `isNewPersistedSettings`/`normalize` más abajo: un `settings.json` sin esta
+ * clave (cualquier instalación pre-T34) se lee igual, tratando la ausencia
+ * como "sin opciones guardadas" (`{}`), nunca como settings inválidos.
+ */
 export interface PersistedSettings {
   aiProvider: AiProviderId
   models: Partial<Record<AiProviderId, string>>
+  modelOptions?: Partial<Record<AiProviderId, Record<string, string>>>
 }
 
 /** Forma pre-T26 (T12): la única que existía cuando solo había OpenRouter. Puede seguir en disco en instalaciones viejas. */
@@ -62,10 +71,30 @@ function isModelsMap(value: unknown): value is Partial<Record<AiProviderId, stri
   )
 }
 
+/** Mapa `optionId -> value` de un solo proveedor dentro de `modelOptions` (T34). */
+function isOptionValuesMap(value: unknown): value is Record<string, string> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  return Object.entries(value as Record<string, unknown>).every(
+    ([optionId, optionValue]) => optionId.length > 0 && isNonEmptyTrimmedString(optionValue),
+  )
+}
+
+/** `modelOptions` completo (T34): por proveedor conocido, su mapa `optionId -> value`. */
+function isModelOptionsMap(
+  value: unknown,
+): value is Partial<Record<AiProviderId, Record<string, string>>> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  return Object.entries(value as Record<string, unknown>).every(
+    ([provider, options]) => isAiProviderId(provider) && isOptionValuesMap(options),
+  )
+}
+
 function isNewPersistedSettings(value: unknown): value is PersistedSettings {
   if (typeof value !== 'object' || value === null) return false
   const v = value as Record<string, unknown>
-  return isAiProviderId(v.aiProvider) && isModelsMap(v.models)
+  if (!isAiProviderId(v.aiProvider) || !isModelsMap(v.models)) return false
+  // `modelOptions` es ADITIVO (T34): ausente = settings pre-T34, sigue siendo válido.
+  return v.modelOptions === undefined || isModelOptionsMap(v.modelOptions)
 }
 
 function isLegacyPersistedSettings(value: unknown): value is LegacyPersistedSettings {
@@ -156,10 +185,19 @@ export class SettingsStore {
     return this.getPersistedModel('openrouter')
   }
 
-  /** Cambia el proveedor ACTIVO, sin tocar los modelos ya elegidos por cada proveedor. */
+  /** Opciones persistidas (T34, p. ej. `{ effort: 'high' }`) para `provider`, o `{}` si no hay ninguna guardada todavía. */
+  getPersistedModelOptions(provider: AiProviderId): Record<string, string> {
+    return this.load()?.modelOptions?.[provider] ?? {}
+  }
+
+  /** Cambia el proveedor ACTIVO, sin tocar los modelos ni las opciones ya elegidas por cada proveedor. */
   setAiProvider(provider: AiProviderId): void {
     const current = this.load()
-    this.persist({ aiProvider: provider, models: current?.models ?? {} })
+    this.persist({
+      aiProvider: provider,
+      models: current?.models ?? {},
+      modelOptions: current?.modelOptions,
+    })
   }
 
   /** Guarda el modelo elegido para `provider` (no cambia el proveedor activo si `provider` no lo es, ver `setAiProvider`). */
@@ -168,12 +206,39 @@ export class SettingsStore {
     this.persist({
       aiProvider: current?.aiProvider ?? DEFAULT_AI_PROVIDER,
       models: { ...current?.models, [provider]: modelId },
+      modelOptions: current?.modelOptions,
     })
   }
 
   /** Shim de compatibilidad (pre-T26): equivalente a `setProviderModel('openrouter', aiModel)`. */
   setAiModel(aiModel: string): void {
     this.setProviderModel('openrouter', aiModel)
+  }
+
+  /**
+   * Guarda el valor elegido para una opción de `provider` (T34, p. ej.
+   * `setModelOption('codex', 'effort', 'high')`) sin tocar el proveedor
+   * activo, los modelos elegidos, ni las opciones de otros proveedores/otras
+   * opciones del mismo proveedor (crea el sub-objeto de `provider` si hace
+   * falta). No valida el `value` contra las choices del modelo activo — esa
+   * validación "robusta" es responsabilidad de la LECTURA
+   * (`getEffectiveAiSelection`, `../ai/env.ts`, vía `resolveOptionValue`),
+   * para que cambiar de modelo después de guardar no deje un valor "huérfano"
+   * bloqueado: simplemente se ignora si ya no aplica, sin perder el dato por
+   * si el usuario vuelve a ese modelo.
+   */
+  setModelOption(provider: AiProviderId, optionId: string, value: string): void {
+    const current = this.load()
+    const currentModelOptions = current?.modelOptions ?? {}
+    const currentProviderOptions = currentModelOptions[provider] ?? {}
+    this.persist({
+      aiProvider: current?.aiProvider ?? DEFAULT_AI_PROVIDER,
+      models: current?.models ?? {},
+      modelOptions: {
+        ...currentModelOptions,
+        [provider]: { ...currentProviderOptions, [optionId]: value },
+      },
+    })
   }
 
   /** Escribe atómico y refleja `next` de inmediato en la cache en memoria. */

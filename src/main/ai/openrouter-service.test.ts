@@ -152,6 +152,39 @@ describe('OpenRouterAiService.analyzePullRequest', () => {
     expect(body.messages).toHaveLength(2)
   })
 
+  it('agrega reasoning.effort al body cuando el modelo activo tiene descriptor effort (T36)', async () => {
+    // `anthropic/claude-sonnet-5` SÍ tiene el descriptor `effort` en el
+    // catálogo (`../../shared/ai-providers.ts`, T34); sin nada persistido en
+    // `settings.json` (mock de `electron` de arriba) resuelve al default de
+    // ese descriptor (`medium`, ver `OPENROUTER_REASONING_EFFORT`).
+    process.env.MINERVA_AI_MODEL = 'anthropic/claude-sonnet-5'
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse(['@@@SECTION kind=summary\nok\n']))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const service = new OpenRouterAiService(makeGithubService())
+    await service.analyzePullRequest({ repo, number: 482 })
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(init.body as string) as { reasoning?: { effort?: string } }
+    expect(body.reasoning).toEqual({ effort: 'medium' })
+  })
+
+  it('NO agrega "reasoning" al body cuando el modelo activo no tiene descriptor effort (sin regresión)', async () => {
+    // `beforeEach` ya deja `MINERVA_AI_MODEL` en `anthropic/claude-sonnet-4.5`,
+    // que no está en el catálogo curado (`getModelOption` no lo encuentra) y
+    // por lo tanto resuelve `options` a `{}` — comportamiento idéntico a
+    // antes de T36.
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse(['@@@SECTION kind=summary\nok\n']))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const service = new OpenRouterAiService(makeGithubService())
+    await service.analyzePullRequest({ repo, number: 482 })
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(init.body as string) as { reasoning?: unknown }
+    expect(body.reasoning).toBeUndefined()
+  })
+
   it('reconstruye una sección aunque el delta llegue partido en varios chunks SSE', async () => {
     vi.stubGlobal(
       'fetch',
