@@ -760,6 +760,28 @@ anota **quién** la hizo (subagente/directo) y **cómo** se verificó.
   renderer (grep: `loadApiKey` solo en env.ts). Pendiente opcional: que Edilson pruebe el
   guardado real vía safeStorage desde la UI si quiere migrar del `.env`._
 
+- [x] **T33. PATH robusto para app GUI (hidratación vía shell de login)**
+  Contexto: mejora identificada en la investigación de t3code (ver nota de T31). Una app
+  Electron lanzada desde el LAUNCHER del SO hereda un PATH mínimo, no el del shell del
+  usuario → `resolve-cli.ts` podría no encontrar `claude`/`codex` si viven en una ruta que
+  solo el shell conoce (nvm/volta/fnm/mise, prefijos globales de npm/pnpm/bun, rutas custom).
+  Entregables: `src/main/system/shell-path.ts` — `hydratePathFromLoginShell()`: lanza el
+  shell de login del usuario (`$SHELL -ilc`, marcadores para aislar el `$PATH` del ruido del
+  perfil, timeout 2.5s), con fallback `launchctl getenv PATH` en macOS; fusiona (append sin
+  duplicar, nunca reemplaza) el PATH capturado en `process.env.PATH`. No-op en Windows (las
+  GUI heredan el PATH del registro) y nunca lanza (fallo → PATH intacto). Enganchado en
+  `index.ts` (whenReady, **solo si `app.isPackaged`**, ANTES de `registerIpcHandlers` para que
+  el probe/resolve-cli ya vean el PATH completo desde la primera resolución; en dev desde
+  terminal el PATH ya viene completo → no se toca). Helpers puros exportados
+  (`extractMarkedPath`, `mergePaths`) para test.
+  _**HECHA Y VERIFICADA** (2026-07-07). 8 unit tests (parseo con ruido + merge append-only +
+  dedupe + segmentos vacíos). **Mecanismo probado aislado en la máquina de Edilson**: con
+  `PATH=/usr/bin:/bin` (recortado como el launcher), `hydratePathFromLoginShell()` recupera
+  `~/.local/bin` Y `~/.local/share/mise/.../bin` (Edilson usa **mise** — ruta que resolve-cli
+  NO hardcodea, así que T33 aporta valor real más allá de ~/.local/bin). AppImage rebuildeado
+  con T33 = 125M, arranca OK con la hidratación activa, smoke-packaged 6/6 (el enganche no
+  rompió el arranque). 400 tests totales. **HECHA.**_
+
 ---
 
 ## Log F7 — Gotcha clave: el protocolo de `codex app-server` se AUTO-GENERA

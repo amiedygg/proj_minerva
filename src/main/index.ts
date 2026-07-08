@@ -4,6 +4,7 @@ import { registerIpcHandlers } from './ipc/handlers'
 import { authManager } from './auth/auth-manager'
 import { secureWebPreferences } from './windows/secure-web-preferences'
 import { installExternalLinkGuard } from './windows/external-link-guard'
+import { hydratePathFromLoginShell } from './system/shell-path'
 
 const isDev = !app.isPackaged
 
@@ -66,6 +67,15 @@ void app.whenReady().then(async () => {
       '— cifrado disponible:',
       safeStorage.isEncryptionAvailable(),
     )
+  }
+
+  // Enriquecer el PATH con el del shell de login del usuario ANTES de registrar
+  // handlers (el probe de proveedores CLI y `resolve-cli.ts` cachean, así que
+  // deben ver el PATH completo desde la primera resolución). Solo importa en el
+  // empaquetado lanzado desde el launcher del SO —que hereda un PATH mínimo—;
+  // en dev desde terminal el PATH ya viene completo y esto es un no-op barato.
+  if (app.isPackaged) {
+    hydratePathFromLoginShell()
   }
 
   // Se espera antes de registrar los handlers para que la primera llamada a
