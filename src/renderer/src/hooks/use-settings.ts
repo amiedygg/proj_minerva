@@ -24,6 +24,13 @@ interface UseSettingsResult {
    * (revisar `error`).
    */
   saveModel: (provider: AiProviderId, model: string) => Promise<boolean>
+  /**
+   * Persiste el valor elegido para una opción de modelo (T34/T37, p. ej.
+   * `effort`) de `provider` — persistencia inmediata, sin botón de "Guardar"
+   * aparte (mismo criterio que `selectProvider`). `true` si se guardó bien;
+   * `false` si falló (revisar `error`).
+   */
+  setModelOption: (provider: AiProviderId, optionId: string, value: string) => Promise<boolean>
   reload: () => void
 }
 
@@ -109,5 +116,20 @@ export function useSettings(): UseSettingsResult {
     [setInfo],
   )
 
-  return { info, loading, error, selectProvider, saveModel, reload }
+  const setModelOption = useCallback(
+    async (provider: AiProviderId, optionId: string, value: string): Promise<boolean> => {
+      setError(null)
+      try {
+        const result = await window.minerva.settings.setModelOption({ provider, optionId, value })
+        setInfo(result)
+        return true
+      } catch (err) {
+        setError(toErrorMessage(err))
+        return false
+      }
+    },
+    [setInfo],
+  )
+
+  return { info, loading, error, selectProvider, saveModel, setModelOption, reload }
 }

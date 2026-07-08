@@ -211,4 +211,106 @@ describe('SettingsStore', () => {
       })
     })
   })
+
+  describe('modelOptions (T34): migración aditiva + setModelOption', () => {
+    it('un settings.json de la forma T26 (sin "modelOptions") se lee OK, sin opciones (default = {})', () => {
+      writeFileSync(
+        settingsFilePath(),
+        JSON.stringify({ aiProvider: 'openrouter', models: { openrouter: 'z-ai/glm-5.2' } }),
+        'utf-8',
+      )
+
+      const store = new SettingsStore()
+      expect(store.getPersistedSettings()).toEqual({
+        aiProvider: 'openrouter',
+        models: { openrouter: 'z-ai/glm-5.2' },
+      })
+      expect(store.getPersistedModelOptions('openrouter')).toEqual({})
+    })
+
+    it('la migración legacy ({ aiModel }, pre-T26) sigue funcionando igual con el guard extendido para "modelOptions"', () => {
+      writeFileSync(settingsFilePath(), JSON.stringify({ aiModel: 'z-ai/glm-5.2' }), 'utf-8')
+
+      const store = new SettingsStore()
+      expect(store.getPersistedSettings()).toEqual({
+        aiProvider: 'openrouter',
+        models: { openrouter: 'z-ai/glm-5.2' },
+      })
+      expect(store.getPersistedModelOptions('openrouter')).toEqual({})
+    })
+
+    it('devuelve null si "modelOptions" tiene una clave de proveedor desconocida', () => {
+      writeFileSync(
+        settingsFilePath(),
+        JSON.stringify({
+          aiProvider: 'openrouter',
+          models: {},
+          modelOptions: { 'not-a-provider': { effort: 'high' } },
+        }),
+        'utf-8',
+      )
+      expect(new SettingsStore().getPersistedSettings()).toBeNull()
+    })
+
+    it('devuelve null si "modelOptions[provider]" tiene un valor no-string', () => {
+      writeFileSync(
+        settingsFilePath(),
+        JSON.stringify({
+          aiProvider: 'codex',
+          models: {},
+          modelOptions: { codex: { effort: 42 } },
+        }),
+        'utf-8',
+      )
+      expect(new SettingsStore().getPersistedSettings()).toBeNull()
+    })
+
+    it('getPersistedModelOptions devuelve {} si no hay nada guardado para ESE proveedor', () => {
+      const store = new SettingsStore()
+      store.setModelOption('codex', 'effort', 'high')
+
+      expect(store.getPersistedModelOptions('codex')).toEqual({ effort: 'high' })
+      expect(store.getPersistedModelOptions('claude-code')).toEqual({})
+    })
+
+    it('setModelOption crea el sub-objeto del proveedor y no pisa opciones de otros proveedores/otras claves', () => {
+      const store = new SettingsStore()
+      store.setModelOption('claude-code', 'effort', 'max')
+      store.setModelOption('codex', 'effort', 'low')
+      store.setModelOption('claude-code', 'effort', 'xhigh') // último gana para esa clave
+
+      expect(store.getPersistedModelOptions('claude-code')).toEqual({ effort: 'xhigh' })
+      expect(store.getPersistedModelOptions('codex')).toEqual({ effort: 'low' })
+    })
+
+    it('setModelOption no toca el proveedor activo ni los modelos ya elegidos', () => {
+      const store = new SettingsStore()
+      store.setProviderModel('claude-code', 'claude-sonnet-5')
+      store.setAiProvider('claude-code')
+      store.setModelOption('claude-code', 'effort', 'high')
+
+      expect(store.getPersistedSettings()).toEqual({
+        aiProvider: 'claude-code',
+        models: { 'claude-code': 'claude-sonnet-5' },
+        modelOptions: { 'claude-code': { effort: 'high' } },
+      })
+    })
+
+    it('setAiProvider/setProviderModel preservan modelOptions ya guardadas', () => {
+      const store = new SettingsStore()
+      store.setModelOption('codex', 'effort', 'high')
+      store.setProviderModel('openrouter', 'z-ai/glm-5.2')
+      store.setAiProvider('openrouter')
+
+      expect(store.getPersistedModelOptions('codex')).toEqual({ effort: 'high' })
+    })
+
+    it('roundtrip tras "reinicio": una instancia nueva lee modelOptions persistidas', () => {
+      const store = new SettingsStore()
+      store.setModelOption('codex', 'effort', 'xhigh')
+
+      const restarted = new SettingsStore()
+      expect(restarted.getPersistedModelOptions('codex')).toEqual({ effort: 'xhigh' })
+    })
+  })
 })

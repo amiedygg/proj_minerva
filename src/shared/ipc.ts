@@ -20,7 +20,7 @@ import type {
   PullRequestSummary,
   RepoRef,
 } from './types'
-import type { AiProviderId } from './ai-providers'
+import type { AiModelOption, AiProviderId } from './ai-providers'
 import type { AnalysisProgressEvent } from './events'
 
 export interface IpcContract {
@@ -92,6 +92,18 @@ export interface IpcContract {
   'ai:getProviderStatus': { req: void; res: Record<AiProviderId, AiProviderStatus> }
 
   /**
+   * Modelos disponibles para `provider` (T35, F8): estáticos (catálogo
+   * curado, T26/T34) para OpenRouter/Claude Code; DINÁMICOS vía la RPC
+   * `model/list` de `codex app-server` para Codex, con fallback al curado y
+   * cache TTL en main si el CLI falla/no hay sesión (ver
+   * `../main/ai/providers/provider-models.ts`). A propósito es un canal
+   * SEPARADO de `settings:get` (síncrono, T26): resolver los modelos de
+   * Codex puede tardar (o fallar) por spawnear un proceso externo, y eso NO
+   * debe bloquear ni romper la carga del resto de Settings.
+   */
+  'ai:getProviderModels': { req: { provider: AiProviderId }; res: readonly AiModelOption[] }
+
+  /**
    * Selección efectiva de proveedor+modelo (T26) más el catálogo completo de
    * proveedores/modelos, para que la UI pinte las opciones sin un roundtrip
    * adicional. Ver `AiSettingsInfo` (`./types.ts`) y `getAiSettingsInfo`
@@ -105,6 +117,21 @@ export interface IpcContract {
   /** Persiste el modelo elegido para `provider` (T26), sea o no el proveedor activo. */
   'settings:setProviderModel': {
     req: { provider: AiProviderId; model: string }
+    res: AiSettingsInfo
+  }
+  /**
+   * Persiste el valor elegido para una opción de modelo (T34, F8 — p. ej.
+   * `{ provider: 'codex', optionId: 'effort', value: 'high' }`) de
+   * `provider`, sea o no el proveedor activo. No valida `value` contra las
+   * choices del descriptor: esa validación "robusta" ocurre en la LECTURA
+   * (`getEffectiveAiSelection`, `main/ai/env.ts`) para que cambiar de modelo
+   * después no deje un valor huérfano bloqueado. Responde el
+   * `AiSettingsInfo` actualizado (mismo patrón que `setAiProvider`/
+   * `setProviderModel`) para que la UI (T37) refresque sin un roundtrip
+   * adicional.
+   */
+  'settings:setModelOption': {
+    req: { provider: AiProviderId; optionId: string; value: string }
     res: AiSettingsInfo
   }
   /**
@@ -165,10 +192,12 @@ export const IPC_CHANNELS = [
   'ai:invalidateAnalysis',
   'ai:getAnalysisState',
   'ai:getProviderStatus',
+  'ai:getProviderModels',
   'settings:get',
   'settings:setAiModel',
   'settings:setAiProvider',
   'settings:setProviderModel',
+  'settings:setModelOption',
   'settings:setOpenRouterKey',
   'settings:getOpenRouterKeyStatus',
   'window:openDidactic',

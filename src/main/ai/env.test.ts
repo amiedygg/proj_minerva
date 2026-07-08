@@ -13,6 +13,7 @@ vi.mock('../settings/store', () => ({
   settingsStore: {
     getPersistedSettings: vi.fn(() => null),
     getPersistedAiModel: vi.fn(() => null),
+    getPersistedModelOptions: vi.fn(() => ({})),
   },
 }))
 
@@ -27,8 +28,14 @@ vi.mock('./openrouter-key-store', () => ({
   loadApiKey: vi.fn(() => null),
 }))
 
-const { getAiEnv, getEffectiveAiModel, getEffectiveAiSelection, getOpenRouterKeyStatus, parseDotEnv } =
-  await import('./env')
+const {
+  getAiEnv,
+  getAiSettingsInfo,
+  getEffectiveAiModel,
+  getEffectiveAiSelection,
+  getOpenRouterKeyStatus,
+  parseDotEnv,
+} = await import('./env')
 const { settingsStore } = await import('../settings/store')
 const { loadApiKey } = await import('./openrouter-key-store')
 
@@ -100,6 +107,7 @@ describe('getEffectiveAiSelection (T26, precedencia proveedor+modelo)', () => {
   beforeEach(() => {
     vi.mocked(settingsStore.getPersistedSettings).mockReturnValue(null)
     vi.mocked(settingsStore.getPersistedAiModel).mockReturnValue(null)
+    vi.mocked(settingsStore.getPersistedModelOptions).mockReturnValue({})
   })
 
   afterEach(() => {
@@ -109,14 +117,22 @@ describe('getEffectiveAiSelection (T26, precedencia proveedor+modelo)', () => {
   })
 
   it('sin nada persistido ni en el entorno, cae al default del catálogo (OpenRouter + su modelo default)', () => {
-    expect(getEffectiveAiSelection()).toEqual({ provider: 'openrouter', model: 'z-ai/glm-5.2' })
+    expect(getEffectiveAiSelection()).toEqual({
+      provider: 'openrouter',
+      model: 'z-ai/glm-5.2',
+      options: {},
+    })
   })
 
   it('MINERVA_AI_PROVIDER + MINERVA_AI_MODEL del entorno ganan sobre el default cuando no hay settings', () => {
     process.env.MINERVA_AI_PROVIDER = 'claude-code'
     process.env.MINERVA_AI_MODEL = 'claude-opus-4-8'
 
-    expect(getEffectiveAiSelection()).toEqual({ provider: 'claude-code', model: 'claude-opus-4-8' })
+    expect(getEffectiveAiSelection()).toEqual({
+      provider: 'claude-code',
+      model: 'claude-opus-4-8',
+      options: { effort: 'high' },
+    })
   })
 
   it('un MINERVA_AI_PROVIDER desconocido se ignora y cae al proveedor default', () => {
@@ -133,7 +149,11 @@ describe('getEffectiveAiSelection (T26, precedencia proveedor+modelo)', () => {
       models: { 'claude-code': 'claude-sonnet-5' },
     })
 
-    expect(getEffectiveAiSelection()).toEqual({ provider: 'claude-code', model: 'claude-sonnet-5' })
+    expect(getEffectiveAiSelection()).toEqual({
+      provider: 'claude-code',
+      model: 'claude-sonnet-5',
+      options: { effort: 'high' },
+    })
   })
 
   it('si el proveedor persistido no tiene modelo propio persistido, el modelo cae a MINERVA_AI_MODEL (aplicado al proveedor YA resuelto)', () => {
@@ -146,6 +166,7 @@ describe('getEffectiveAiSelection (T26, precedencia proveedor+modelo)', () => {
     expect(getEffectiveAiSelection()).toEqual({
       provider: 'claude-code',
       model: 'claude-haiku-4-5',
+      options: { effort: 'high' },
     })
   })
 
@@ -155,7 +176,80 @@ describe('getEffectiveAiSelection (T26, precedencia proveedor+modelo)', () => {
       models: {},
     })
 
-    expect(getEffectiveAiSelection()).toEqual({ provider: 'codex', model: 'gpt-5.5' })
+    expect(getEffectiveAiSelection()).toEqual({
+      provider: 'codex',
+      model: 'gpt-5.5',
+      options: { effort: 'medium' },
+    })
+  })
+})
+
+describe('getEffectiveAiSelection().options (T34, resolución de option descriptors)', () => {
+  beforeEach(() => {
+    vi.mocked(settingsStore.getPersistedSettings).mockReturnValue(null)
+    vi.mocked(settingsStore.getPersistedModelOptions).mockReturnValue({})
+  })
+
+  afterEach(() => {
+    delete process.env.MINERVA_AI_PROVIDER
+    delete process.env.MINERVA_AI_MODEL
+    vi.clearAllMocks()
+  })
+
+  it('modelo sin descriptor "effort" (OpenRouter glm-5.2, el default) → options vacío', () => {
+    expect(getEffectiveAiSelection().options).toEqual({})
+  })
+
+  it('effort guardado válido para el modelo activo se respeta (claude-sonnet-5 soporta "max")', () => {
+    vi.mocked(settingsStore.getPersistedSettings).mockReturnValue({
+      aiProvider: 'claude-code',
+      models: { 'claude-code': 'claude-sonnet-5' },
+    })
+    vi.mocked(settingsStore.getPersistedModelOptions).mockReturnValue({ effort: 'max' })
+
+    expect(getEffectiveAiSelection()).toEqual({
+      provider: 'claude-code',
+      model: 'claude-sonnet-5',
+      options: { effort: 'max' },
+    })
+  })
+
+  it('resolución robusta: effort guardado inválido para el modelo activo (xhigh en haiku-4-5, que no lo soporta) cae al default del modelo ("high")', () => {
+    vi.mocked(settingsStore.getPersistedSettings).mockReturnValue({
+      aiProvider: 'claude-code',
+      models: { 'claude-code': 'claude-haiku-4-5' },
+    })
+    vi.mocked(settingsStore.getPersistedModelOptions).mockReturnValue({ effort: 'xhigh' })
+
+    expect(getEffectiveAiSelection()).toEqual({
+      provider: 'claude-code',
+      model: 'claude-haiku-4-5',
+      options: { effort: 'high' },
+    })
+  })
+
+  it('modelo sin descriptor "effort" (OpenRouter glm-5.2) ignora cualquier "effort" persistido: options queda vacío', () => {
+    vi.mocked(settingsStore.getPersistedSettings).mockReturnValue({
+      aiProvider: 'openrouter',
+      models: { openrouter: 'z-ai/glm-5.2' },
+    })
+    vi.mocked(settingsStore.getPersistedModelOptions).mockReturnValue({ effort: 'high' })
+
+    expect(getEffectiveAiSelection().options).toEqual({})
+  })
+
+  it('Codex resuelve el effort guardado (todos sus modelos soportan low|medium|high|xhigh): xhigh se respeta', () => {
+    vi.mocked(settingsStore.getPersistedSettings).mockReturnValue({
+      aiProvider: 'codex',
+      models: { codex: 'gpt-5.5' },
+    })
+    vi.mocked(settingsStore.getPersistedModelOptions).mockReturnValue({ effort: 'xhigh' })
+
+    expect(getEffectiveAiSelection()).toEqual({
+      provider: 'codex',
+      model: 'gpt-5.5',
+      options: { effort: 'xhigh' },
+    })
   })
 })
 
@@ -227,5 +321,33 @@ describe('getAiEnv / getOpenRouterKeyStatus (T32, precedencia de la key de OpenR
     vi.mocked(loadApiKey).mockReturnValue('  sk-or-padded  ')
 
     expect(getAiEnv().openRouterApiKey).toBe('sk-or-padded')
+  })
+})
+
+describe('getAiSettingsInfo (T34, selectedOptions)', () => {
+  beforeEach(() => {
+    vi.mocked(settingsStore.getPersistedSettings).mockReturnValue(null)
+    vi.mocked(settingsStore.getPersistedAiModel).mockReturnValue(null)
+    vi.mocked(settingsStore.getPersistedModelOptions).mockReturnValue({})
+  })
+
+  afterEach(() => {
+    delete process.env.MINERVA_AI_PROVIDER
+    delete process.env.MINERVA_AI_MODEL
+    vi.clearAllMocks()
+  })
+
+  it('expone las opciones RESUELTAS del proveedor+modelo activo, indexadas por proveedor', () => {
+    vi.mocked(settingsStore.getPersistedSettings).mockReturnValue({
+      aiProvider: 'claude-code',
+      models: { 'claude-code': 'claude-opus-4-8' },
+    })
+    vi.mocked(settingsStore.getPersistedModelOptions).mockReturnValue({ effort: 'xhigh' })
+
+    expect(getAiSettingsInfo().selectedOptions).toEqual({ 'claude-code': { effort: 'xhigh' } })
+  })
+
+  it('modelo activo sin descriptores (default de OpenRouter) → selectedOptions con un objeto vacío para ese proveedor', () => {
+    expect(getAiSettingsInfo().selectedOptions).toEqual({ openrouter: {} })
   })
 })

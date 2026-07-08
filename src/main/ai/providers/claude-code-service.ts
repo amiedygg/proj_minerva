@@ -84,6 +84,29 @@ const CLAUDE_CLI_NOT_FOUND_MESSAGE =
   'https://docs.claude.com/en/docs/claude-code/overview) y corré «claude login» antes de ' +
   'analizar con este proveedor.'
 
+/** Mismo union que `EffortLevel` del Agent SDK (`sdk.d.ts`), repetido acá para no importar un tipo interno solo para esto. */
+type ClaudeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+/**
+ * Punto ÚNICO de normalización defensiva del `effort` antes de pasarlo al
+ * Agent SDK (T36, mismo espíritu que `normalizeClaudeCliEffort` de t3code).
+ * Hoy es casi identidad: T34 (`resolveOptionValue`, `../../../shared/
+ * ai-providers.ts`) ya resuelve `effort` contra las choices REALES del
+ * modelo activo (fable-5/opus-4.8/sonnet-5 soportan `low..max` completo;
+ * haiku-4-5 sin `xhigh`/`max`), así que cualquier valor que llegue acá ya es
+ * válido para `model` — no hay remapeo que hacer con el catálogo actual.
+ * Existe como HOOK explícito para el día en que el CLI/SDK instalado sea más
+ * viejo que el catálogo (p. ej. una versión sin soporte de `xhigh`/`max`
+ * aunque el catálogo ya los ofrezca): ese día este es el ÚNICO lugar a
+ * tocar para remapear (p. ej. `xhigh`→`max` o `max`→`high`), sin bifurcar el
+ * resto del servicio. `model` se recibe para que un futuro remapeo pueda ser
+ * específico de modelo, aunque hoy no se use.
+ */
+export function normalizeClaudeEffort(effort: string, model: string): ClaudeEffort {
+  void model
+  return effort as ClaudeEffort
+}
+
 /** Mensaje accionable por cada código de error que puede traer un `SDKAssistantMessage`/`SDKResultMessage`. */
 function mapAssistantError(code: SDKAssistantMessageError | string): string {
   switch (code) {
@@ -120,7 +143,7 @@ export class ClaudeCodeAiService implements AiService {
     req: IpcRequest<'ai:analyzePullRequest'>,
     options?: AnalyzePullRequestOptions,
   ): Promise<IpcResponse<'ai:analyzePullRequest'>> {
-    const { model } = getEffectiveAiSelection()
+    const { model, options: modelOptions } = getEffectiveAiSelection()
 
     const claudeCliPath = resolveCliPath('claude')
     if (claudeCliPath === null) {
@@ -190,6 +213,15 @@ export class ClaudeCodeAiService implements AiService {
           settingSources: [],
           includePartialMessages: true,
           abortController: controller,
+          // `effort` (T36) SOLO si `modelOptions.effort` resolvió a algo (T34
+          // ya lo valida contra las choices reales de `model`, vía el catálogo
+          // de `../../../shared/ai-providers.ts`): un modelo sin descriptor
+          // de effort deja `modelOptions.effort` en `undefined` y el campo se
+          // omite ENTERO, dejando que el SDK use su propio default — mismo
+          // comportamiento que antes de T36.
+          ...(modelOptions.effort
+            ? { effort: normalizeClaudeEffort(modelOptions.effort, model) }
+            : {}),
         },
       })
 

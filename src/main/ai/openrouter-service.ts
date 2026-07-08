@@ -33,7 +33,7 @@
 import type { AiService, AnalyzePullRequestOptions } from './service'
 import type { GithubService } from '../github/service'
 import type { IpcRequest, IpcResponse } from '../../shared/ipc'
-import { getAiEnv } from './env'
+import { getAiEnv, getEffectiveAiSelection } from './env'
 import { ANALYZE_PR_SYSTEM_PROMPT } from './prompts/analyze-pr'
 import { buildUserMessage, prId } from './analysis-prompt'
 import { StreamSectionParser } from './stream-parser'
@@ -103,6 +103,13 @@ export class OpenRouterAiService implements AiService {
     options?: AnalyzePullRequestOptions,
   ): Promise<IpcResponse<'ai:analyzePullRequest'>> {
     const { openRouterApiKey, aiModel } = getAiEnv()
+    // `getAiEnv` es el shim legado (pre-T26, OpenRouter-only) que resuelve
+    // key+modelo; no expone `options` (T34). Para el `effort` (T36) se
+    // consulta la selección completa aparte — mismo modelo resuelto en la
+    // práctica cuando el proveedor activo es OpenRouter (ver comentario de
+    // `getEffectiveAiModel` en `./env.ts`), pero esta línea es la única
+    // fuente de `options.effort`.
+    const { options: modelOptions } = getEffectiveAiSelection()
     if (!openRouterApiKey) {
       // No debería pasar en la práctica: `createAiService` (./index.ts) solo
       // instancia este servicio cuando hay key. Defensivo por si alguien lo
@@ -153,6 +160,13 @@ export class OpenRouterAiService implements AiService {
             { role: 'system', content: ANALYZE_PR_SYSTEM_PROMPT },
             { role: 'user', content: userMessage },
           ],
+          // `reasoning: { effort }` (T36, parámetro unificado de reasoning de
+          // OpenRouter: https://openrouter.ai/docs/use-cases/reasoning-tokens)
+          // SOLO si `modelOptions.effort` resolvió a algo — el catálogo (T34)
+          // solo declara el descriptor `effort` para gpt-5.5/claude-opus-4.8/
+          // claude-sonnet-5 en OpenRouter; para el resto `modelOptions.effort`
+          // es `undefined` y el campo se omite ENTERO, mismo body de hoy.
+          ...(modelOptions.effort ? { reasoning: { effort: modelOptions.effort } } : {}),
         }),
         signal: controller.signal,
       })

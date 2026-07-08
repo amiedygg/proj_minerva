@@ -43,7 +43,7 @@ import { ProviderPicker } from './ProviderPicker'
  */
 export function SettingsModal(): React.JSX.Element {
   const closeSettings = useAppStore((s) => s.closeSettings)
-  const { info, error, selectProvider, saveModel } = useSettings()
+  const { info, error, selectProvider, saveModel, setModelOption } = useSettings()
   const providerStatus = useProviderStatus()
   const openRouterKey = useOpenRouterKey()
   const cardRef = useRef<HTMLDivElement>(null)
@@ -101,6 +101,7 @@ export function SettingsModal(): React.JSX.Element {
                 info={info}
                 error={error}
                 onSave={(model) => saveModel(info.provider, model)}
+                onSetModelOption={setModelOption}
               />
             </div>
           </div>

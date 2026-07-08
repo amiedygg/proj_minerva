@@ -3,6 +3,92 @@
 > Sandbox del plan de la tarea actual. Se actualiza al empezar/terminar cada fase.
 > Control de tareas y bitácora: `TASKS.md`. Estrategia multi-agente: `WORKFLOW.md`.
 
+## PROPUESTA (2026-07-07): F8 — Selector de modelo dinámico + reasoning effort
+
+> **Estado: PLAN PROPUESTO, pendiente de decisión de Edilson (¿ejecutamos?).** No se ha
+> tocado código. Nace de dos preguntas de Edilson sobre F7 ya mergeable.
+
+### Las dos preguntas y sus respuestas (verificadas en vivo)
+
+1. **"¿Por qué Codex solo muestra `gpt-5.5`?"** Porque el catálogo de Codex está
+   HARDCODEADO a ese id en `shared/ai-providers.ts`. La RPC `model/list` de tu cuenta
+   (plan *prolite*) devuelve **4 modelos**: `gpt-5.5` (default), `gpt-5.4`, `gpt-5.4-mini`,
+   `gpt-5.3-codex-spark`. La lista la decide el propio `codex app-server` según el plan de
+   la cuenta ChatGPT — NO debemos filtrar/curar nosotros (lección t3code: expone
+   literalmente lo que devuelve `model/list`, sin `filter` por plan/`hidden`). Ya existe
+   `codex-model-catalog.ts` con el fetch dinámico, pero (a) está SIN cablear a la UI y
+   (b) fue escrito a ciegas y tiene bugs (asume `{models}`, real es `{data}`; `initialize`
+   sin params).
+2. **"¿Se puede configurar el esfuerzo (high/xhigh)?"** SÍ, en los tres proveedores
+   (confirmado en los esquemas reales):
+   - **Codex**: cada `Model` de `model/list` trae `supportedReasoningEfforts`
+     (`[low, medium, high, xhigh]`) + `defaultReasoningEffort` (varía por modelo:
+     gpt-5.5=medium, spark=high). Se pasa en `turn/start.effort`.
+   - **Claude Code**: el Agent SDK define `EffortLevel = low|medium|high|xhigh|max` y
+     `supportedEffortLevels` por modelo. Se pasa en `query({ options: { effort } })`.
+     OJO: el set varía por modelo/versión del CLI y hay remapeos de compatibilidad
+     (t3code: `xhigh`→`max` en modelos viejos, `max`→`high` en sonnet-4.6; `ultrathink`
+     es un prefijo de prompt, no un param).
+   - **OpenRouter**: parámetro `reasoning: { effort }` de la API, para los modelos que lo
+     soporten (GPT-5.x, etc.) — verificar formato exacto al implementar.
+
+### Diseño (patrón de t3code adaptado a la simplicidad de Minerva)
+
+La joya de t3code: **descriptores de opción autocontenidos por modelo**
+(`optionDescriptors: (Select|Boolean)[]`). Cada modelo declara SUS opciones (con choices +
+default); la UI es 100% genérica sobre ese array (sin `if proveedor`), y cambiar de modelo
+recalcula el valor contra las choices del nuevo modelo (si el guardado ya no aplica, cae al
+default) — así NUNCA se manda un effort que el modelo no soporta. Copiamos esa forma pero
+implementamos SOLO el descriptor `effort` por ahora (extensible a service tier / context
+window / thinking después sin re-arquitecturar). Minerva NO necesita la complejidad de
+`instanceId`/multi-cuenta de t3code: una sesión por proveedor.
+
+### Tareas propuestas (detalle iría a TASKS.md § F8 si se aprueba)
+
+- **T34 — Modelo de datos: option descriptors + selección con opciones.**
+  `ai-providers.ts`: `AiModelOption` gana `options?: ModelOptionDescriptor[]`
+  (`{ id: 'effort', label, choices: {value,label,description?,isDefault?}[] }`). Poblar los
+  efforts hardcode de Claude (matriz por modelo, con los remapeos de compat) y OpenRouter
+  (qué modelos soportan reasoning). `PersistedSettings` gana
+  `modelOptions?: Partial<Record<AiProviderId, Record<string,string>>>` (p.ej.
+  `{codex:{effort:'high'}}`) con migración (settings viejos → sin opciones = defaults).
+  `getEffectiveAiSelection` → `{provider, model, options:{effort?}}` resolviendo el effort
+  contra las choices del modelo actual (fallback al default del modelo). IPC
+  `settings:setModelOption` ({provider, optionId, value}) + validador. Tests (incl. la
+  resolución robusta: effort inválido para el modelo → default).
+- **T35 — Catálogo dinámico de Codex (corregir + cablear).** Reescribir
+  `codex-model-catalog.ts` con el protocolo REAL (`initialize` con clientInfo+capabilities;
+  respuesta `{data, nextCursor}`; extraer `id`, `displayName`→label,
+  `supportedReasoningEfforts`→choices del descriptor effort, `defaultReasoningEffort`→
+  isDefault). Cablearlo a la UI con canal async propio (`ai:getProviderModels` o similar)
+  con **cache TTL + fallback** al curado — NO meter async en el `settings:get` síncrono de
+  T26. Sin filtrar por plan/`hidden` (lección t3code). Tests contra la forma real.
+- **T36 — Pasar el effort a los servicios.** Codex: `turn/start.effort`. Claude Code:
+  `query({options:{effort}})` con un ÚNICO punto de normalización (remapeos de compat estilo
+  `normalizeClaudeCliEffort`). OpenRouter: `reasoning:{effort}` en el body para modelos que lo
+  soporten (no mandarlo si no). Tests de que cada servicio inyecta el effort.
+- **T37 — UI del selector de effort (+ modelos dinámicos de Codex).** En Settings, bajo el
+  modelo elegido, un selector GENÉRICO sobre los option descriptors del modelo seleccionado
+  (solo effort por ahora): muestra los choices soportados, marca el default, persiste vía
+  `setModelOption`; remount por `key` al cambiar modelo/proveedor. Codex muestra los modelos
+  dinámicos de T35 (con loading + fallback). Captura mirada.
+- **T38 (opcional, diferible) — Gating por versión del CLI.** Ofrecer solo modelos/efforts
+  soportados por la versión instalada de `claude`/`codex` (semver). t3code lo hace; para
+  Minerva es pulido.
+
+### Riesgos / decisiones abiertas
+
+- El fetch dinámico de Codex agrega async/latencia y un modo de fallo (red/CLI) a la carga
+  de la pantalla de modelos → canal aparte con cache y estado de carga, no en `settings:get`.
+- La normalización del effort de Claude es sutil (compat por modelo/versión) → un solo punto.
+- OpenRouter: confirmar el formato exacto de `reasoning` y por-modelo cuáles lo aceptan.
+- Alcance: se entrega EFFORT (lo pedido) sobre una abstracción extensible; service tier /
+  context window / thinking quedan como extensiones futuras con la misma forma.
+- Rama: si se ejecuta, sobre `feature/multi-provider-ai` (encima de F7) o en rama nueva desde
+  main tras mergear el PR de F7 — a decidir al arrancar.
+
+---
+
 ## Iteración actual (2026-07-07): IA multi-proveedor (OpenRouter + Claude Code + Codex) — F7
 
 > **Estado: T26–T30 + T32 HECHAS Y VERIFICADAS E2E (2026-07-07). Falta solo T31

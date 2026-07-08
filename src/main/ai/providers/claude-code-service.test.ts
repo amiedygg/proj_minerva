@@ -38,7 +38,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: (...args: unknown[]) => queryMock(...args),
 }))
 
-const { ClaudeCodeAiService } = await import('./claude-code-service')
+const { ClaudeCodeAiService, normalizeClaudeEffort } = await import('./claude-code-service')
 
 const repo = { owner: 'shopwave', name: 'api', fullName: 'shopwave/api' }
 
@@ -145,7 +145,11 @@ function fakeQueryThrows(error: unknown): void {
 
 describe('ClaudeCodeAiService.analyzePullRequest', () => {
   beforeEach(() => {
-    getEffectiveAiSelectionMock.mockReturnValue({ provider: 'claude-code', model: 'claude-sonnet-5' })
+    getEffectiveAiSelectionMock.mockReturnValue({
+      provider: 'claude-code',
+      model: 'claude-sonnet-5',
+      options: {},
+    })
     resolveCliPathMock.mockReset()
     resolveCliPathMock.mockReturnValue('/home/test-user/.local/bin/claude')
   })
@@ -198,6 +202,36 @@ describe('ClaudeCodeAiService.analyzePullRequest', () => {
       delete process.env.OPENROUTER_API_KEY
       delete process.env.GITHUB_TOKEN
     }
+  })
+
+  it('pasa "effort" en las options de query() cuando la selección efectiva trae uno (T36)', async () => {
+    getEffectiveAiSelectionMock.mockReturnValue({
+      provider: 'claude-code',
+      model: 'claude-sonnet-5',
+      options: { effort: 'xhigh' },
+    })
+    fakeQuery([textDeltaMessage('@@@SECTION kind=summary\nok\n')])
+
+    const service = new ClaudeCodeAiService(makeGithubService())
+    await service.analyzePullRequest({ repo, number: 482 })
+
+    const [call] = queryMock.mock.calls[0] as [{ options: Record<string, unknown> }]
+    expect(call.options.effort).toBe('xhigh')
+  })
+
+  it('NO pasa "effort" en las options de query() cuando la selección efectiva no trae uno (sin regresión)', async () => {
+    getEffectiveAiSelectionMock.mockReturnValue({
+      provider: 'claude-code',
+      model: 'claude-sonnet-5',
+      options: {},
+    })
+    fakeQuery([textDeltaMessage('@@@SECTION kind=summary\nok\n')])
+
+    const service = new ClaudeCodeAiService(makeGithubService())
+    await service.analyzePullRequest({ repo, number: 482 })
+
+    const [call] = queryMock.mock.calls[0] as [{ options: Record<string, unknown> }]
+    expect(call.options).not.toHaveProperty('effort')
   })
 
   it('lanza un mensaje accionable si resolveCliPath no encuentra "claude" instalado, sin llamar a query()', async () => {
@@ -330,5 +364,13 @@ describe('ClaudeCodeAiService.analyzePullRequest', () => {
 
     const service = new ClaudeCodeAiService(makeGithubService())
     await expect(service.analyzePullRequest({ repo, number: 482 })).rejects.toThrow('Ninguna sección')
+  })
+})
+
+describe('normalizeClaudeEffort', () => {
+  it('devuelve el valor tal cual (identidad): T34 ya lo valida contra las choices del modelo activo', () => {
+    expect(normalizeClaudeEffort('low', 'claude-haiku-4-5')).toBe('low')
+    expect(normalizeClaudeEffort('xhigh', 'claude-sonnet-5')).toBe('xhigh')
+    expect(normalizeClaudeEffort('max', 'claude-fable-5')).toBe('max')
   })
 })
