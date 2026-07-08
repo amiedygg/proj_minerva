@@ -32,7 +32,8 @@
  */
 import type { AiService, AnalyzePullRequestOptions } from './service'
 import type { GithubService } from '../github/service'
-import type { IpcRequest, IpcResponse } from '../../shared/ipc'
+import type { IpcRequest } from '../../shared/ipc'
+import type { GeneratedAnalysis } from '../../shared/types'
 import { getAiEnv, getEffectiveAiSelection } from './env'
 import { ANALYZE_PR_SYSTEM_PROMPT } from './prompts/analyze-pr'
 import { buildUserMessage, prId } from './analysis-prompt'
@@ -101,7 +102,7 @@ export class OpenRouterAiService implements AiService {
   async analyzePullRequest(
     req: IpcRequest<'ai:analyzePullRequest'>,
     options?: AnalyzePullRequestOptions,
-  ): Promise<IpcResponse<'ai:analyzePullRequest'>> {
+  ): Promise<GeneratedAnalysis> {
     const { openRouterApiKey, aiModel } = getAiEnv()
     // `getAiEnv` es el shim legado (pre-T26, OpenRouter-only) que resuelve
     // key+modelo; no expone `options` (T34). Para el `effort` (T36) se

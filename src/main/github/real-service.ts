@@ -68,7 +68,9 @@ interface SearchPullRequestNode {
   author?: GraphqlAuthor | null
   repository?: { owner: { login: string }; name: string; nameWithOwner: string }
   comments?: { totalCount: number }
-  lastCommit?: { nodes: { commit: { statusCheckRollup: { state: string } | null } }[] }
+  lastCommit?: {
+    nodes: { commit: { oid?: string; statusCheckRollup: { state: string } | null } }[]
+  }
 }
 
 interface SearchPullRequestsResponse {
@@ -98,7 +100,7 @@ interface PullRequestDetailNode {
   author: GraphqlAuthor | null
   comments: { totalCount: number }
   commitCount: { totalCount: number }
-  lastCommit: { nodes: { commit: { statusCheckRollup: { state: string } | null } }[] }
+  lastCommit: { nodes: { commit: { oid?: string; statusCheckRollup: { state: string } | null } }[] }
   labels: { nodes: { name: string; color: string }[] } | null
   reviewRequests: { nodes: { requestedReviewer: RequestedReviewer | null }[] } | null
   latestReviews: { nodes: { author: GraphqlAuthor | null }[] } | null
@@ -161,7 +163,7 @@ const SEARCH_PULL_REQUESTS_QUERY = `
           repository { owner { login } name nameWithOwner }
           comments { totalCount }
           lastCommit: commits(last: 1) {
-            nodes { commit { statusCheckRollup { state } } }
+            nodes { commit { oid statusCheckRollup { state } } }
           }
         }
       }
@@ -191,7 +193,7 @@ const PULL_REQUEST_DETAIL_QUERY = `
         comments { totalCount }
         commitCount: commits { totalCount }
         lastCommit: commits(last: 1) {
-          nodes { commit { statusCheckRollup { state } } }
+          nodes { commit { oid statusCheckRollup { state } } }
         }
         labels(first: 30) { nodes { name color } }
         reviewRequests(first: 20) {
@@ -311,6 +313,7 @@ function mapSearchNodeToSummary(node: SearchPullRequestNode): PullRequestSummary
     updatedAt: node.updatedAt ?? new Date(0).toISOString(),
     headRef: node.headRefName ?? '',
     baseRef: node.baseRefName ?? '',
+    headSha: node.lastCommit?.nodes[0]?.commit.oid ?? '',
     commentCount: node.comments?.totalCount ?? 0,
     reviewDecision: mapReviewDecision(node.reviewDecision),
     ciStatus: mapCiStatus(node.lastCommit?.nodes[0]?.commit.statusCheckRollup?.state),
@@ -346,6 +349,7 @@ function mapDetailNode(pr: PullRequestDetailNode, repo: RepoRef): PullRequestDet
     updatedAt: pr.updatedAt,
     headRef: pr.headRefName,
     baseRef: pr.baseRefName,
+    headSha: pr.lastCommit?.nodes[0]?.commit.oid ?? '',
     commentCount: pr.comments?.totalCount ?? 0,
     reviewDecision: mapReviewDecision(pr.reviewDecision),
     ciStatus: mapCiStatus(pr.lastCommit?.nodes[0]?.commit.statusCheckRollup?.state),

@@ -117,6 +117,7 @@ export function DidacticPanel(): React.JSX.Element {
             key={selectedPr.id}
             repo={selectedPr.repo}
             number={selectedPr.number}
+            currentHeadSha={selectedPr.headSha}
           />
         ) : (
           <DidacticPlaceholder />

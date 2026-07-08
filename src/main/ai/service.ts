@@ -1,8 +1,8 @@
 /**
  * Interfaz de la capa IA en `main`. Un único método que espeja el canal IPC
- * `ai:analyzePullRequest` (`src/shared/ipc.ts`): el tipo de request/response
- * se toma de ahí (`IpcRequest`/`IpcResponse`) para no duplicar formas entre
- * el contrato IPC y esta interfaz.
+ * `ai:analyzePullRequest` (`src/shared/ipc.ts`) en su `req` (se toma
+ * `IpcRequest` de ahí para no duplicar la forma); su `res` YA NO es
+ * `IpcResponse<'ai:analyzePullRequest'>` (T39, ver más abajo).
  *
  * Dos implementaciones conviven detrás de esta interfaz:
  * - `MockAiService` (`./mock-service.ts`), disponible desde T9(mock)/T10.
@@ -17,15 +17,19 @@
  * con `onProgress`, invocado cero o más veces DURANTE el análisis con un
  * snapshot parcial (`DraftDidacticSection[]`, `../../shared/events.ts`) y
  * exactamente una vez más al terminar (`meta.done === true`, con las
- * secciones finales). El valor de retorno de la promesa sigue siendo el
- * `DidacticAnalysis` completo de siempre — `onProgress` es solo para pintar
- * el panel en vivo mientras tanto, nunca la única forma de obtener el
- * resultado. Ambas implementaciones lo soportan: `OpenRouterAiService` lo
- * alimenta con los deltas SSE reales; `MockAiService` lo simula dividiendo
- * sus fixtures en trozos con un delay fijo, para poder verificar el
- * streaming end-to-end sin key ni costo.
+ * secciones finales). `onProgress` es solo para pintar el panel en vivo
+ * mientras tanto, nunca la única forma de obtener el resultado.
+ *
+ * T39: `analyzePullRequest` retorna `Promise<GeneratedAnalysis>` (SOLO el
+ * contenido: `prId`+`sections`+`generatedAt`), NO el `DidacticAnalysis`
+ * completo que recibe el renderer. El handler (`../ipc/handlers.ts`) es quien
+ * enriquece ese contenido a `DidacticAnalysis` sellando `headSha` (SHA del
+ * head del PR al generar) y `generatedWith` (proveedor/modelo/opciones
+ * efectivos), antes de cachear/persistir/devolver — ver T40. Ninguna
+ * implementación de `AiService` debe tocar esos dos campos.
  */
-import type { IpcRequest, IpcResponse } from '../../shared/ipc'
+import type { IpcRequest } from '../../shared/ipc'
+import type { GeneratedAnalysis } from '../../shared/types'
 import type { DraftDidacticSection } from '../../shared/events'
 
 export interface AnalyzeProgressMeta {
@@ -46,5 +50,5 @@ export interface AiService {
   analyzePullRequest(
     req: IpcRequest<'ai:analyzePullRequest'>,
     options?: AnalyzePullRequestOptions,
-  ): Promise<IpcResponse<'ai:analyzePullRequest'>>
+  ): Promise<GeneratedAnalysis>
 }

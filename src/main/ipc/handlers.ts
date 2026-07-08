@@ -2,7 +2,7 @@ import { BrowserWindow } from 'electron'
 import { handle } from './register'
 import { createGithubService } from '../github'
 import { createAiService } from '../ai'
-import { getAiSettingsInfo, getOpenRouterKeyStatus } from '../ai/env'
+import { getAiSettingsInfo, getEffectiveAiSelection, getOpenRouterKeyStatus } from '../ai/env'
 import { clearApiKey, saveApiKey } from '../ai/openrouter-key-store'
 import { getAiProviderStatusMap } from '../ai/providers/provider-status'
 import { getProviderModels } from '../ai/providers/provider-models'
@@ -16,7 +16,7 @@ import {
   type DraftDidacticSection,
 } from '../../shared/events'
 import type { IpcResponse } from '../../shared/ipc'
-import type { RepoRef } from '../../shared/types'
+import type { DidacticAnalysis, RepoRef } from '../../shared/types'
 
 /**
  * Clave del registro de análisis EN CURSO (T22): mismo criterio
@@ -125,7 +125,7 @@ export async function registerIpcHandlers(): Promise<void> {
         // consulta el probe de login ya cacheado (TTL corto), así que el costo
         // por llamada es mínimo.
         const aiService = await createAiService(githubService)
-        const result = await aiService.analyzePullRequest(req, {
+        const generated = await aiService.analyzePullRequest(req, {
           onProgress: (sections, meta) => {
             snapshotBox.current = sections
             // El `{ done: true }` que emite el servicio en éxito se SUPRIME
@@ -138,6 +138,29 @@ export async function registerIpcHandlers(): Promise<void> {
             broadcastProgress({ repo: req.repo, number: req.number, sections, done: false })
           },
         })
+
+        // Sellado (T39/T40): el `AiService` produce `GeneratedAnalysis` (sin
+        // `headSha`/`generatedWith`, ver `../ai/service.ts`); acá se enriquece
+        // a `DidacticAnalysis` completo antes de cachear/persistir/devolver.
+        // `generatedWith` sale de `getEffectiveAiSelection()` (síncrono, sin
+        // I/O) — ya es la selección REAL con la que se generó este análisis.
+        // `headSha` (T40) sale de un fetch aparte, barato pero con I/O, del
+        // detalle del PR — envuelto en su PROPIO try/catch: si fallara (red,
+        // rate limit, etc.) NO debe tumbar un análisis ya generado, se cae a
+        // `''` como en el sellado-puente de T39.
+        let headSha = ''
+        try {
+          const detail = await githubService.getPullRequestDetail(req)
+          headSha = detail.headSha
+        } catch {
+          headSha = ''
+        }
+
+        const result: DidacticAnalysis = {
+          ...generated,
+          headSha,
+          generatedWith: getEffectiveAiSelection(),
+        }
 
         analysisCache.set(req.repo, req.number, result)
         broadcastProgress({
