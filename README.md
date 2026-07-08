@@ -137,6 +137,19 @@ npm run build
   release. Los binarios de macOS/Windows salen **sin firma de código**
   (Gatekeeper/SmartScreen mostrarán aviso). Conviene bumpear `version` en
   `package.json` antes de taggear.
+- **macOS: "«Minerva» está dañada y no se puede abrir"**: la app NO está rota —
+  es Gatekeeper rechazando una app sin firmar ni notarizar que llegó con el
+  atributo de cuarentena de la descarga (el CI empaqueta con
+  `CSC_IDENTITY_AUTO_DISCOVERY=false`, ver log "skipped macOS application code
+  signing"). Tras arrastrar `Minerva.app` a Aplicaciones, quitar la cuarentena:
+
+  ```bash
+  xattr -cr /Applications/Minerva.app
+  ```
+
+  y abre normal (aplica igual al DMG arm64 y x64). El fix definitivo es firmar
+  con un certificado Developer ID + notarizar (requiere Apple Developer
+  Program); mientras tanto este workaround es esperado para toda descarga.
 
 ---
 
