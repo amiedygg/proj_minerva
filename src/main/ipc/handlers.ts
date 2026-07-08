@@ -2,7 +2,9 @@ import { BrowserWindow } from 'electron'
 import { handle } from './register'
 import { createGithubService } from '../github'
 import { createAiService } from '../ai'
-import { getEffectiveAiModel } from '../ai/env'
+import { getAiSettingsInfo, getOpenRouterKeyStatus } from '../ai/env'
+import { clearApiKey, saveApiKey } from '../ai/openrouter-key-store'
+import { getAiProviderStatusMap } from '../ai/providers/provider-status'
 import { analysisCache } from '../ai/analysis-cache'
 import { settingsStore } from '../settings/store'
 import { authManager } from '../auth/auth-manager'
@@ -46,12 +48,21 @@ function broadcastProgress(payload: AnalysisProgressEvent): void {
  * (`../auth/auth-manager.ts`) — quien llama a `registerIpcHandlers` debe
  * haber esperado `authManager.init()` antes, para que `auth:getStatus`
  * refleje el token persistido (si lo hay) desde la primera llamada.
- * `settings:get`/`settings:setAiModel` (T12) exponen el modelo de IA
- * efectivo (`getEffectiveAiModel`, `../ai/env.ts`) y permiten persistirlo
- * (`settingsStore.setAiModel`, `../settings/store.ts`); no delegan a una
- * instancia de servicio porque no hay estado por-request que mantener.
+ * `settings:get` (T12, reestructurado en T26 a multi-proveedor) expone la
+ * selección efectiva de proveedor+modelo más el catálogo completo
+ * (`getAiSettingsInfo`, `../ai/env.ts`); `settings:setAiModel` (compat
+ * OpenRouter), `settings:setAiProvider` y `settings:setProviderModel`
+ * persisten la elección (`settingsStore`, `../settings/store.ts`) y devuelven
+ * la misma forma agregada. No delegan a una instancia de servicio porque no
+ * hay estado por-request que mantener.
+ *
+ * ASYNC desde T28: `createAiService` puede necesitar consultar el probe de
+ * login de un proveedor `cli` (`../ai/providers/cli-probe.ts`, spawnea
+ * `claude --version` con timeout corto) antes de decidir qué `AiService`
+ * instanciar — quien llama debe `await`earlo, igual que ya hacía con
+ * `authManager.init()` (ver `../index.ts`).
  */
-export function registerIpcHandlers(): void {
+export async function registerIpcHandlers(): Promise<void> {
   handle('minerva:ping', () => 'pong from main @ electron ' + process.versions.electron)
 
   handle('auth:getStatus', () => authManager.getStatus())
@@ -65,8 +76,6 @@ export function registerIpcHandlers(): void {
   handle('github:getCommentThreads', (req) => githubService.getCommentThreads(req))
   handle('github:postComment', (req) => githubService.postComment(req))
 
-  const aiService = createAiService(githubService)
-
   /**
    * Registro de análisis EN CURSO por PR (T22). Sin esto, dos solicitudes
    * simultáneas del mismo PR —un re-click de "Analizar PR" mientras el
@@ -75,7 +84,7 @@ export function registerIpcHandlers(): void {
    * abajo (`analysisCache`) solo ve análisis ya COMPLETOS, nunca uno a medio
    * hacer. Vive local a esta función (no a nivel de módulo) porque
    * conceptualmente es estado del registro de handlers, igual que
-   * `githubService`/`aiService` de arriba.
+   * `githubService` de arriba.
    */
   const inFlightAnalyses = new Map<
     string,
@@ -106,6 +115,15 @@ export function registerIpcHandlers(): void {
 
     const promise = (async (): Promise<IpcResponse<'ai:analyzePullRequest'>> => {
       try {
+        // Se resuelve el AiService POR ANÁLISIS, no una sola vez al arrancar:
+        // desde T27 el PROVEEDOR activo (OpenRouter/Claude Code/Codex, ver
+        // `../ai/index.ts`) sale de Settings y puede cambiar en runtime, así
+        // que capturarlo en el closure del registro dejaría al panel usando el
+        // proveedor viejo hasta reiniciar. Solo se llega acá en un análisis
+        // NUEVO (los cache/in-flight hits retornan antes), y `createAiService`
+        // consulta el probe de login ya cacheado (TTL corto), así que el costo
+        // por llamada es mínimo.
+        const aiService = await createAiService(githubService)
         const result = await aiService.analyzePullRequest(req, {
           onProgress: (sections, meta) => {
             snapshotBox.current = sections
@@ -185,11 +203,40 @@ export function registerIpcHandlers(): void {
     analysisCache.invalidate(req.repo, req.number)
   })
 
-  handle('settings:get', () => getEffectiveAiModel())
+  // Estado de login por proveedor (T27, `../ai/providers/provider-status.ts`):
+  // OpenRouter se resuelve síncrono (¿hay key?); Claude Code/Codex vía un
+  // probe de CLI cacheado con TTL corto, nunca bloqueante.
+  handle('ai:getProviderStatus', () => getAiProviderStatusMap())
+
+  handle('settings:get', () => getAiSettingsInfo())
   handle('settings:setAiModel', (req) => {
     settingsStore.setAiModel(req.aiModel)
-    return getEffectiveAiModel()
+    return getAiSettingsInfo()
   })
+  handle('settings:setAiProvider', (req) => {
+    settingsStore.setAiProvider(req.provider)
+    return getAiSettingsInfo()
+  })
+  handle('settings:setProviderModel', (req) => {
+    settingsStore.setProviderModel(req.provider, req.model)
+    return getAiSettingsInfo()
+  })
+
+  // Key de OpenRouter persistida con `safeStorage` (T32,
+  // `../ai/openrouter-key-store.ts`): `key` vacía/solo espacios borra lo
+  // persistido en vez de guardar un valor vacío (mismo canal sirve para
+  // "guardar" y "borrar"). Nunca devuelve la key, solo el status agregado
+  // (`getOpenRouterKeyStatus`, `../ai/env.ts`).
+  handle('settings:setOpenRouterKey', (req) => {
+    const trimmed = req.key.trim()
+    if (trimmed.length > 0) {
+      saveApiKey(trimmed)
+    } else {
+      clearApiKey()
+    }
+    return getOpenRouterKeyStatus()
+  })
+  handle('settings:getOpenRouterKeyStatus', () => getOpenRouterKeyStatus())
 
   // Ventana didáctica desacoplada (T14, `../windows/didactic-window.ts`): una
   // sola instancia a la vez, mismo preload/webPreferences que la principal.

@@ -3,6 +3,7 @@
  * Solo tipos (interfaces / type aliases) — sin clases, sin lógica.
  */
 import type { DraftDidacticSection } from './events'
+import type { AiProviderCatalogEntry, AiProviderId } from './ai-providers'
 
 export interface RepoRef {
   owner: string
@@ -147,4 +148,69 @@ export type AiModelSource = 'settings' | 'env' | 'default'
 export interface EffectiveAiModelInfo {
   aiModel: string
   aiModelSource: AiModelSource
+}
+
+/**
+ * Respuesta de `settings:get`/`settings:setAiProvider`/`settings:setProviderModel`
+ * desde T26 (multi-proveedor): reemplaza a `EffectiveAiModelInfo` como tipo de
+ * respuesta IPC (ese tipo se conserva como shim interno de `main/ai/env.ts`,
+ * `getEffectiveAiModel`, asumiendo OpenRouter). `provider`/`model` es la
+ * selección EFECTIVA (con la misma precedencia settings > env > default que
+ * antes, ver `getEffectiveAiSelection` en `main/ai/env.ts`); `modelSource`
+ * indica de dónde vino `model` (mismo significado que `AiModelSource`, pero
+ * evaluado para el `provider` resuelto, no solo para OpenRouter);
+ * `perProviderModel` es el mapa persistido completo (para que la UI, aunque
+ * cambie de proveedor sin guardar, pueda recordar el último modelo elegido de
+ * cada uno); `catalog` es el catálogo completo de proveedores+modelos
+ * (`shared/ai-providers.ts`) para que el renderer pinte las opciones sin un
+ * segundo roundtrip.
+ */
+export interface AiSettingsInfo {
+  provider: AiProviderId
+  model: string
+  modelSource: AiModelSource
+  perProviderModel: Partial<Record<AiProviderId, string>>
+  catalog: Record<AiProviderId, AiProviderCatalogEntry>
+}
+
+/**
+ * Estado de login por proveedor de IA (T27, canal `ai:getProviderStatus`):
+ * - `unavailable`: OpenRouter sin `OPENROUTER_API_KEY` configurada, o un CLI
+ *   (`claude`/`codex`) que no se encontró en PATH (o cuya detección expiró
+ *   por timeout — ver `main/ai/providers/cli-probe.ts`).
+ * - `installed`: el CLI existe y responde, pero no se pudo confirmar sesión
+ *   iniciada (best-effort en T27; T28/T29 lo reemplazan por el handshake real
+ *   del SDK/RPC de cada proveedor).
+ * - `authenticated`: OpenRouter con key configurada, o un CLI con indicios de
+ *   sesión iniciada.
+ *
+ * `account` NUNCA lleva tokens/keys — a lo sumo un email/plan de exhibición.
+ */
+export type AiProviderStatusValue = 'unavailable' | 'installed' | 'authenticated'
+
+export interface AiAccountInfo {
+  email?: string
+  plan?: string
+}
+
+export interface AiProviderStatus {
+  status: AiProviderStatusValue
+  account?: AiAccountInfo
+}
+
+/**
+ * Estado de configuración de `OPENROUTER_API_KEY` (T32, canales
+ * `settings:setOpenRouterKey`/`settings:getOpenRouterKeyStatus`,
+ * `main/ai/env.ts` `getOpenRouterKeyStatus`). NUNCA lleva la key en claro —
+ * la key vive solo en `main`, cifrada con `safeStorage`
+ * (`main/ai/openrouter-key-store.ts`) o en `process.env`/`.env` de dev.
+ * `source`: `'safeStorage'` si el usuario la guardó desde la UI de Settings
+ * (gana siempre que exista), `'env'` si viene de `process.env`/`.env` de
+ * desarrollo, `'none'` si no hay ninguna configurada.
+ */
+export type OpenRouterKeySource = 'safeStorage' | 'env' | 'none'
+
+export interface OpenRouterKeyStatus {
+  configured: boolean
+  source: OpenRouterKeySource
 }

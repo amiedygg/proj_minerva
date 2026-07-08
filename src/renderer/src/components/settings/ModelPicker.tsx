@@ -1,44 +1,49 @@
 import { useState } from 'react'
 import { Check, Loader2 } from 'lucide-react'
-import { AI_MODELS } from '../../../../shared/ai-models'
-import type { AiModelSource, EffectiveAiModelInfo } from '../../../../shared/types'
+import type { AiModelSource, AiSettingsInfo } from '../../../../shared/types'
 
 const SOURCE_HINT: Record<AiModelSource, string | null> = {
   settings: null,
   env: 'Definido por MINERVA_AI_MODEL en tu .env. Al guardar, este valor de Settings lo pisa.',
-  default: 'Todavía no hay nada configurado: se está usando el default (GLM 5.2).',
+  default: 'Todavía no hay nada configurado para este proveedor: se está usando su default.',
 }
 
 interface ModelPickerProps {
-  info: EffectiveAiModelInfo
+  info: AiSettingsInfo
   error: string | null
-  onSave: (aiModel: string) => Promise<boolean>
+  onSave: (model: string) => Promise<boolean>
 }
 
 /**
- * Formulario de selección de modelo de IA (radio-cards curadas + "Otro
- * (avanzado)"). Vive en un componente separado de `SettingsModal` a
- * propósito: `SettingsModal` solo lo monta una vez que `info` (el modelo
- * efectivo actual) ya está disponible, así que este componente puede
- * inicializar su estado local (selección, input de "avanzado") con un lazy
- * initializer de `useState` a partir de `info`, sin necesitar un efecto de
- * sincronización — evita el antipatrón `set-state-in-effect` que el linter
- * de hooks de este proyecto rechaza (mismo criterio que
- * `useDidacticAnalysis`/`DidacticPanel` aplican vía remount con `key`, ver
- * sus comentarios).
+ * Formulario de selección de MODELO dentro del proveedor activo
+ * (`info.provider`, radio-cards curadas del catálogo de ese proveedor,
+ * `info.catalog[info.provider].models`, T26). "Otro (avanzado)" se mantiene
+ * SOLO para OpenRouter: los CLIs (`claude-code`/`codex`) solo aceptan los
+ * ids curados que el SDK/RPC de cada uno resuelve, un id libre no significa
+ * nada para ellos.
+ *
+ * `ProviderPicker` monta este componente con `key={info.provider}` (ver
+ * `SettingsModal`): cambiar de proveedor fuerza un remount completo en vez
+ * de sincronizar el estado local con un efecto, así que puede seguir
+ * inicializando su selección/borrador con un lazy initializer de
+ * `useState` a partir de `info` sin caer en el antipatrón
+ * `set-state-in-effect` (mismo criterio que `useDidacticAnalysis`/
+ * `DidacticPanel`, ver sus comentarios).
  */
 export function ModelPicker({ info, error, onSave }: ModelPickerProps): React.JSX.Element {
-  const curated = AI_MODELS.find((m) => m.id === info.aiModel)
+  const models = info.catalog[info.provider].models
+  const allowCustom = info.provider === 'openrouter'
+  const curated = models.find((m) => m.id === info.model)
 
-  const [selectedId, setSelectedId] = useState(curated?.id ?? AI_MODELS[0].id)
-  const [isCustom, setIsCustom] = useState(!curated)
-  const [customValue, setCustomValue] = useState(curated ? '' : info.aiModel)
+  const [selectedId, setSelectedId] = useState(curated?.id ?? models[0]?.id ?? '')
+  const [isCustom, setIsCustom] = useState(allowCustom && !curated)
+  const [customValue, setCustomValue] = useState(allowCustom && !curated ? info.model : '')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
   const draft = isCustom ? customValue.trim() : selectedId
   const canSave = draft.length > 0 && draft.length <= 100
-  const hint = SOURCE_HINT[info.aiModelSource]
+  const hint = SOURCE_HINT[info.modelSource]
 
   async function handleSave(): Promise<void> {
     if (!canSave) return
@@ -55,13 +60,14 @@ export function ModelPicker({ info, error, onSave }: ModelPickerProps): React.JS
   }
 
   return (
-    <>
-      <div className="flex-1 overflow-y-auto p-4">
+    <div>
+      <div>
         <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">
           Modelo de IA
         </h3>
         <p className="mb-3 text-xs text-muted">
-          Modelo usado por el panel didáctico para analizar Pull Requests vía OpenRouter.
+          Modelo usado por el panel didáctico para analizar Pull Requests con{' '}
+          {info.catalog[info.provider].label}.
         </p>
 
         {hint && (
@@ -71,7 +77,7 @@ export function ModelPicker({ info, error, onSave }: ModelPickerProps): React.JS
         )}
 
         <div className="space-y-2">
-          {AI_MODELS.map((model, i) => {
+          {models.map((model, i) => {
             const checked = !isCustom && selectedId === model.id
             return (
               <label
@@ -101,38 +107,40 @@ export function ModelPicker({ info, error, onSave }: ModelPickerProps): React.JS
             )
           })}
 
-          <label
-            className={`flex cursor-pointer items-start gap-2.5 rounded-md border p-2.5 transition-colors duration-150 ${
-              isCustom ? 'border-accent/50 bg-accent/10' : 'border-border hover:border-accent/30'
-            }`}
-          >
-            <input
-              type="radio"
-              name="ai-model"
-              className="mt-0.5 accent-accent"
-              checked={isCustom}
-              onChange={() => setIsCustom(true)}
-            />
-            <span className="flex flex-1 flex-col gap-1.5">
-              <span className="text-sm text-text">Otro (avanzado)</span>
+          {allowCustom && (
+            <label
+              className={`flex cursor-pointer items-start gap-2.5 rounded-md border p-2.5 transition-colors duration-150 ${
+                isCustom ? 'border-accent/50 bg-accent/10' : 'border-border hover:border-accent/30'
+              }`}
+            >
               <input
-                type="text"
-                value={customValue}
-                onFocus={() => setIsCustom(true)}
-                onChange={(e) => {
-                  setIsCustom(true)
-                  setCustomValue(e.target.value)
-                }}
-                placeholder="id de openrouter.ai/models, p. ej. mistralai/mistral-large-2411"
-                maxLength={100}
-                className="w-full rounded-md border border-border bg-bg px-2 py-1 font-mono text-xs text-text placeholder:text-muted focus:border-accent"
+                type="radio"
+                name="ai-model"
+                className="mt-0.5 accent-accent"
+                checked={isCustom}
+                onChange={() => setIsCustom(true)}
               />
-            </span>
-          </label>
+              <span className="flex flex-1 flex-col gap-1.5">
+                <span className="text-sm text-text">Otro (avanzado)</span>
+                <input
+                  type="text"
+                  value={customValue}
+                  onFocus={() => setIsCustom(true)}
+                  onChange={(e) => {
+                    setIsCustom(true)
+                    setCustomValue(e.target.value)
+                  }}
+                  placeholder="id de openrouter.ai/models, p. ej. mistralai/mistral-large-2411"
+                  maxLength={100}
+                  className="w-full rounded-md border border-border bg-bg px-2 py-1 font-mono text-xs text-text placeholder:text-muted focus:border-accent"
+                />
+              </span>
+            </label>
+          )}
         </div>
       </div>
 
-      <footer className="flex items-center justify-between gap-3 border-t border-border px-4 py-3">
+      <div className="mt-3 flex items-center justify-between gap-3 border-t border-border pt-3">
         <div className="min-h-[1.25rem] text-xs">
           {error && <span className="text-danger">{error}</span>}
           {!error && saved && (
@@ -154,7 +162,7 @@ export function ModelPicker({ info, error, onSave }: ModelPickerProps): React.JS
           {saving && <Loader2 size={14} className="animate-spin" />}
           Guardar
         </button>
-      </footer>
-    </>
+      </div>
+    </div>
   )
 }

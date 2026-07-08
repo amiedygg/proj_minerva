@@ -7,17 +7,20 @@
  */
 
 import type {
+  AiProviderStatus,
+  AiSettingsInfo,
   AnalysisState,
   AuthStatus,
   CommentThread,
   DidacticAnalysis,
   DiffFile,
-  EffectiveAiModelInfo,
+  OpenRouterKeyStatus,
   PrComment,
   PullRequestDetail,
   PullRequestSummary,
   RepoRef,
 } from './types'
+import type { AiProviderId } from './ai-providers'
 import type { AnalysisProgressEvent } from './events'
 
 export interface IpcContract {
@@ -76,8 +79,53 @@ export interface IpcContract {
    */
   'ai:getAnalysisState': { req: { repo: RepoRef; number: number }; res: AnalysisState }
 
-  'settings:get': { req: void; res: EffectiveAiModelInfo }
-  'settings:setAiModel': { req: { aiModel: string }; res: EffectiveAiModelInfo }
+  /**
+   * Estado de login por proveedor de IA (T27), sin disparar ningún análisis:
+   * un `Record` con los TRES proveedores del catálogo (`../shared/ai-providers.ts`),
+   * cada uno con su `AiProviderStatus` (`./types.ts`). OpenRouter se resuelve
+   * de forma síncrona (¿hay `OPENROUTER_API_KEY`?, `main/ai/env.ts`); Claude
+   * Code/Codex vía un probe de CLI con timeout corto y cache TTL, NUNCA
+   * bloqueante (`main/ai/providers/cli-probe.ts`) — ver
+   * `main/ai/providers/provider-status.ts` para el agregado. Nunca incluye
+   * tokens/keys, a lo sumo `account.email`/`account.plan` de exhibición.
+   */
+  'ai:getProviderStatus': { req: void; res: Record<AiProviderId, AiProviderStatus> }
+
+  /**
+   * Selección efectiva de proveedor+modelo (T26) más el catálogo completo de
+   * proveedores/modelos, para que la UI pinte las opciones sin un roundtrip
+   * adicional. Ver `AiSettingsInfo` (`./types.ts`) y `getAiSettingsInfo`
+   * (`../main/ai/env.ts`).
+   */
+  'settings:get': { req: void; res: AiSettingsInfo }
+  /** Compat (pre-T26): persiste el modelo para OpenRouter sin tocar el proveedor activo. */
+  'settings:setAiModel': { req: { aiModel: string }; res: AiSettingsInfo }
+  /** Cambia el proveedor ACTIVO (T26); no toca los modelos ya elegidos por cada proveedor. */
+  'settings:setAiProvider': { req: { provider: AiProviderId }; res: AiSettingsInfo }
+  /** Persiste el modelo elegido para `provider` (T26), sea o no el proveedor activo. */
+  'settings:setProviderModel': {
+    req: { provider: AiProviderId; model: string }
+    res: AiSettingsInfo
+  }
+  /**
+   * Guarda o borra la key de OpenRouter persistida con `safeStorage` (T32,
+   * `../main/ai/openrouter-key-store.ts`): `key` no vacía (tras `trim()`) se
+   * cifra y persiste (`saveApiKey`); `key` vacía o solo espacios borra lo
+   * persistido (`clearApiKey`) — el mismo canal sirve para las dos acciones,
+   * así la UI de Settings (T30) no necesita un canal aparte para "borrar".
+   * Responde el status actualizado (`getOpenRouterKeyStatus`, mismo tipo que
+   * `settings:getOpenRouterKeyStatus`) para que la UI refresque sin un
+   * roundtrip adicional. La key NUNCA viaja de vuelta al renderer.
+   */
+  'settings:setOpenRouterKey': { req: { key: string }; res: OpenRouterKeyStatus }
+  /**
+   * Estado de configuración de la key de OpenRouter (T32): `configured` +
+   * `source` (`'safeStorage' | 'env' | 'none'`, ver `OpenRouterKeyStatus` en
+   * `./types.ts`), NUNCA la key en claro. Lo consume la card de OpenRouter en
+   * Settings (T30) para pintar "Configurada (safeStorage) / Tomada de .env /
+   * No configurada".
+   */
+  'settings:getOpenRouterKeyStatus': { req: void; res: OpenRouterKeyStatus }
 
   /**
    * Abre (o enfoca, si ya hay una) la ventana didáctica desacoplada (T14,
@@ -116,8 +164,13 @@ export const IPC_CHANNELS = [
   'ai:getCachedAnalysis',
   'ai:invalidateAnalysis',
   'ai:getAnalysisState',
+  'ai:getProviderStatus',
   'settings:get',
   'settings:setAiModel',
+  'settings:setAiProvider',
+  'settings:setProviderModel',
+  'settings:setOpenRouterKey',
+  'settings:getOpenRouterKeyStatus',
   'window:openDidactic',
 ] as const satisfies readonly IpcChannel[]
 

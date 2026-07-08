@@ -2,25 +2,38 @@ import { useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
 import { useAppStore } from '../../stores/app-store'
 import { useSettings } from '../../hooks/use-settings'
+import { useProviderStatus } from '../../hooks/use-provider-status'
+import { useOpenRouterKey } from '../../hooks/use-openrouter-key'
 import { IconButton } from '../ui/IconButton'
 import { ModelPicker } from './ModelPicker'
+import { ProviderPicker } from './ProviderPicker'
 
 /**
- * Modal de settings (T12): hoy solo tiene la sección "Modelo de IA", pensado
- * para crecer con más secciones más adelante.
+ * Modal de settings (T12, reestructurado en T30 a proveedor+modelo): monta
+ * `ProviderPicker` (proveedor activo + estado de login + acción de
+ * configuración/login) y `ModelPicker` (modelo dentro del proveedor activo),
+ * pensado para crecer con más secciones más adelante.
  *
  * `App.tsx` solo monta este componente mientras `settingsOpen` es `true`
  * (`{settingsOpen && <SettingsModal />}`): al cerrar, se desmonta por
  * completo, lo que resetea cualquier estado local (de este componente o de
- * `ModelPicker`) de forma automática la próxima vez que se abra — el mismo
+ * sus hijos) de forma automática la próxima vez que se abra — el mismo
  * patrón de "resetear vía remount" que usa `DidacticPanel` con
- * `useDidacticAnalysis`, en vez de un efecto que sincronice estado en cada
- * apertura (ver también el comentario de cabecera de `ModelPicker`).
+ * `useDidacticAnalysis`. Los tres fetches iniciales (`settings:get`,
+ * `ai:getProviderStatus`, `settings:getOpenRouterKeyStatus`) se piden en
+ * paralelo, uno por hook.
  *
  * Cierra con Esc o con un clic fuera de la card (el overlay tiene el
- * `onClick`; la card detiene la propagación). El borrador de selección vive
- * en `ModelPicker` como estado local: cerrar sin pulsar "Guardar" no aplica
- * ningún cambio.
+ * `onClick`; la card detiene la propagación). El borrador de modelo vive en
+ * `ModelPicker` como estado local: cerrar sin pulsar "Guardar" no aplica ese
+ * cambio (el cambio de PROVEEDOR, en cambio, persiste al instante al
+ * seleccionarlo, ver `ProviderPicker`).
+ *
+ * `ModelPicker` se monta con `key={info.provider}`: cambiar de proveedor
+ * debe resetear su selección/borrador local en vez de arrastrar el estado
+ * del proveedor anterior, y el remount-por-`key` es el patrón que este
+ * repo usa para eso (en vez de un efecto de sincronización, prohibido por
+ * el lint de hooks de este proyecto).
  *
  * Foco inicial: la primera radio-card de `ModelPicker` tiene `autoFocus`
  * (nativo de React, se aplica en el commit inicial). La card en sí es
@@ -30,7 +43,9 @@ import { ModelPicker } from './ModelPicker'
  */
 export function SettingsModal(): React.JSX.Element {
   const closeSettings = useAppStore((s) => s.closeSettings)
-  const { info, error, save } = useSettings()
+  const { info, error, selectProvider, saveModel } = useSettings()
+  const providerStatus = useProviderStatus()
+  const openRouterKey = useOpenRouterKey()
   const cardRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -65,7 +80,30 @@ export function SettingsModal(): React.JSX.Element {
         {info === null ? (
           <p className="p-4 text-xs text-muted">Cargando…</p>
         ) : (
-          <ModelPicker info={info} error={error} onSave={save} />
+          <div className="flex-1 overflow-y-auto p-4">
+            <ProviderPicker
+              info={info}
+              statuses={providerStatus.statuses}
+              statusLoading={providerStatus.loading}
+              statusError={providerStatus.error}
+              onRefetchStatus={providerStatus.refetch}
+              openRouterKeyStatus={openRouterKey.status}
+              openRouterKeyLoading={openRouterKey.loading}
+              openRouterKeyError={openRouterKey.error}
+              openRouterKeySaving={openRouterKey.saving}
+              onSaveOpenRouterKey={openRouterKey.save}
+              onClearOpenRouterKey={openRouterKey.clear}
+              onSelectProvider={selectProvider}
+            />
+            <div className="border-t border-border pt-4">
+              <ModelPicker
+                key={info.provider}
+                info={info}
+                error={error}
+                onSave={(model) => saveModel(info.provider, model)}
+              />
+            </div>
+          </div>
         )}
       </div>
     </div>

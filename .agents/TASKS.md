@@ -494,6 +494,325 @@ anota **quién** la hizo (subagente/directo) y **cómo** se verificó.
 
 ---
 
+## F7 — IA multi-proveedor (OpenRouter + Claude Code + Codex) — 2026-07-07
+
+> Rama `feature/multi-provider-ai` (desde `origin/main`). Diseño y contexto de
+> investigación: `PLAN.md` § "Iteración actual (2026-07-07)". **Decisión de arquitectura
+> clave**: se usan los CLIs/SDK OFICIALES (`@anthropic-ai/claude-agent-sdk`,
+> `codex app-server`), NO se reimplementa el OAuth de Anthropic/OpenAI. El flujo OAuth
+> in-app estilo opencode para Claude Pro/Max exige suplantar al cliente oficial (header
+> `anthropic-beta: oauth-...` + system prompt "You are Claude Code...") — evade los
+> controles de acceso de Anthropic, viola sus ToS y arriesga el baneo de la cuenta de
+> Edilson; opencode lo removió por eso. **No se implementa.**
+>
+> **CONFIRMADO por Edilson (2026-07-07)**: enfoque de CLIs oficiales aprobado; instalará
+> `codex`; pidió avisar antes de las pruebas e2e de T28/T29 para asegurar sesiones válidas
+> de Claude/Codex. Requisito añadido: **T32** (campo persistente para `OPENROUTER_API_KEY`).
+>
+> Invariante que respetan TODAS: el pipeline de streaming es agnóstico del proveedor —
+> cada proveedor nuevo emite el MISMO protocolo `@@@SECTION` alimentando
+> `StreamSectionParser` delta a delta; el panel didáctico, la cache LRU y la ventana
+> desacoplada NO se tocan. Gotchas de main vigentes (sin backticks en strings largos,
+> `import.meta.dirname`, preload CJS, reiniciar `npm run dev` al tocar `src/main/**`).
+
+- [x] **T26. Modelo de datos proveedor+modelo (shared + settings + IPC)**
+  _Hecha y verificada (2026-07-07, subagente `a568dae75cf640dcd`). `src/shared/ai-providers.ts`
+  nuevo (catálogo por proveedor, `AiProviderId`, guards, defaults); `ai-models.ts` re-exporta
+  el slice OpenRouter. `store.ts`: `PersistedSettings={aiProvider, models}` con migración
+  in-memory de `{aiModel}` (no reescribe disco hasta el próximo setter). `env.ts`:
+  `getEffectiveAiSelection()` + `getAiSettingsInfo()`. IPC: `settings:get`→`AiSettingsInfo`,
+  nuevos `settings:setAiProvider`/`setProviderModel` con guards. Renderer adaptado al mínimo
+  (OpenRouter sin cambios de comportamiento). Verificado por el orquestador: typecheck (node+web),
+  lint, 318 tests verdes; migración y precedencia con tests unit. index.ts (factory) sin tocar,
+  lo refactoriza T27._
+  Contexto: hoy `src/shared/ai-models.ts` es una lista plana de IDs de OpenRouter y
+  `src/main/settings/store.ts` persiste `{ aiModel: string }`. Hay que modelar N
+  proveedores, cada uno con su lista de modelos y su modelo seleccionado, y qué proveedor
+  está activo — sin romper archivos `settings.json` viejos.
+  Entregables:
+  (a) `src/shared/ai-providers.ts` (o extender `ai-models.ts`): tipo `AiProviderId =
+  'openrouter' | 'claude-code' | 'codex'`; catálogo `{ provider, label, models: {id,
+  label, vendor}[] }`. La lista curada ACTUAL migra bajo `openrouter` (los IDs de hoy
+  aplican SOLO a OpenRouter). Claude Code: `claude-fable-5`, `claude-opus-4-8`,
+  `claude-sonnet-5`, `claude-haiku-4-5` (labels legibles). Codex: placeholder curado
+  (`gpt-5.5-codex`, etc.) que T29 podrá refrescar dinámicamente. `DEFAULT_AI_PROVIDER =
+  'openrouter'`, default de modelo por proveedor.
+  (b) `store.ts`: `PersistedSettings` → `{ aiProvider: AiProviderId, models: Partial<Record<AiProviderId,string>> }`.
+  **Migración**: si al leer aparece la forma vieja `{ aiModel }`, mapear a
+  `{ aiProvider:'openrouter', models:{openrouter: aiModel} }` (no perder la elección
+  previa de Edilson). `isValidPersistedSettings` acepta ambas formas; setters nuevos
+  `setAiProvider(id)` y `setProviderModel(provider, modelId)`, escritura atómica intacta.
+  (c) `src/main/ai/env.ts`: `getEffectiveAiSelection()` → `{ provider, model }` con
+  precedencia settings > env (`MINERVA_AI_PROVIDER` + `MINERVA_AI_MODEL`) > default.
+  Mantener `getEffectiveAiModel()` como shim si algo lo usa aún.
+  (d) `src/shared/ipc.ts` + validators + handlers + preload: `settings:get` responde la
+  selección completa + catálogo; nuevos `settings:setAiProvider` y
+  `settings:setProviderModel` con sus guards (provider ∈ enum; model string ≤100). El
+  tipo `AssertNoMissingChannel` obliga a tocar `IPC_CHANNELS` y `payloadValidators`.
+  _Aceptación:_ typecheck/lint/tests verdes; test unit de migración (forma vieja → nueva);
+  el settings viejo `{aiModel:"z-ai/glm-5.2"}` en userData se lee como OpenRouter+ese
+  modelo tras el cambio (sin perder selección). Sin tocar UI todavía (T30).
+
+- [x] **T27. Abstracción de proveedores + probe de estado de login**
+  _Hecha y verificada (2026-07-07, subagente `aa6a336cbfbed9b48`). `providers/registry.ts`
+  (metadata authKind api-key/cli + binario), `providers/cli-probe.ts` (execFile `--version`
+  timeout 1500ms, cache TTL 5s, login best-effort por existencia de `~/.claude/.credentials.json`
+  con `subscriptionType`→plan y `~/.codex/auth.json`; TODO handshake real en T28/T29),
+  `providers/provider-status.ts` (agregador). Canal `ai:getProviderStatus` → `Record<AiProviderId,
+  {status:'unavailable'|'installed'|'authenticated', account?:{email?,plan?}}>` (sin secretos).
+  Factory `createAiService` refactor: elige por proveedor activo, OpenRouter idéntico al actual,
+  claude-code/codex caen a mock con `// T28`/`// T29`. Verificado por orquestador: typecheck,
+  lint, 333 tests (nuevos: cli-probe, provider-status, index factory)._
+  Contexto: `createAiService` (`src/main/ai/index.ts:26`) hoy es binario (key→OpenRouter,
+  else mock). Pasa a resolver por proveedor activo. Se necesita saber, por proveedor, si
+  está disponible/autenticado (OpenRouter: ¿hay key?; Claude/Codex: ¿CLI instalado y
+  logueado?). Patrón a imitar: `src/main/auth/auth-manager.ts` (estado sin exponer
+  secretos vía `getStatus()`).
+  Entregables:
+  (a) `src/main/ai/providers/registry.ts`: metadata por proveedor (id, label, cómo se
+  autentica: `api-key` | `cli`, binario esperado, cómo lista modelos).
+  (b) `src/main/ai/providers/cli-probe.ts`: detección no bloqueante de `claude`/`codex`
+  (existe en PATH; versión; ¿logueado? leyendo el handshake — Claude:
+  `query().initializationResult().account`; Codex: `account/read` RPC). Cachear resultado
+  con TTL corto; NUNCA colgar el arranque (timeout + degradar a "no disponible").
+  (c) canal IPC `ai:getProviderStatus` → por proveedor `{ status:
+  'unavailable'|'installed'|'authenticated', account?: {email?, plan?} }` (SIN tokens).
+  (d) refactor `createAiService(github)` → lee selección de settings, instancia
+  `OpenRouterAiService` | `ClaudeCodeAiService` | `CodexAiService`; fallback a
+  `MockAiService` si el proveedor activo no está autenticado (con log claro del porqué).
+  _Aceptación:_ typecheck/lint/tests; el probe reporta correcto el estado real de la
+  máquina de Edilson (claude instalado/logueado; codex según lo instale); arranque de la
+  app NO se degrada en tiempo aunque los CLIs falten; con OpenRouter activo + key, el
+  comportamiento actual queda idéntico (no-regresión del análisis existente).
+
+- [x] **T28. `ClaudeCodeAiService` (Agent SDK oficial)**
+  Contexto: adaptador que implementa `AiService` usando `@anthropic-ai/claude-agent-sdk`
+  (NUEVA dependencia; binarios nativos por plataforma — anotar para T31/empaquetado).
+  Reutiliza `buildUserMessage` y `ANALYZE_PR_SYSTEM_PROMPT` (mismos que OpenRouter) y
+  emite el protocolo `@@@SECTION` alimentando `StreamSectionParser`.
+  Entregables: `src/main/ai/providers/claude-code-service.ts`: `query({ prompt, options:{
+  ... , model, allowedTools:[], persistSession:false }})`, iterar el stream, empujar los
+  deltas de texto al parser (`onProgress`), mismos timeouts (120s total / 20s inactividad)
+  y mapeo de errores (no autenticado → mensaje accionable "corré `claude login`"). Modelos
+  desde el registry (T26), filtrables por versión del CLI si aplica.
+  Gotchas: sin tools (una sola vuelta de generación, no un loop de agente); el system
+  prompt de análisis va por el canal que el SDK ofrezca para system/append; NO inventar
+  headers de suplantación — el SDK ya se autentica solo con la sesión del CLI.
+  _Aceptación (orquestador):_ typecheck/lint/tests; análisis real de un PR mock con Claude
+  Code seleccionado, streameando secciones por el mismo pipeline; captura mirada del panel
+  con contenido real; verificar que sin login degrada con mensaje claro (no crash).
+  **Acción humana**: Edilson con `claude` logueado.
+  _Implementado y verificado a nivel unit (2026-07-07, subagente `adec8a6ea6cd03e41`).
+  Dep `@anthropic-ai/claude-agent-sdk@0.3.203`. `claude-code-service.ts` usa `query({prompt,
+  options:{model, systemPrompt: ANALYZE_PR_SYSTEM_PROMPT, tools:[], maxTurns:1,
+  persistSession:false, settingSources:[], includePartialMessages:true, abortController}})`;
+  extrae deltas de `stream_event`→`content_block_delta`→`text_delta` → parser. Errores
+  accionables (authentication_failed→`claude login`, ENOENT→binario). Módulos compartidos
+  extraídos: `analysis-prompt.ts` (prId, buildUserMessage) y `analysis-timeouts.ts`. IDs de
+  modelo verificados contra el .d.ts del SDK (`claude-sonnet-5`/`opus-4-8`/`fable-5`
+  coinciden; `haiku-4-5` a confirmar e2e). Probe NO refinado al handshake (decisión: hot
+  path barato). 10 tests unit. **FIX del orquestador**: `createAiService` se volvió async
+  (consulta el probe) y `handlers.ts` lo resolvía UNA vez al arranque → el cambio de
+  proveedor en Settings no surtía efecto sin reiniciar; movido a resolverse POR ANÁLISIS
+  dentro del handler (tras cache/in-flight hits). typecheck/lint/358 tests verdes.
+  **VERIFICADO e2e (2026-07-07)**: análisis real de shopwave/api#482 con Claude Code (plan Max) en 19.6s → 4 secciones reales (summary, setup, architecture, endpoint). Probe reporta claude-code authenticated con plan="max". Captura mirada de la pantalla de proveedores. **HECHO.**_
+
+- [x] **T29. `CodexAiService` (`codex app-server` JSON-RPC)**
+  Contexto: adaptador que spawnea `codex app-server` y habla JSON-RPC 2.0 por stdio.
+  Referencia de wire: `packages/effect-codex-app-server` de t3code. Emite `@@@SECTION` al
+  parser igual que los demás.
+  Entregables: `src/main/ai/providers/codex-service.ts` + un cliente JSON-RPC mínimo sobre
+  el stdio del proceso hijo: `initialize` → `initialized` → `account/read` (estado) →
+  `thread/start` → `turn/start` (con el prompt de análisis), capturar los item deltas de
+  texto (`item/*`) → `parser.push`. Modelos vía `model/list` RPC (paginado) con fallback
+  al curado de T26. Manejo de: no autenticado (`codex login`), CLI ausente, cierre/limpieza
+  del proceso hijo, timeouts.
+  Gotchas: proceso hijo de larga vida gestionado desde `main` (matar en `app.quit`); fijar
+  versión mínima del CLI y detectar incompatibilidad del protocolo; sanear el entorno del
+  spawn.
+  _Aceptación:_ typecheck/lint/tests; análisis real de un PR mock con Codex seleccionado,
+  streameando por el pipeline; captura mirada; sin login/CLI degrada con mensaje claro.
+  **Acción humana**: Edilson instala y loguea `codex`.
+  _Implementado por subagente `a9915ffaec7c2a6cc` PERO **reescrito por el orquestador**: el
+  subagente no encontró el clon de t3code y adivinó el wire (initialize sin params,
+  `instructions`, input como string) → NO habría funcionado. El orquestador descubrió el
+  protocolo REAL del binario 0.142.5 con `codex app-server generate-ts`/`generate-json-schema`
+  (¡el binario genera su propio esquema!) + un turno de humo en vivo, y corrigió
+  `codex-service.ts`: `initialize` con clientInfo+capabilities{experimentalApi:true};
+  system prompt en `baseInstructions` (NO `instructions`); `thread/start` con
+  `sandbox:'read-only'`+`approvalPolicy:'never'` (Codex es agente de código, sin esto ejecuta
+  comandos); threadId de `result.thread.id`; `turn/start.input` = `[{type:'text',text,text_elements:[]}]`
+  (Array<UserInput>); **`turn/start` es ack inmediato (`inProgress`) — el fin es la
+  notificación `turn/completed`** (el código original mataba el proceso tras el ack → 0
+  deltas); delta de texto SOLO en `item/agentMessage/delta`.params.delta. Modelo real =
+  `gpt-5.5` (no `gpt-5.5-codex`; catálogo corregido). El cliente JSON-RPC (framing JSONL) del
+  subagente estaba OK. **VERIFICADO e2e (2026-07-07)**: análisis real de shopwave/api#482 con
+  Codex (gpt-5.5, cuenta ChatGPT prolite de Edilson) en 28.5s → 4 secciones reales. Probe
+  reporta codex authenticated. 10 tests unit reescritos al protocolo real. **HECHO.**_
+
+- [x] **T30. UI de selección de proveedor y modelo (Settings) + estado de login**
+  Contexto: `src/renderer/src/components/settings/SettingsModal.tsx` monta hoy un
+  `ModelPicker` de lista plana. Nueva pantalla: elegir PROVEEDOR (con su estado de login)
+  y luego MODELO dentro del proveedor. Transparente al hook `use-didactic-analysis` (no se
+  toca).
+  Entregables:
+  (a) Vista de proveedores: card por proveedor con chip de estado (`ai:getProviderStatus`)
+  — "Conectado (email/plan)" | "Instalado, sin sesión" | "No disponible" — y acción
+  contextual: OpenRouter → gestionar key (o nota de que va por `.env` hasta que exista la
+  tarea safeStorage); Claude/Codex → botón "Conectar" que dispara/guía el login del CLI y
+  un enlace a instalarlo si falta.
+  (b) Al seleccionar proveedor, `ModelPicker` filtra a los modelos de ese proveedor
+  (catálogo de T26); persistir vía `settings:setAiProvider`/`setProviderModel`.
+  (c) `use-provider-status.ts` (hook) + `ActiveModelHint` muestra "proveedor · modelo".
+  _Aceptación:_ typecheck/lint/tests; smoke e2e CDP nuevo (`smoke-providers.mjs`):
+  cambiar de proveedor, ver estados de login, seleccionar modelo, persistencia tras
+  reabrir; **captura mirada** de la pantalla en cada estado. Reglas de suites: target CDP
+  `!url.includes('#didactic')`, limpiar estado global al arrancar, verificar contenido.
+  _Hecha y verificada (2026-07-07, subagente `adec8a6ea6cd03e41`). `ProviderPicker` (card por
+  proveedor con chip de estado desde `ai:getProviderStatus`), `OpenRouterKeyForm` (campo
+  password + Guardar/Borrar + fuente de la key), `CliLoginGuide` (guía `claude login`/`codex
+  login` + "Volver a comprobar"), `ModelPicker` filtrado por proveedor (campo libre "Otro"
+  solo OpenRouter), hooks `use-provider-status`/`use-openrouter-key`, `ActiveModelHint` =
+  "proveedor · modelo". **VERIFICADO e2e por el orquestador (2026-07-07)**: captura mirada de
+  la pantalla con los 3 proveedores "Conectado" (Claude Code · max, Codex, OpenRouter),
+  detalle por proveedor, selector filtrado (4 modelos Claude / 6 OpenRouter+Otro / gpt-5.5
+  Codex), y el campo de key de OpenRouter mostrando "Tomada de tu archivo .env — guardala acá
+  para que quede cifrada". El cambio de proveedor surte efecto en el análisis sin reiniciar
+  (fix del handler, ver T28). **HECHO.**_
+
+- [x] **T31. Empaquetado + frontera de seguridad de los CLIs/SDK**
+  Contexto: el Agent SDK trae binarios nativos por plataforma; hay spawn de procesos hijos
+  desde `main`. Revisar contra la frontera de seguridad de `CLAUDE.md`.
+  Entregables: `asarUnpack` en `electron-builder.yml` para los binarios del Agent SDK
+  (verificar que el AppImage los ejecuta); confirmar que los tokens de los CLIs NUNCA
+  llegan al renderer (viven en `~/.claude`/`~/.codex`, fuera de Minerva); entorno saneado
+  en los spawns; nota en README (§ Empaquetado / requisitos) de que Claude/Codex requieren
+  sus CLIs instalados y logueados; medir el impacto en tamaño del AppImage.
+  _Aceptación:_ `npm run dist` produce un AppImage funcional; `smoke-packaged.mjs` sigue
+  verde; análisis real con Claude Code funcionando DESDE el empaquetado (no solo dev);
+  captura mirada; revisión de que no se filtran secretos al renderer.
+  _**HECHA Y VERIFICADA E2E** (2026-07-07, subagente `a467578c9338cef66` + verificación del
+  orquestador). ENFOQUE: NO se bundlea el binario del Agent SDK (~250MB/plataforma); se usa el
+  `claude`/`codex` del sistema. Verificado que el SDK funciona con `pathToClaudeCodeExecutable`
+  al claude del PATH. Entregables: `resolve-cli.ts` (resuelve el binario en PATH + ubicaciones
+  comunes ~/.local/bin, /usr/local/bin, /opt/homebrew/bin, ~/.npm-global/bin, ~/.bun/bin, etc.;
+  Windows best-effort con .cmd/.exe), usado en claude-code-service (`pathToClaudeCodeExecutable`),
+  codex-app-server-client (spawn) y cli-probe (si null → unavailable sin spawnear).
+  `spawn-env.ts` compartido (sanea OPENROUTER_API_KEY/GITHUB_TOKEN del entorno del hijo, ahora
+  también en Claude). `electron-builder.yml`: `!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**`.
+  392 tests. **Verificación del orquestador**: `npm run dist` → AppImage **125M** (vs 124M
+  pre-SDK, o sea el binario de 250MB QUEDÓ FUERA); asar confirma SDK JS `sdk.mjs` presente pero
+  `claude-agent-sdk-linux` ausente; `.env` excluido; **análisis real con Claude Code DESDE el
+  AppImage empaquetado en 21.0s → 4 secciones** (resuelve el claude del sistema); probe reporta
+  claude-code=max/codex=ok/openrouter=unavailable (correcto: .env fuera del asar → la key va por
+  safeStorage/T32 en prod); smoke-packaged 6/6. **HECHA.**
+  MEJORA IDENTIFICADA (investigación de t3code, subagente `a0796af9884396a46`): t3code valida el
+  mismo enfoque (usa `claude`/`codex` del sistema, NO el binario vendorizado; de hecho ellos NO
+  excluyen el peso muerto de 250MB → nuestro build es MÁS liviano). PERO t3code resuelve el PATH
+  de forma más robusta: al arrancar lanza un **shell de login** (`$SHELL -ilc` para leer `$PATH`
+  real; `launchctl getenv PATH` en macOS; PowerShell con perfil en Windows) e inyecta ese PATH en
+  `process.env` — así encuentra CLIs instalados vía nvm/volta/fnm/rutas custom que nuestra lista
+  hardcodeada de `resolve-cli.ts` no cubre. Para Edilson (claude en ~/.local/bin) YA funciona;
+  la mejora es para robustez de distribución general. Candidata a T33 (opcional)._
+
+- [x] **T32. `OPENROUTER_API_KEY` persistente (safeStorage) — backend + IPC**
+  _Backend hecho y verificado (2026-07-07, subagente `aa59330f9b40573dd`). `openrouter-key-store.ts`
+  (cifra con safeStorage, `openrouter-key.bin`, degrada a memoria); `env.ts` precedencia
+  safeStorage > env > .env vía `resolveOpenRouterApiKey()` + `getOpenRouterKeyStatus()`; canales
+  `settings:setOpenRouterKey` ({key}, vacío=borrar) y `settings:getOpenRouterKeyStatus` →
+  `{configured, source:'safeStorage'|'env'|'none'}`. La key NUNCA cruza al renderer (verificado:
+  `loadApiKey` solo en env.ts). provider-status ya la reconoce como authenticated. 346 tests.
+  **La UI del campo se implementa en T30.**_
+  Contexto: cierra el pendiente histórico "key vía safeStorage + campo en Settings". Hoy
+  la key SOLO se lee de `.env`/`process.env` (`src/main/ai/env.ts`, `getAiEnv`). Patrón a
+  imitar exacto: `src/main/auth/token-store.ts` (cifra con `safeStorage`, guarda un `.bin`
+  en `app.getPath('userData')`, degrada a solo-memoria si `isEncryptionAvailable()` es
+  false). La key es SECRETA → NO va en `settings.json` plano (ese es para provider/model,
+  T26); va cifrada aparte.
+  Entregables:
+  (a) `src/main/ai/openrouter-key-store.ts` (o extender token-store parametrizado):
+  `saveApiKey(key)`, `loadApiKey(): string|null`, `clearApiKey()`, archivo
+  `openrouter-key.bin`. Mismo comportamiento de degradación que el token de GitHub.
+  (b) `ai/env.ts`: `getAiEnv()` / la resolución de la key pasa a precedencia
+  **safeStorage > env `OPENROUTER_API_KEY`** (la key guardada por el usuario gana; si no
+  hay, cae al `.env`/env var de hoy — no romper el flujo actual de dev).
+  (c) IPC: `settings:setOpenRouterKey` (`{key: string}`, se guarda y se limpia si viene
+  vacía) y `settings:getOpenRouterKeyStatus` (→ `{ configured: boolean, source:
+  'safeStorage'|'env'|'none' }` — NUNCA devuelve la key). Guards + handlers + preload.
+  El refactor del factory (T27) debe reconocer la key de safeStorage como "OpenRouter
+  autenticado".
+  (d) UI (se integra en la pantalla de proveedores de T30): en la card de OpenRouter, un
+  campo para pegar la key (input `password`), botón guardar y botón borrar, con estado
+  "Configurada (safeStorage) / Tomada de .env / No configurada". Nunca re-mostrar la key.
+  Gotchas: la key jamás cruza al renderer (solo el `configured`/`source`); `safeStorage`
+  en Hyprland necesita el `--password-store=gnome-libsecret` que main ya fuerza (mismo
+  gotcha que el token de GitHub); escritura del `.bin` con permisos restrictivos.
+  _Aceptación (orquestador):_ typecheck/lint/tests; guardar una key desde la UI, reiniciar
+  la app y verificar que OpenRouter queda autenticado sin `.env`; borrar la key vuelve a
+  "no configurada" (o cae al `.env` si existe); la key NO aparece en ningún payload del
+  renderer (revisión de la frontera); captura mirada del campo en sus tres estados.
+  Ordena: depende de T26 (settings/ipc reestructurados) y se coordina con T27 (factory) y
+  T30 (UI). Implementar tras T26; la parte UI junto con T30.
+  _**HECHO** (backend subagente `aa59330f9b40573dd`, UI dentro de T30). VERIFICADO e2e
+  (2026-07-07): con la key en `.env`, la card de OpenRouter muestra el campo con estado
+  "Tomada de tu archivo .env — guardala acá para que quede cifrada" + Guardar/Borrar
+  (captura mirada); provider-status reporta openrouter authenticated; la key no cruza al
+  renderer (grep: `loadApiKey` solo en env.ts). Pendiente opcional: que Edilson pruebe el
+  guardado real vía safeStorage desde la UI si quiere migrar del `.env`._
+
+- [x] **T33. PATH robusto para app GUI (hidratación vía shell de login)**
+  Contexto: mejora identificada en la investigación de t3code (ver nota de T31). Una app
+  Electron lanzada desde el LAUNCHER del SO hereda un PATH mínimo, no el del shell del
+  usuario → `resolve-cli.ts` podría no encontrar `claude`/`codex` si viven en una ruta que
+  solo el shell conoce (nvm/volta/fnm/mise, prefijos globales de npm/pnpm/bun, rutas custom).
+  Entregables: `src/main/system/shell-path.ts` — `hydratePathFromLoginShell()`: lanza el
+  shell de login del usuario (`$SHELL -ilc`, marcadores para aislar el `$PATH` del ruido del
+  perfil, timeout 2.5s), con fallback `launchctl getenv PATH` en macOS; fusiona (append sin
+  duplicar, nunca reemplaza) el PATH capturado en `process.env.PATH`. No-op en Windows (las
+  GUI heredan el PATH del registro) y nunca lanza (fallo → PATH intacto). Enganchado en
+  `index.ts` (whenReady, **solo si `app.isPackaged`**, ANTES de `registerIpcHandlers` para que
+  el probe/resolve-cli ya vean el PATH completo desde la primera resolución; en dev desde
+  terminal el PATH ya viene completo → no se toca). Helpers puros exportados
+  (`extractMarkedPath`, `mergePaths`) para test.
+  _**HECHA Y VERIFICADA** (2026-07-07). 8 unit tests (parseo con ruido + merge append-only +
+  dedupe + segmentos vacíos). **Mecanismo probado aislado en la máquina de Edilson**: con
+  `PATH=/usr/bin:/bin` (recortado como el launcher), `hydratePathFromLoginShell()` recupera
+  `~/.local/bin` Y `~/.local/share/mise/.../bin` (Edilson usa **mise** — ruta que resolve-cli
+  NO hardcodea, así que T33 aporta valor real más allá de ~/.local/bin). AppImage rebuildeado
+  con T33 = 125M, arranca OK con la hidratación activa, smoke-packaged 6/6 (el enganche no
+  rompió el arranque). 400 tests totales. **HECHA.**_
+
+---
+
+## Log F7 — Gotcha clave: el protocolo de `codex app-server` se AUTO-GENERA
+
+**2026-07-07 (T29).** El binario `codex` puede emitir su propio contrato del app-server:
+`codex app-server generate-ts --out <dir>` (bindings TypeScript) y
+`codex app-server generate-json-schema --out <dir>` (JSON Schema). Es la FUENTE DE VERDAD por
+versión del CLI — mejor que t3code (que puede ir en otra versión). Verdades del protocolo
+0.142.5 (transport `stdio://` default, framing **JSONL** = un objeto JSON por línea, NO
+Content-Length):
+- Handshake: `initialize`(request, params `{clientInfo, capabilities:{experimentalApi:true,…}}`)
+  → `initialized`(notify, sin params) → `account/read`(`{refreshToken:false}` →
+  `{account: {type:'chatgpt', email, planType} | null, requiresOpenaiAuth}`; **auth = account
+  != null**, `requiresOpenaiAuth` es true aun logueado).
+- `thread/start` params `{model, baseInstructions, sandbox:'read-only', approvalPolicy:'never'}`
+  → `{thread:{id}, model}`. El system prompt va en **`baseInstructions`**. sandbox+approval
+  evitan que el agente ejecute comandos.
+- `turn/start` params `{threadId, input: Array<UserInput>}` con `UserInput = {type:'text',
+  text, text_elements:[]}`. **Resuelve con un ACK inmediato (`turn.status:'inProgress'`)** — el
+  fin real es la notificación **`turn/completed`**.
+- Deltas de texto del asistente: notificación **`item/agentMessage/delta`** con
+  `params.delta:string`. (Razonamiento va por `item/reasoning/textDelta` — ignorar.)
+- Modelos vía `model/list` → `{data:[{id:'gpt-5.5',…}]}`. Hoy solo `gpt-5.5` (default del
+  thread). NO existe un id `gpt-5.5-codex`.
+- Errores: notificación `error` `{message}`; o `turn/completed` con `turn.status:'failed'`.
+Reproducir el descubrimiento: `codex app-server generate-ts --out /tmp/x/ts` y leer
+`ClientRequest.ts`/`ServerNotification.ts`/`v2/*Params.ts`. El esquema JSON completo está en
+`codex_app_server_protocol.v2.schemas.json`.
+
+---
+
 ## Log
 
 - 2026-07-05: Plan creado. T1 lanzada a subagente Sonnet.
