@@ -32,7 +32,12 @@ interface UseDidacticAnalysisResult {
 }
 
 function toErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  const raw = error instanceof Error ? error.message : String(error)
+  // Un rechazo de `ipcRenderer.invoke` llega envuelto por Electron como
+  // "Error invoking remote method 'ai:...': Error: <mensaje real>". Ese
+  // prefijo es ruido para el usuario (el canal IPC no le dice nada) y ya
+  // main garantiza un mensaje limpio y accionable (`main/ipc/register.ts`).
+  return raw.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '')
 }
 
 /**

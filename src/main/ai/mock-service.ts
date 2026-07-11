@@ -94,7 +94,16 @@ export class MockAiService implements AiService {
 
     const fixture = prFixtures.find((f) => f.detail.id === prId)
     if (!fixture) {
-      throw new Error(`Pull request no encontrado: ${req.repo.fullName}#${req.number}`)
+      // Mensaje honesto: el PR existe perfectamente, es ESTE mock el que no
+      // lo conoce. Decir "Pull request no encontrado" culpaba al PR cuando el
+      // problema era la configuración de IA (ver `./index.ts`).
+      throw new Error(
+        'La IA en modo demo solo tiene análisis para los PRs de ejemplo; no conoce ' +
+          req.repo.fullName +
+          '#' +
+          req.number +
+          '. Configurá un proveedor de IA en Settings (engrane de la barra de título).',
+      )
     }
 
     const sections = await streamFixture([genericSummarySection(fixture.detail)], options?.onProgress)
