@@ -3,103 +3,110 @@
 > Sandbox del plan de la tarea actual. Se actualiza al empezar/terminar cada fase.
 > Control de tareas y bitácora: `TASKS.md`. Estrategia multi-agente: `WORKFLOW.md`.
 
-## Iteración actual (2026-07-07): F9 — Persistencia del análisis + metadata de generación + staleness por SHA
+## Iteración actual (2026-07-11): F10 — v0.3.0 Lista de PRs: filtro de estado, refresh, watcher de cambios y leído/no-leído
 
-> Rama `feature/analysis-persistence` (desde `feature/model-effort`/F8, aún sin PR/merge a
-> main). Nace de dos issues reportados por Edilson tras F8.
+> Rama `feature/pr-list-filters-watcher` (desde `main`). Versión `0.3.0`.
+> Pedido de Edilson (2026-07-11) con 4 decisiones confirmadas vía preguntas:
+> 1. Filtro segmented **Abiertos / Cerrados / Todos** (Cerrados incluye merged; badge
+>    distingue merged vs closed en cada item). Default: Abiertos.
+> 2. Polling desde **main cada 60s** (pausa sin sesión, backoff ante rate limit).
+> 3. **Solo indicadores in-app** (dots/colores). Notificaciones nativas del SO: follow-up.
+> 4. Un PR se marca **visto al abrirlo en el detalle** (sella `updatedAt` +
+>    `commentCount` actuales; si luego llega un update/comentario, el dot vuelve).
 
-### Los dos issues
+### Estado actual (relevado)
 
-1. **Banner obsoleto (Issue 1).** El header del panel didáctico muestra "vía
-   proveedor · modelo · esfuerzo" (`ActiveModelHint`), pero lo lee de la config ACTUAL
-   (`useSettings` → `settings:get`). Si cambio el proveedor/modelo/effort en Settings, el
-   banner de un análisis YA generado con la config anterior cambia — miente sobre con qué
-   se generó ese reporte. **El banner debe reflejar con qué se generó el análisis que se
-   está mostrando, no la config vigente.**
-
-2. **Persistencia + staleness por SHA (Issue 2).** Hoy `AnalysisCache` es SOLO en memoria
-   (se pierde al cerrar la app). El último resumen de un PR debe **persistir** entre
-   sesiones. Pero un PR puede recibir commits nuevos: si el **SHA del último commit del
-   head** cambia respecto al que tenía cuando se generó el resumen, hay que **avisar al
-   usuario y sugerirle actualizar** el panel didáctico (re-analizar re-pide diff/detalle,
-   así se re-solicitan los cambios del PR). Estrategia de alerta = comparar
-   `analysis.headSha` (sellado al generar) contra el `headSha` ACTUAL del PR.
+- `is:open` HARDCODEADO en la búsqueda (`real-service.ts:533`); sin paginación (top 50).
+- Sin polling de PRs, sin `refetch` en `use-pull-requests`, sin refresh manual en UI.
+- Único evento push main→renderer: `analysisProgress` (patrón `broadcastProgress` en
+  `handlers.ts:32` replicable).
+- Ningún estado leído/no-leído; `updatedAt` y `commentCount` YA vienen en el summary.
+- `PrListItem` no pinta `commentCount` hoy.
+- Fixtures mock: TODOS los PRs son `open` — hay que añadir closed/merged.
 
 ### Diseño
 
-**Modelo de datos (`shared/types.ts`)** — split limpio productor/consumidor:
-- `GeneratedAnalysis` = lo que produce un `AiService`: `{ prId, sections, generatedAt }`
-  (la forma vieja de `DidacticAnalysis`). El return type de `AiService.analyzePullRequest`
-  pasa a ser este.
-- `AnalysisGenerationInfo` = `{ provider: AiProviderId; model: string; options: Record<string,string> }`.
-- `DidacticAnalysis extends GeneratedAnalysis` = `+ headSha: string + generatedWith: AnalysisGenerationInfo`.
-  Es lo que se cachea, se persiste y se devuelve al renderer. **Solo el handler construye
-  este objeto enriquecido** (sella `headSha` + `generatedWith`); los servicios NO tocan
-  esos dos campos → cambio mínimo en openrouter/claude/codex/mock (solo su return type).
-- `PullRequestSummary` gana `headSha: string` (SHA del último commit del head), heredado
-  por `PullRequestDetail`.
+**Contrato (`src/shared/`)**
+- `types.ts`: `PrStateFilter = 'open' | 'closed' | 'all'`;
+  `PrUnread = { isNew: boolean; hasUpdates: boolean; hasNewComments: boolean }`;
+  `PullRequestSummary.unread?: PrUnread` — OPCIONAL: lo decora SOLO el handler IPC
+  (los servicios GitHub quedan puros; `PullRequestDetail` no lo necesita).
+- `ipc.ts`: `github:listPullRequests` req → `{ search?, state?: PrStateFilter }`;
+  canal nuevo `github:markPrSeen` req `{ prId: string; updatedAt: string;
+  commentCount: number }` → res `{ ok: true }`.
+- `events.ts`: `MINERVA_EVENTS.prListChanged`, payload `PrListChangedEvent =
+  { changes: PrChange[] }` con `PrChange = { type: 'new_pr' | 'pr_closed' |
+  'pr_merged' | 'new_comments' | 'updated'; prId; number; title; repo: RepoRef }`.
+  Se emite SOLO cuando hay cambios (el primer snapshot es baseline silencioso).
+- Preload: `events.onPrListChanged(cb)` (método concreto, como `onAnalysisProgress`).
 
-**GitHub (`main/github/`)**:
-- `real-service.ts`: añadir `oid` al `lastCommit { nodes { commit { oid statusCheckRollup } } }`
-  en AMBAS queries (search + detail); mapear a `headSha` en `mapSearchNode`/`mapDetailNode`.
-- `mock-service.ts` + `fixtures.ts`: cada fixture con un `headSha` estable; el mock devuelve
-  ese SHA en summary/detail. **Afordance de test** (solo mock): poder mutar el `headSha` de
-  un PR en runtime para verificar staleness e2e (canal debug gated a mock — ver T42).
+**Main — GitHub (`src/main/github/`)**
+- `real-service.ts`: qualifier por estado — open→`is:open`, closed→`is:closed`,
+  all→ninguno — y `sort:updated-desc` SIEMPRE (determinismo; con closed en juego los
+  50 más recientes son los relevantes).
+- `mock-service.ts`: filtro por estado en memoria; `fixtures.ts` gana 2–3 PRs
+  closed/merged (gotcha: sin backticks en strings de fixtures).
+- `seen-store.ts` NUEVO: `pr-seen.json` en userData, patrón `settings/store.ts`
+  (lazy `app.getPath` — nunca en import/constructor —, escritura atómica tmp+rename,
+  tolerante a corrupción). Map `prId → { updatedAt, commentCount, seenAt }`, cap 1000
+  entradas (prune por `seenAt` más viejo). API: `get`, `markSeen`,
+  `computeUnread(summary): PrUnread` (`isNew` = sin entrada; `hasUpdates` =
+  `summary.updatedAt > entry.updatedAt`; `hasNewComments` = `commentCount >` sellado).
+  Primer arranque: sin entradas ⇒ todo aparece como no visto (honesto, decisión de diseño).
+- `pr-watcher.ts` NUEVO: `createPrWatcher({ list, broadcast })` con `start()/stop()`.
+  Tick cada 60s (`MINERVA_WATCH_INTERVAL_MS` lo overridea para e2e): pide
+  `listPullRequests({ state: 'all' })`, diff contra snapshot anterior (Map por id):
+  id nuevo → `new_pr`; open→closed/merged → `pr_closed`/`pr_merged`;
+  `commentCount`↑ → `new_comments`; `updatedAt` distinto → `updated`.
+  Broadcast `prListChanged` solo con `changes.length > 0`. Errores: "No autenticado"
+  ⇒ skip silencioso (reintenta al próximo tick); rate limit ⇒ backoff exponencial
+  (x2 hasta 15 min, reset al éxito). `stop()` en `before-quit`.
 
-**Persistencia a disco (`main/ai/analysis-store.ts` nuevo)**:
-- Réplica del patrón de `settings/store.ts`: `analyses.json` en `app.getPath('userData')`,
-  escritura atómica (tmp + rename), lectura perezosa tolerante a corrupción.
-- Forma: `{ version: 1, entries: [{ key: "owner/name#n", analysis: DidacticAnalysis }] }`,
-  orden = recencia LRU, cap 20 (igual que la cache en memoria).
-- `AnalysisCache` pasa a ser disk-backed: hidrata de disco en el primer acceso (perezoso,
-  app ya ready), write-through en `set`/`invalidate`. Entradas en disco con forma inválida
-  (sin `headSha`/`generatedWith`, corruptas) se descartan al hidratar, sin crashear.
+**Main — IPC (`src/main/ipc/`)**
+- `validators.ts`: `listPullRequests` acepta `state` (enum de 3); validator nuevo para
+  `markPrSeen` (prId string no vacío ≤200, updatedAt string ISO ≤64, commentCount
+  entero ≥0).
+- `handlers.ts`: decorar la respuesta de `listPullRequests` con `unread` vía seen-store
+  (capa handler, no servicio); handler `github:markPrSeen`; instanciar y arrancar el
+  watcher con el mismo `githubService` + patrón broadcast existente.
 
-**Handler (`ipc/handlers.ts`, `ai:analyzePullRequest`)** — sellado en el análisis NUEVO
-(solo en el camino de cache-miss, tras generar):
-- Captura `getEffectiveAiSelection()` → `{ provider, model, options }` = `generatedWith`.
-- Captura `headSha` del PR (fetch de `githubService.getPullRequestDetail(req)` — barato,
-  solo en cache-miss; el SHA rara vez cambia durante el análisis).
-- Enriquecer el `GeneratedAnalysis` del servicio → `DidacticAnalysis` completo antes de
-  `analysisCache.set(...)`. El evento terminal y el snapshot no cambian.
-
-**Renderer — Issue 1 (`ActiveModelHint` + `DidacticAnalysisArea`)**:
-- `ActiveModelHint` acepta un `generatedWith?: AnalysisGenerationInfo` opcional: si viene,
-  pinta proveedor/modelo/effort DESDE él (los labels salen del catálogo estático de
-  `useSettings().info.catalog`, que no cambia con la selección); si no viene (streaming en
-  curso, aún sin `analysis`), cae a la config actual como hoy.
-- `DidacticAnalysisArea`: cuando hay `analysis`, pasa `analysis.generatedWith`; en streaming
-  no pasa nada (se genera con la config vigente, es correcto mostrarla).
-
-**Renderer — Issue 2 (staleness)**:
-- `DidacticAnalysisArea` acepta `currentHeadSha?: string` opcional:
-  - Panel acoplado: `DidacticPanel` lo pasa desde `selectedPr.headSha` (ya lo tiene).
-  - Ventana desacoplada: no lo tiene → un hook fetchea el detalle una vez para el headSha.
-- `isStale = analysis && currentHeadSha && analysis.headSha !== currentHeadSha`.
-- Barra de aviso NO destructiva sobre el análisis: "Este PR recibió commits nuevos desde
-  que se generó este resumen (abc123 → def456). [Actualizar]". "Actualizar" = `reanalyze()`
-  (invalida + re-analiza; el AiService re-pide diff/detalle → re-solicita los cambios).
-  El análisis viejo sigue visible debajo mientras tanto.
+**Renderer (`src/renderer/src/`)**
+- `app-store.ts`: `prStateFilter: PrStateFilter` (default `'open'`) + `setPrStateFilter`
+  (sesión, sin persistir).
+- `use-pull-requests.ts`: param `state`; expone `refetch()`; se suscribe a
+  `onPrListChanged` → `refetch()` (respeta search+filtro vigentes); expone
+  `markSeen(pr)` → IPC `markPrSeen` + clear optimista de `unread` en el estado local.
+- `Sidebar.tsx`: header con segmented control (Abiertos | Cerrados | Todos) + botón
+  refresh (`RefreshCw`, `animate-spin` mientras `loading`); `onClick` del item:
+  `selectPr(pr)` + `markSeen(pr)`.
+- `PrListItem.tsx`: dot rojo (título) si `unread.isNew || unread.hasUpdates`; contador
+  de comentarios (icono `MessageSquare` + count, hoy no se pinta) con mini-dot rojo si
+  `unread.hasNewComments`; badge de estado para closed (gris/rojo) y merged (morado)
+  cuando `state !== 'open'`; título de PR visto sin updates ligeramente atenuado vs
+  no visto en `text-text`.
 
 ### Invariantes / gotchas a respetar
-- Pipeline de streaming AGNÓSTICO del proveedor (protocolo `@@@SECTION`): no se toca.
-- Secretos solo en main; el renderer nunca ve tokens/keys.
-- Gotchas de main: sin backticks en strings largos, `import.meta.dirname`, preload CJS,
-  reiniciar `npm run dev` al tocar `src/main/**`.
-- `analysisCache` es singleton de módulo: `app.getPath('userData')` SOLO perezoso (como
-  `settings/store.ts`), nunca en el constructor (app puede no estar ready).
-- Persistir SOLO análisis completos (mismo punto que el `analysisCache.set` actual).
+- Secretos solo en main; preload expone métodos concretos, jamás `ipcRenderer` crudo.
+- Main: sin backticks en strings largos, `import.meta.dirname`, preload CJS intacto.
+- `app.getPath('userData')` SIEMPRE perezoso (patrón settings-store).
+- Nada de `setState`-en-efecto en renderer (patrón `cancelled` + callbacks).
+- Suites e2e: target CDP excluye `#didactic`, limpiar estado global al arrancar,
+  señales inequívocas, `location.reload()` para resetear el store si hace falta.
 
 ### Fases (tareas en TASKS.md)
-- **T39** — Backbone de datos + GitHub headSha (types split, real-service `oid`, mock+fixtures).
-- **T40** — Stamping en el handler + persistencia a disco (`analysis-store.ts`, cache disk-backed).
-- **T41** — Banner desde el análisis (Issue 1).
-- **T42** — Staleness UI + prompt de actualización + afordance de test del mock (Issue 2).
+- **T50** — Contrato compartido + preload + validators (shared/ipc/events/preload).
+- **T51** — Main: filtro de estado real+mock, fixtures closed/merged, seen-store,
+  decoración unread + markPrSeen, watcher + broadcast. (Tras T50.)
+- **T52** — Renderer: filtro segmented + refresh + dots/badges + markSeen al abrir.
+  (Tras T50; en paralelo con T51.)
+- **T53** — Suite e2e `scripts/smoke-pr-list.mjs` + verificación integral.
 
 ### Verificación (orquestador)
 - typecheck/lint/`npm test` verdes.
-- E2e: (1) banner sella la config: analizar con proveedor A, cambiar Settings a B, el banner
-  sigue mostrando A; (2) persistencia: analizar → reiniciar app → el análisis sigue (sin
-  re-pagar LLM); (3) staleness: analizar (sha A) → mutar el sha del mock a B → reabrir el PR
-  → aparece la barra "commits nuevos" → "Actualizar" re-analiza y la barra desaparece.
-- Captura mirada de: banner sellado tras cambiar config, y barra de staleness.
+- E2e (MINERVA_MOCK=1 + CDP): (1) filtro: Abiertos no muestra closed, Cerrados muestra
+  closed+merged con badges, Todos muestra ambos; (2) refresh manual re-fetchea (spinner
+  + lista estable); (3) dots: PR no visto tiene dot, seleccionarlo lo apaga y persiste
+  tras reinicio (seen-store en disco); postComment sube commentCount ⇒ dot de
+  comentarios al refrescar; (4) watcher: con `MINERVA_WATCH_INTERVAL_MS` corto, un
+  cambio en el mock dispara `prListChanged` y la lista se actualiza sola.
+- Captura MIRADA de la sidebar: segmented + refresh + dots + badges merged/closed.

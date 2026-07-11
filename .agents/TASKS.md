@@ -1817,3 +1817,139 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   Gotcha nuevo: los probes CDP heredan el estado que las suites anteriores
   dejaron en el renderer (vista inline, wrap toggled) — un `location.reload()`
   al arrancar resetea el store zustand y devuelve los defaults reales.
+
+## F10 — v0.3.0: Lista de PRs con filtro de estado, refresh, watcher y leído/no-leído (2026-07-11)
+
+> Rama `feature/pr-list-filters-watcher`. Diseño completo en PLAN.md § "Iteración
+> actual (2026-07-11)". Decisiones de Edilson: filtro Abiertos/Cerrados/Todos
+> (Cerrados incluye merged, badge distingue), polling 60s desde main, solo
+> indicadores in-app, visto = abrir el PR en el detalle.
+
+- [ ] **T50. Contrato compartido: filtro de estado, markPrSeen y evento prListChanged**
+  Alcance: SOLO `src/shared/` + `src/preload/` + `src/main/ipc/validators.ts`.
+  Entregables:
+  (a) `types.ts`: `PrStateFilter = 'open' | 'closed' | 'all'`; `PrUnread =
+  { isNew: boolean; hasUpdates: boolean; hasNewComments: boolean }`;
+  `PullRequestSummary.unread?: PrUnread` (opcional — lo decora el handler, los
+  servicios GitHub no lo conocen).
+  (b) `ipc.ts`: `github:listPullRequests` req pasa a `{ search?: string;
+  state?: PrStateFilter }`; canal NUEVO `github:markPrSeen` req `{ prId: string;
+  updatedAt: string; commentCount: number }` → res `{ ok: true }`. Actualizar
+  `IPC_CHANNELS` (el assert de exhaustividad obliga).
+  (c) `events.ts`: `PrChange = { type: 'new_pr' | 'pr_closed' | 'pr_merged' |
+  'new_comments' | 'updated'; prId: string; number: number; title: string;
+  repo: RepoRef }`; `PrListChangedEvent = { changes: PrChange[] }`;
+  `MINERVA_EVENTS.prListChanged = 'minerva:event:prListChanged'`.
+  (d) `preload/index.ts`: exponer `github.markPrSeen` (sale solo del contrato) y
+  `events.onPrListChanged(cb)` — método concreto con unsubscribe, calcado de
+  `onAnalysisProgress` (incluye guard de payload).
+  (e) `validators.ts`: `listPullRequests` acepta `state` ∈ {open,closed,all}
+  además de `search`; validator de `markPrSeen` (prId string 1..200, updatedAt
+  string 1..64, commentCount entero ≥0; rechazar keys extra).
+  Gotchas: preload es CJS (no tocar config); ningún `ipcRenderer` crudo al
+  renderer; TypeScript estricto sin `any`.
+  _Aceptación:_ typecheck/lint/`npm test` verdes (los servicios main aún ignoran
+  `state`: compilar debe seguir en verde porque el campo es opcional).
+
+- [ ] **T51. Main: filtro de estado, fixtures cerrados, seen-store, unread y watcher**
+  Depende de T50. Alcance: `src/main/github/` + `src/main/ipc/handlers.ts`.
+  Entregables:
+  (a) `real-service.ts`: en `listPullRequests`, qualifier según `state`
+  (default open): open→"is:open", closed→"is:closed", all→sin qualifier de
+  estado; añadir "sort:updated-desc" SIEMPRE a la query de búsqueda.
+  (b) `mock-service.ts`: filtrar por `state` en memoria (merged cuenta como
+  closed para el filtro 'closed'); `fixtures.ts`: añadir 3 PRs nuevos del
+  universo shopwave — 1 `closed` y 2 `merged` — con detail/files/threads
+  mínimos coherentes. GOTCHA: sin backticks como delimitadores en strings de
+  fixtures (plugin vite:esm-shim); comillas normales concatenadas.
+  (c) `seen-store.ts` NUEVO: `pr-seen.json` en userData, patrón EXACTO de
+  `settings/store.ts` (lazy `app.getPath('userData')` — nunca en el
+  constructor —, cache en memoria, escritura atómica tmp+rename, lectura
+  tolerante a corrupción → objeto vacío). Forma: `{ version: 1, entries:
+  Record<prId, { updatedAt: string; commentCount: number; seenAt: string }> }`,
+  cap 1000 entradas (prune por seenAt más viejo al escribir). API:
+  `markSeen(prId, { updatedAt, commentCount })`, `computeUnread(summary):
+  PrUnread` (isNew = sin entrada; hasUpdates = updatedAt distinto Y más nuevo
+  que el sellado; hasNewComments = commentCount actual > sellado). Singleton
+  de módulo como `settingsStore`. Tests unit (fs mockeado o tmpdir).
+  (d) `handlers.ts`: `github:listPullRequests` decora cada summary con
+  `unread: seenStore.computeUnread(pr)` ANTES de responder; handler nuevo
+  `github:markPrSeen` → `seenStore.markSeen(...)` → `{ ok: true }`.
+  (e) `pr-watcher.ts` NUEVO en `src/main/github/`:
+  `createPrWatcher({ list, broadcast, intervalMs })` con `start()`/`stop()`.
+  `list` = `() => githubService.listPullRequests({ state: 'all' })`.
+  Tick: snapshot Map por `pr.id`; primer tick = baseline SIN broadcast; diffs
+  siguientes → `PrChange[]` (id nuevo → new_pr; open→closed/merged →
+  pr_closed/pr_merged; commentCount↑ → new_comments; si no, updatedAt
+  distinto → updated); broadcast `prListChanged` SOLO si hay cambios.
+  Errores: mensaje de "No autenticado" → skip silencioso; rate limit →
+  backoff x2 (hasta 15 min) con reset al éxito; cualquier otro error se
+  loguea y NO tumba el timer. `intervalMs` default 60000, overrideable con
+  env `MINERVA_WATCH_INTERVAL_MS` (parseInt válido > 0). Instanciarlo en
+  `registerIpcHandlers` (misma instancia de `githubService`, broadcast estilo
+  `broadcastProgress` a todas las ventanas) y `stop()` en `before-quit`.
+  Tests unit del diff/backoff con timers falsos.
+  Gotchas: `import.meta.dirname` (nunca `__dirname`); sin backticks en strings;
+  tocar `src/main/**` ⇒ los smokes requieren reinicio de `npm run dev`.
+  _Aceptación:_ typecheck/lint/`npm test` verdes con tests nuevos de
+  seen-store y pr-watcher; `MINERVA_MOCK=1` lista PRs con `unread` poblado y
+  los fixtures closed/merged aparecen con `state: 'closed'|'merged'` según filtro.
+
+- [ ] **T52. Renderer: segmented de estado, refresh manual, dots y visto-al-abrir**
+  Depende de T50 (puede correr en paralelo con T51 — con mock aún sin filtro
+  main, la UI compila y los estados llegan con T51).
+  Alcance: `src/renderer/src/` (store, hook, Sidebar, PrListItem, tests).
+  Entregables:
+  (a) `stores/app-store.ts`: `prStateFilter: PrStateFilter` (default 'open') +
+  `setPrStateFilter` (sesión, sin localStorage).
+  (b) `hooks/use-pull-requests.ts`: firma `usePullRequests(search, authState,
+  state)`; refetch al cambiar `state` (mismo debounce solo para search — el
+  cambio de filtro fetchea inmediato); exponer `refetch()` manual; suscripción
+  a `window.minerva.events.onPrListChanged` → `refetch()` (unsubscribe en
+  cleanup); exponer `markSeen(pr: PullRequestSummary)` → llama
+  `github.markPrSeen({ prId: pr.id, updatedAt: pr.updatedAt, commentCount:
+  pr.commentCount })` fire-and-forget + clear optimista del `unread` de ese
+  item en el estado local (map inmutable). GOTCHA linter react-hooks: nada de
+  setState síncrono en el cuerpo del efecto; patrón `cancelled` existente.
+  (c) `Sidebar.tsx`: header bajo el buscador con segmented control de 3
+  opciones (Abiertos | Cerrados | Todos, estilo tabs/pills consistente con el
+  tema) ligado a `prStateFilter`, y botón de refresh (icono `RefreshCw` de
+  lucide, `animate-spin` mientras `loading`, `aria-label="Actualizar"`,
+  disabled durante loading). En el onClick de cada item: `selectPr(pr)` +
+  `markSeen(pr)`. Los estados vacíos distinguen filtro ("No hay PRs cerrados"
+  vs "No hay PRs abiertos" vs "No hay PRs").
+  (d) `PrListItem.tsx`: (1) dot rojo `bg-danger` (~6px, rounded-full) junto al
+  título cuando `pr.unread && (unread.isNew || unread.hasUpdates)`, con
+  `aria-hidden` + title accesible; (2) contador de comentarios: icono
+  `MessageSquare` + `pr.commentCount` en la fila inferior (hoy NO se pinta),
+  con mini-dot rojo superpuesto cuando `unread.hasNewComments`; (3) badge de
+  estado cuando `pr.state !== 'open'`: "merged" (morado, p.ej.
+  text-purple-400/border) y "closed" (muted/danger suave); (4) jerarquía
+  visual: título de PR visto sin updates en tono atenuado (`text-text/70`),
+  no visto en `text-text` font-medium.
+  (e) Tests de renderer si existen patrones (revisar tests actuales de
+  componentes/hooks y seguirlos; como mínimo, tests del hook con
+  window.minerva mockeado si ya hay precedente).
+  _Aceptación:_ typecheck/lint/`npm test` verdes; con `MINERVA_MOCK=1`:
+  segmented cambia la lista, refresh gira y repuebla, dots visibles en PRs no
+  vistos y se apagan al seleccionar, badges merged/closed en el filtro
+  Cerrados/Todos, contador de comentarios visible.
+
+- [ ] **T53. Suite e2e `scripts/smoke-pr-list.mjs` + verificación integral v0.3.0**
+  Depende de T51+T52. Nueva suite CDP siguiendo las reglas del CLAUDE.md:
+  target excluye `#didactic`; limpiar estado global al arrancar
+  (`location.reload()` para resetear el store — gotcha T49 —, buscador vacío);
+  señales inequívocas. Casos: (1) filtro por estado (Abiertos sin
+  closed/merged; Cerrados solo closed+merged con badges; Todos ambos);
+  (2) botón refresh presente y funcional (click → lista estable, sin error);
+  (3) dot de no-visto presente en un PR fixture, seleccionar → dot desaparece;
+  (4) markPrSeen persiste (nueva query a main devuelve unread.isNew false);
+  (5) comentar vía `postComment` en OTRO PR mock sube commentCount → tras
+  refresh, dot de comentarios nuevos; (6) watcher: con
+  `MINERVA_WATCH_INTERVAL_MS=1500`, tras postComment el evento
+  `prListChanged` refresca la lista SIN refresh manual (esperar el cambio en
+  el DOM con timeout generoso). Verificación del orquestador: typecheck/lint/
+  tests, smoke-pr-list + regresión de smoke-e2e y smoke-comments, y captura
+  MIRADA de la sidebar (segmented + dots + badges).
+  _Aceptación:_ suite verde 2 corridas seguidas (sin flakiness); regresiones
+  verdes; captura revisada.
