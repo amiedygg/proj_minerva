@@ -1755,3 +1755,24 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   (pendiente re-escribirla). (2) Con hyprlock activo `screenshot-app.sh` captura
   el splash del lock; `screenshot-cdp.mjs` sí funciona (esta vez no se colgó,
   matiz vs. T44).
+
+- [x] **T47. Reescritura de `scripts/smoke-settings.mjs` (multi-proveedor)**
+  _Hecha y verificada (2026-07-11, rama `fix/smoke-settings-multiprovider`)._
+  Repara la obsolescencia detectada en T46: la suite T12 validaba el campo
+  legacy `aiModel` (que `settings:get` no devuelve desde T26), asumía
+  OpenRouter como proveedor activo, dejaba un modelo inválido persistido en el
+  settings.json REAL si crasheaba a mitad, y dejaba el modal abierto. La nueva
+  suite: (1) NO asume proveedor/modelo activo — snapshotea la selección al
+  arrancar y la restaura en un `finally` (incluye cerrar el modal); (2) valida
+  la forma multi-proveedor de `settings:get` (provider/model/modelSource/
+  perProviderModel/catalog) y el catálogo curado al día (regresión T46:
+  GPT-5.6 con `ultra` en codex y en openrouter); (3) `setAiProvider`,
+  `setProviderModel`, persistencia en disco por proveedor, y `setModelOption`
+  (T34, effort high → selectedOptions, luego de vuelta al default); (4) corta
+  con exit 2 y mensaje claro si OpenRouter no está `authenticated` (antes un
+  "sin key" podía disfrazarse de PASS en el check del modelo inválido); (5)
+  conserva los checks de análisis (inválido → error 400 de OpenRouter, válido
+  → secciones reales). Verificación: 2 corridas seguidas 9/9 (idempotente) con
+  MINERVA_MOCK=1 + IA real, y settings.json del usuario intacto al terminar
+  (residuo tolerado y documentado: `modelOptions.openrouter.effort='medium'`,
+  el default). lint verde.

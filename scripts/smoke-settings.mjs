@@ -1,8 +1,24 @@
 /**
- * Smoke e2e de settings (T12) vía CDP. Verifica: modal, default GLM 5.2,
- * guardar modelo, persistencia en disco, y que el análisis usa el modelo
- * elegido (guardando un modelo inválido y esperando el error de OpenRouter).
- * Requiere: app corriendo con --remote-debugging-port=9222 y OPENROUTER_API_KEY.
+ * Smoke e2e de settings vía CDP — versión multi-proveedor (T46; reemplaza la
+ * suite T12, que quedó obsoleta con el refactor T26: validaba el campo legacy
+ * `aiModel` que `settings:get` ya no devuelve y ASUMÍA OpenRouter como
+ * proveedor activo, así que fallaba por estado persistido, no por bugs).
+ *
+ * Verifica: forma multi-proveedor de `settings:get`, catálogo curado (incluida
+ * la familia GPT-5.6 de T46), cambio de proveedor activo, persistencia de
+ * modelo por proveedor en disco, opciones de modelo (effort, T34), que el
+ * análisis usa el modelo de settings (modelo inválido → error de OpenRouter;
+ * modelo válido → análisis real), y el modal de la UI.
+ *
+ * Estado global: la suite NO asume el proveedor/modelo activo — snapshotea la
+ * selección al arrancar y la RESTAURA en un `finally` (también si un check
+ * revienta a mitad), porque escribe en el settings.json REAL de userData.
+ * Único residuo tolerado (documentado): si el perfil era virgen, al restaurar
+ * quedan persistidos el proveedor y modelo por defecto (mismo valor efectivo).
+ *
+ * Requiere: app corriendo con --remote-debugging-port=9222, MINERVA_MOCK=1 y
+ * key de OpenRouter configurada (se verifica vía ai:getProviderStatus antes de
+ * los pasos de análisis, para no confundir "sin key" con "usa el modelo malo").
  */
 import WebSocket from 'ws'
 import { readFileSync } from 'node:fs'
@@ -50,7 +66,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const checks = []
 const check = (name, cond, extra) => {
   checks.push(cond)
-  console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${!cond && extra ? ' — ' + extra : ''}`)
+  console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${!cond && extra ? ' — ' + JSON.stringify(extra).slice(0, 300) : ''}`)
 }
 
 for (let i = 0; i < 20; i++) {
@@ -59,90 +75,168 @@ for (let i = 0; i < 20; i++) {
   await sleep(500)
 }
 
-// 1. settings:get inicial → GLM 5.2. `source` es 'default' SOLO en un perfil
-// virgen: esta misma suite persiste 'z-ai/glm-5.2' al final (paso 5), así que
-// en corridas repetidas la fuente legítima es 'settings' con el mismo valor.
-const initial = await evaluate('window.minerva.settings.get()')
-check(
-  'modelo inicial es z-ai/glm-5.2 (default o persistido por corrida previa)',
-  initial?.aiModel === 'z-ai/glm-5.2' &&
-    (initial?.aiModelSource === 'default' || initial?.aiModelSource === 'settings'),
-  JSON.stringify(initial),
-)
-
-// 2. guardar modelo inválido (vía IPC — mismo camino que la UI)
-const bad = await evaluate(
-  `window.minerva.settings.setAiModel({ aiModel: 'proj-minerva/invalid-model-e2e' })`,
-)
-check(
-  'setAiModel persiste y devuelve source settings',
-  bad?.aiModel === 'proj-minerva/invalid-model-e2e' && bad?.aiModelSource === 'settings',
-  JSON.stringify(bad),
-)
-
-// 3. persistencia en disco
-let onDisk
-try {
-  const p = join(homedir(), '.config', 'proj-minerva', 'settings.json')
-  onDisk = JSON.parse(readFileSync(p, 'utf8'))
-} catch (e) {
-  onDisk = { error: e.message }
+// Snapshot para restaurar en el finally: proveedor activo y modelo persistido
+// de OpenRouter (los dos únicos campos que esta suite muta).
+const snapshot = await evaluate('window.minerva.settings.get()')
+if (!snapshot || typeof snapshot !== 'object' || !snapshot.provider) {
+  console.error('settings.get() no devolvió AiSettingsInfo:', JSON.stringify(snapshot).slice(0, 200))
+  process.exit(2)
 }
-check(
-  'settings.json en userData contiene el modelo',
-  onDisk?.aiModel === 'proj-minerva/invalid-model-e2e',
-  JSON.stringify(onDisk),
-)
+const originalProvider = snapshot.provider
+const originalOpenRouterModel = snapshot.perProviderModel?.openrouter ?? 'z-ai/glm-5.2'
 
-// 4. el análisis usa el modelo de settings → OpenRouter debe rechazarlo.
-// Invalidar el cache de #470 primero: un cache-hit devolvería OK sin tocar
-// OpenRouter y el check daría INESPERADO_OK sin que haya bug.
-await evaluate(
-  `window.minerva.ai.invalidateAnalysis({repo:{owner:'shopwave',name:'api',fullName:'shopwave/api'},number:470})`,
-)
-const err = await evaluate(
-  `window.minerva.ai.analyzePullRequest({repo:{owner:'shopwave',name:'api',fullName:'shopwave/api'},number:470}).then(() => 'INESPERADO_OK').catch((e) => e.message)`,
-)
-check(
-  'análisis con modelo inválido falla (prueba que usa settings)',
-  typeof err === 'string' && err !== 'INESPERADO_OK',
-  String(err).slice(0, 120),
-)
-console.log('   error recibido:', String(err).slice(0, 140))
+try {
+  // 1. Forma multi-proveedor de settings:get (T26): selección efectiva +
+  // catálogo completo de los 3 proveedores. NO se asume cuál está activo.
+  check(
+    'settings:get devuelve la forma multi-proveedor (provider/model/catalog de 3)',
+    ['openrouter', 'claude-code', 'codex'].includes(snapshot.provider) &&
+      typeof snapshot.model === 'string' &&
+      snapshot.model.length > 0 &&
+      ['settings', 'env', 'default'].includes(snapshot.modelSource) &&
+      ['openrouter', 'claude-code', 'codex'].every((p) => Array.isArray(snapshot.catalog?.[p]?.models)),
+    snapshot,
+  )
 
-// 5. volver a GLM 5.2 y analizar de verdad
-await evaluate(`window.minerva.settings.setAiModel({ aiModel: 'z-ai/glm-5.2' })`)
-const ok = await evaluate(
-  `window.minerva.ai.analyzePullRequest({repo:{owner:'shopwave',name:'api',fullName:'shopwave/api'},number:470}).then((a) => ({kinds: a.sections.map(s=>s.kind)})).catch((e) => 'ERR: ' + e.message)`,
-)
-check(
-  'análisis real con GLM 5.2 funciona',
-  ok && typeof ok === 'object' && Array.isArray(ok.kinds) && ok.kinds.length > 0,
-  JSON.stringify(ok).slice(0, 150),
-)
-console.log('   secciones:', JSON.stringify(ok?.kinds ?? ok))
+  // 2. Catálogo curado al día (regresión T46): familia GPT-5.6 en Codex (con
+  // el effort nuevo `ultra` en Sol) y en OpenRouter.
+  const codexIds = (snapshot.catalog?.codex?.models ?? []).map((m) => m.id)
+  const sol = (snapshot.catalog?.codex?.models ?? []).find((m) => m.id === 'gpt-5.6-sol')
+  const solEfforts = (sol?.options?.find((o) => o.id === 'effort')?.choices ?? []).map((c) => c.value)
+  const openrouterIds = (snapshot.catalog?.openrouter?.models ?? []).map((m) => m.id)
+  check(
+    'catálogo curado incluye GPT-5.6 (Sol/Terra/Luna en codex con ultra, Sol en openrouter)',
+    ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'].every((m) => codexIds.includes(m)) &&
+      solEfforts.includes('ultra') &&
+      openrouterIds.includes('openai/gpt-5.6-sol'),
+    { codexIds, solEfforts, openrouterIds },
+  )
 
-// 6. UI: engrane abre modal con GLM 5.2 seleccionado
-await evaluate(`
-  (() => {
-    const btn = Array.from(document.querySelectorAll('button')).find((b) =>
-      b.querySelector('svg.lucide-settings, [class*="lucide-settings"]'),
+  // Los pasos de análisis prueban el pipeline de OpenRouter: si no hay key,
+  // fallarían por "sin key" y no por el modelo elegido — mejor cortar acá con
+  // un mensaje claro que reportar FAILs engañosos.
+  const status = await evaluate('window.minerva.ai.getProviderStatus()')
+  if (status?.openrouter?.status !== 'authenticated') {
+    console.error('OpenRouter sin key configurada (status: ' + JSON.stringify(status?.openrouter) + ') — configúrala y reintenta')
+    process.exit(2)
+  }
+
+  // 3. Cambiar el proveedor ACTIVO a openrouter (no se asume que ya lo esté).
+  const swapped = await evaluate("window.minerva.settings.setAiProvider({ provider: 'openrouter' })")
+  check('setAiProvider cambia el proveedor activo a openrouter', swapped?.provider === 'openrouter', swapped)
+
+  // 4. Persistir un modelo inválido para openrouter (vía IPC, mismo camino que
+  // la UI) y verificar que la selección efectiva lo refleja.
+  const bad = await evaluate(
+    "window.minerva.settings.setProviderModel({ provider: 'openrouter', model: 'proj-minerva/invalid-model-e2e' })",
+  )
+  check(
+    'setProviderModel persiste y la selección efectiva lo refleja (source settings)',
+    bad?.model === 'proj-minerva/invalid-model-e2e' &&
+      bad?.modelSource === 'settings' &&
+      bad?.perProviderModel?.openrouter === 'proj-minerva/invalid-model-e2e',
+    bad,
+  )
+
+  // 5. Persistencia en disco: settings.json de userData con el mapa por proveedor.
+  let onDisk
+  try {
+    onDisk = JSON.parse(readFileSync(join(homedir(), '.config', 'proj-minerva', 'settings.json'), 'utf8'))
+  } catch (e) {
+    onDisk = { error: e.message }
+  }
+  check(
+    'settings.json en userData persiste proveedor activo y modelo por proveedor',
+    onDisk?.aiProvider === 'openrouter' && onDisk?.models?.openrouter === 'proj-minerva/invalid-model-e2e',
+    onDisk,
+  )
+
+  // 6. Opciones de modelo (T34): con gpt-5.5 activo (tiene descriptor effort),
+  // setModelOption persiste y selectedOptions refleja el valor resuelto.
+  await evaluate("window.minerva.settings.setProviderModel({ provider: 'openrouter', model: 'openai/gpt-5.5' })")
+  const withEffort = await evaluate(
+    "window.minerva.settings.setModelOption({ provider: 'openrouter', optionId: 'effort', value: 'high' })",
+  )
+  check(
+    'setModelOption persiste el effort y selectedOptions lo resuelve',
+    withEffort?.selectedOptions?.openrouter?.effort === 'high',
+    withEffort?.selectedOptions,
+  )
+  // Volver el effort al default del descriptor para no dejar preferencia nueva.
+  await evaluate("window.minerva.settings.setModelOption({ provider: 'openrouter', optionId: 'effort', value: 'medium' })")
+
+  // 7. El análisis usa el modelo de settings → con el inválido OpenRouter debe
+  // rechazarlo. Invalidar el cache de #470 primero: un cache-hit devolvería OK
+  // sin tocar OpenRouter y el check daría INESPERADO_OK sin que haya bug.
+  await evaluate("window.minerva.settings.setProviderModel({ provider: 'openrouter', model: 'proj-minerva/invalid-model-e2e' })")
+  await evaluate(
+    "window.minerva.ai.invalidateAnalysis({repo:{owner:'shopwave',name:'api',fullName:'shopwave/api'},number:470})",
+  )
+  const err = await evaluate(
+    "window.minerva.ai.analyzePullRequest({repo:{owner:'shopwave',name:'api',fullName:'shopwave/api'},number:470}).then(() => 'INESPERADO_OK').catch((e) => e.message)",
+  )
+  check(
+    'análisis con modelo inválido falla (prueba que usa settings)',
+    typeof err === 'string' && err !== 'INESPERADO_OK' && !err.startsWith('EXC:'),
+    err,
+  )
+  console.log('   error recibido:', String(err).slice(0, 140))
+
+  // 8. Con un modelo válido el análisis real funciona (streaming completo).
+  await evaluate("window.minerva.settings.setProviderModel({ provider: 'openrouter', model: 'z-ai/glm-5.2' })")
+  const ok = await evaluate(
+    "window.minerva.ai.analyzePullRequest({repo:{owner:'shopwave',name:'api',fullName:'shopwave/api'},number:470}).then((a) => ({kinds: a.sections.map(s=>s.kind)})).catch((e) => 'ERR: ' + e.message)",
+  )
+  check(
+    'análisis real con GLM 5.2 funciona',
+    ok && typeof ok === 'object' && Array.isArray(ok.kinds) && ok.kinds.length > 0,
+    ok,
+  )
+  console.log('   secciones:', JSON.stringify(ok?.kinds ?? ok))
+
+  // 9. UI: el engrane abre el modal y lista el catálogo curado del proveedor
+  // activo (openrouter en este punto), incluida la familia GPT-5.6.
+  await evaluate(`
+    (() => {
+      const btn = Array.from(document.querySelectorAll('button')).find((b) =>
+        b.querySelector('svg.lucide-settings, [class*="lucide-settings"]'),
+      )
+      if (btn) btn.click()
+      return btn ? 'OK' : 'NO_GEAR'
+    })()
+  `)
+  await sleep(800)
+  const modalText = await evaluate('document.body.innerText')
+  check(
+    'modal de settings abre con la lista curada (incluye GPT-5.6)',
+    typeof modalText === 'string' &&
+      modalText.includes('GLM 5.2') &&
+      modalText.includes('GPT-5.6 Sol') &&
+      modalText.includes('Claude Opus 4.8'),
+  )
+} finally {
+  // Restaurar SIEMPRE (también si un evaluate lanzó): cerrar el modal si quedó
+  // abierto y volver al proveedor/modelo openrouter del snapshot. Nada de esto
+  // debe tumbar el reporte de checks: es limpieza best-effort.
+  try {
+    await evaluate(
+      "document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); 'esc'",
+      10000,
     )
-    if (btn) btn.click()
-    return btn ? 'OK' : 'NO_GEAR'
-  })()
-`)
-await sleep(800)
-const modalText = await evaluate('document.body.innerText')
-check(
-  'modal de settings abre con la lista curada',
-  modalText.includes('GLM 5.2') &&
-    modalText.includes('Kimi K2.7') &&
-    modalText.includes('GPT-5.5') &&
-    modalText.includes('Claude Opus 4.8'),
-)
+    await evaluate(
+      `window.minerva.settings.setProviderModel({ provider: 'openrouter', model: ${JSON.stringify(originalOpenRouterModel)} })`,
+      10000,
+    )
+    await evaluate(
+      `window.minerva.settings.setAiProvider({ provider: ${JSON.stringify(originalProvider)} })`,
+      10000,
+    )
+  } catch (e) {
+    console.error('restauración del estado falló:', e.message)
+  }
+  ws.close()
+}
 
-ws.close()
 const failed = checks.filter((c) => !c).length
 console.log(`\n${checks.length - failed}/${checks.length} checks OK`)
 process.exit(failed ? 1 : 0)
