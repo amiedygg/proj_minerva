@@ -1776,3 +1776,27 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   MINERVA_MOCK=1 + IA real, y settings.json del usuario intacto al terminar
   (residuo tolerado y documentado: `modelOptions.openrouter.effort='medium'`,
   el default). lint verde.
+
+- [x] **T49. Fix layout: split diff sin wrap desbordaba a la derecha + wrap por defecto**
+  _Hecha y verificada (2026-07-11)._ Reporte del usuario: en la vista split sin
+  word wrap, el diff se desbordaba horizontalmente y el lado nuevo quedaba
+  empujado fuera de la vista (gutter verde visible con contenido "vacío" hasta
+  scrollear); solo con wrap activado se alineaba bien. Causa: el grid único de
+  4 columnas usaba `minmax(max-content, 1fr)` en ambas columnas de contenido —
+  cada una crecía hasta su línea más larga y el grid entero excedía el
+  contenedor `overflow-auto`. Fix en `SplitDiff.tsx`: sin wrap ahora son dos
+  paneles 50/50 con `overflow-x-auto` PROPIO (estilo VS Code); la alineación
+  vertical entre paneles sale gratis porque sin wrap toda fila mide una línea
+  (`leading-5`), el gutter se fija por dígitos (`calc(Nch + 2.25rem)`) para no
+  variar entre paneles/segmentos, y las cards de hilo/composer (ancho completo)
+  cortan el segmento de paneles y se intercalan. Con wrap queda el grid único
+  de siempre (`minmax(0, 1fr)`); celdas extraídas a `SideCells` compartidas.
+  Además `wordWrap: true` por defecto en `app-store.ts` (pedido explícito).
+  Verificación: typecheck/lint/484 tests verdes; `smoke-diff` 7/7 y
+  `smoke-comments` 5/5; probe CDP ad-hoc 11/11 (defaults split+wrap activos,
+  wrap sin scroll horizontal del contenedor, sin wrap: 2 paneles de igual
+  ancho, panel derecho visible sin scrollear, scroll interno con líneas de
+  98ch, gutters iguales); capturas con `screenshot-app.sh` en ambos modos.
+  Gotcha nuevo: los probes CDP heredan el estado que las suites anteriores
+  dejaron en el renderer (vista inline, wrap toggled) — un `location.reload()`
+  al arrancar resetea el store zustand y devuelve los defaults reales.
