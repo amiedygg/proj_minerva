@@ -1776,3 +1776,20 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   MINERVA_MOCK=1 + IA real, y settings.json del usuario intacto al terminar
   (residuo tolerado y documentado: `modelOptions.openrouter.effort='medium'`,
   el default). lint verde.
+
+- [x] **T48. Fix UX: re-analizar no limpiaba el contenido anterior**
+  _Hecha y verificada (2026-07-11)._ Reporte del usuario: al re-analizar un PR
+  ya analizado no se entendía cuándo se actualizaba ni cuándo terminaba. Causa:
+  `analyze()` en `use-didactic-analysis.ts` limpiaba `error` y
+  `streamingSections` pero NO `analysis`, y la precedencia de render de
+  `DidacticAnalysisArea` es `error > analysis > streamingSections > loading` —
+  el resultado viejo seguía ganando, el streaming nuevo corría invisible detrás
+  y al final el contenido se intercambiaba en silencio. Fix: `setAnalysis(null)`
+  al arrancar el flujo local (el listener pasivo de attach ya lo hacía en su
+  rama de chunk, quedó simétrico). Ahora el re-análisis muestra skeleton
+  "Analizando PR con IA…" → secciones en streaming → resultado final con
+  "Re-analizar" habilitado. Verificación: typecheck/lint/484 tests verdes,
+  `smoke-didactic` 13/13, script CDP ad-hoc muestreando frames a 100ms tras el
+  clic (skeleton visible de inmediato, 8/8), y capturas `screenshot-cdp.mjs`
+  a mitad del re-análisis (panel limpio con skeleton) y al terminar (análisis
+  completo + botón habilitado).

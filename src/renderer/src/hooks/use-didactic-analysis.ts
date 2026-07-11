@@ -215,6 +215,11 @@ export function useDidacticAnalysis(target: DidacticAnalysisTarget): UseDidactic
     setLoading(true)
     setError(null)
     setStreamingSections(null)
+    // Limpia también el resultado viejo: la precedencia de render es
+    // `analysis > streamingSections`, así que sin esto un re-análisis
+    // streamearía invisible detrás del contenido anterior y el swap final
+    // sería un cambio silencioso (no se distingue "actualizando" de "listo").
+    setAnalysis(null)
 
     stopStreaming()
     unsubscribeRef.current = window.minerva.events.onAnalysisProgress((event) => {
