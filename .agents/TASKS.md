@@ -1724,4 +1724,6 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   hardcodeado, que sobre Node de Windows (`path.delimiter` = ';') queda como UNA
   entrada inválida → `resolveCliPath` devolvía null. Gotcha: en tests que armen
   `process.env.PATH`, SIEMPRE `['a','b'].join(delimiter)` — mockear `node:os` no
-  cambia `node:path`, que sigue siendo el de la plataforma real.
+  cambia `node:path`, que sigue siendo el de la plataforma real. Segundo run
+  (d94bf8b): 3/3 SOs verdes, artifacts `minerva-0.2.3-dev.pr6-{linux,mac,windows}`
+  (124/235/100 MB, retención 14 días).
