@@ -19,24 +19,34 @@ export type { AiService } from './service'
  * default, ver `getEffectiveAiSelection`) y delega en
  * `createAiServiceForProvider` para instanciar la implementación concreta:
  * - `openrouter`: `OpenRouterAiService` si hay `OPENROUTER_API_KEY`
- *   disponible (vía `process.env` o el `.env` de la raíz del proyecto en dev,
- *   ver `./env.ts`); si no, cae a `MockAiService` — mismo comportamiento de
- *   siempre, sin regresión.
+ *   disponible (safeStorage vía Settings, `process.env`, o el `.env` de la
+ *   raíz del proyecto en dev — ver `./env.ts`).
  * - `claude-code` (T28): `ClaudeCodeAiService` (`./providers/claude-code-service.ts`,
  *   Agent SDK oficial) SOLO si `./providers/cli-probe.ts` reporta
  *   `'authenticated'` (CLI instalado Y con sesión — best-effort, ver ese
- *   archivo); si no, cae a `MockAiService` con un log que explica por qué,
- *   mismo espíritu que el caso OpenRouter sin key. Por esto
- *   `createAiServiceForProvider`/`createAiService` son ASYNC desde T28: el
- *   probe de CLI (`getCliProviderStatus`) puede spawnear un proceso corto
- *   (`claude --version`) para confirmar que el binario existe.
+ *   archivo). Por esto `createAiServiceForProvider`/`createAiService` son
+ *   ASYNC desde T28: el probe de CLI (`getCliProviderStatus`) puede spawnear
+ *   un proceso corto (`claude --version`) para confirmar que el binario existe.
  * - `codex` (T29): `CodexAiService` (`./providers/codex-service.ts`, `codex
  *   app-server` oficial vía JSON-RPC) SOLO si `getCliProviderStatus('codex')`
  *   reporta `'authenticated'` — mismo criterio y mismo espíritu que el caso
  *   `claude-code` de arriba (el probe sigue siendo el heurístico best-effort
  *   de `./providers/cli-probe.ts`, sin handshake real; T29 decidió, igual
- *   que T28, no encarecer ese hot path); si no, cae a `MockAiService` con un
- *   log que explica por qué.
+ *   que T28, no encarecer ese hot path).
+ *
+ * Cuando el proveedor activo NO puede inicializarse (sin key de OpenRouter,
+ * CLI ausente o sin sesión), el comportamiento depende del modo de GitHub:
+ * - Con `MINERVA_MOCK=1` (GitHub mock, mismo criterio que
+ *   `../github/index.ts`): cae a `MockAiService` con un `console.warn` — la
+ *   demo/e2e sin credenciales sigue funcionando como siempre.
+ * - Con GitHub REAL: se LANZA un error con la causa concreta y el remedio
+ *   (configurar la key en Settings, instalar/loguear el CLI). Antes acá
+ *   también se caía al mock, y como el mock solo conoce los PRs ficticios de
+ *   shopwave, cualquier análisis de un PR real moría con un absurdo "Pull
+ *   request no encontrado" que culpaba al PR en vez de a la configuración
+ *   (visto en la 0.2.1 empaquetada en macOS). El mensaje viaja tal cual al
+ *   panel didáctico (ver `../ipc/register.ts`), que ya tiene UI de error +
+ *   "Reintentar".
  *
  * A propósito, esto sigue siendo INDEPENDIENTE de `MINERVA_MOCK` (el flag que
  * decide si `GithubService` es mock o real, ver `../github/index.ts`): con
@@ -47,6 +57,53 @@ export type { AiService } from './service'
  * pide el detalle/archivos del PR a lo que sea que `registerIpcHandlers` haya
  * instanciado (mock o real), sin enterarse de cuál es.
  */
+/**
+ * `true` si la capa GitHub activa es la mock — MISMO criterio que
+ * `createGithubService` (`../github/index.ts`). Se lee el env directo en vez
+ * de importar de ahí para no arrastrar el grafo de módulos de GitHub real
+ * (Octokit, auth-manager/safeStorage) a este factory ni a sus tests.
+ */
+function isMockGithubMode(): boolean {
+  return process.env.MINERVA_MOCK === '1'
+}
+
+/**
+ * Proveedor activo no inicializable: con GitHub mock se degrada al mock de IA
+ * (demo sin credenciales); con GitHub real se lanza `reason` tal cual, para
+ * que el panel muestre la causa y el remedio en vez de un error engañoso.
+ */
+function mockFallbackOrThrow(reason: string): AiService {
+  if (isMockGithubMode()) {
+    console.warn('[ai] ' + reason + ' GitHub está en modo mock: usando MockAiService.')
+    return new MockAiService()
+  }
+  throw new Error(reason)
+}
+
+/** Mensaje para un proveedor `cli` no utilizable, según lo que reportó el probe. */
+function cliUnavailableReason(
+  label: string,
+  binary: string,
+  status: 'unavailable' | 'installed',
+): string {
+  if (status === 'installed') {
+    return (
+      'El proveedor de IA activo (' +
+      label +
+      ') está instalado pero sin sesión iniciada. Corré «' +
+      binary +
+      ' login» en una terminal y reintentá, o elegí otro proveedor en Settings (engrane de la barra de título).'
+    )
+  }
+  return (
+    'No se encontró el CLI «' +
+    binary +
+    '» del proveedor de IA activo (' +
+    label +
+    ') en esta máquina. Instalalo y reintentá, o elegí otro proveedor en Settings (engrane de la barra de título).'
+  )
+}
+
 async function createAiServiceForProvider(
   provider: AiProviderId,
   github: GithubService,
@@ -57,34 +114,24 @@ async function createAiServiceForProvider(
       if (openRouterApiKey) {
         return new OpenRouterAiService(github)
       }
-      console.warn(
-        '[ai] Proveedor activo es OpenRouter pero falta OPENROUTER_API_KEY: usando MockAiService.',
+      return mockFallbackOrThrow(
+        'El proveedor de IA activo (OpenRouter) no tiene API key configurada en esta máquina. ' +
+          'Agregala en Settings (engrane de la barra de título), o elegí otro proveedor.',
       )
-      return new MockAiService()
     }
     case 'claude-code': {
       const status = await getCliProviderStatus('claude-code')
       if (status.status === 'authenticated') {
         return new ClaudeCodeAiService(github)
       }
-      console.warn(
-        '[ai] Proveedor activo es Claude Code pero el CLI no está instalado/autenticado (estado: ' +
-          status.status +
-          '): usando MockAiService. Corré «claude login» (o instalá el CLI) y reintentá.',
-      )
-      return new MockAiService()
+      return mockFallbackOrThrow(cliUnavailableReason('Claude Code', 'claude', status.status))
     }
     case 'codex': {
       const status = await getCliProviderStatus('codex')
       if (status.status === 'authenticated') {
         return new CodexAiService(github)
       }
-      console.warn(
-        '[ai] Proveedor activo es Codex pero el CLI no está instalado/autenticado (estado: ' +
-          status.status +
-          '): usando MockAiService. Corré «codex login» (o instalá el CLI) y reintentá.',
-      )
-      return new MockAiService()
+      return mockFallbackOrThrow(cliUnavailableReason('Codex', 'codex', status.status))
     }
   }
 }

@@ -1640,3 +1640,44 @@ Reproducir el descubrimiento: `codex app-server generate-ts --out /tmp/x/ts` y l
   re-analiza (mock) y la barra desaparece (el nuevo análisis sella el headSha del fixture ==
   current). En la ventana desacoplada la barra también aparece (el hook fetchea el headSha
   actual vía `getPullRequestDetail`).
+
+## F10 — Error honesto cuando el proveedor de IA no está disponible — 2026-07-11
+
+Bug de campo (0.2.1 empaquetada en macOS): con el proveedor activo no inicializable
+(OpenRouter sin key en esa máquina / CLI no encontrado o sin sesión), `createAiService`
+caía SILENCIOSAMENTE a `MockAiService`, y como el mock solo conoce los PRs shopwave,
+cualquier análisis de un PR real moría con "Pull request no encontrado: <pr real>" —
+culpaba al PR cuando el problema era la configuración de IA de esa máquina.
+
+- [x] **T43. Proveedor no disponible: error accionable en vez de fallback silencioso al mock**
+  _Hecha y verificada e2e (2026-07-11, orquestador)._ Cuatro cambios:
+  (a) `src/main/ai/index.ts`: `mockFallbackOrThrow` — el fallback a `MockAiService` queda
+    SOLO para `MINERVA_MOCK=1` (demo/e2e; mismo criterio que `../github/index.ts`, leído
+    del env directo para no arrastrar el grafo de GitHub real a los tests del factory).
+    Con GitHub real se LANZA la causa + remedio por proveedor: OpenRouter sin key →
+    "Agregala en Settings"; CLI `unavailable` → "No se encontró el CLI «claude|codex»";
+    CLI `installed` → "sin sesión iniciada. Corré «<bin> login»".
+  (b) `src/main/ai/mock-service.ts`: PR desconocido → "La IA en modo demo solo tiene
+    análisis para los PRs de ejemplo..." (defensa: nunca más culpar al PR).
+  (c) `src/main/ai/providers/resolve-cli.ts`: + directorios de version managers de Node
+    (nvm `versions/node/<v>/bin` con orden semver DESC, volta, asdf shims, fnm XDG y
+    legado; respeta `NVM_DIR`/`FNM_DIR`) — un CLI instalado con npm bajo nvm era
+    invisible para una app GUI lanzada desde Finder/launcher (causa probable del caso
+    macOS).
+  (d) `src/renderer/src/hooks/use-didactic-analysis.ts`: `toErrorMessage` limpia el
+    prefijo de Electron "Error invoking remote method 'ai:...': Error: " — el canal IPC
+    no le dice nada al usuario.
+  Verificación (orquestador): typecheck/lint verdes; `npm test` verde (481 tests,
+  incluye los nuevos: factory — throw vs fallback por `MINERVA_MOCK`; resolve-cli —
+  nvm multi-versión elige la más nueva, `NVM_DIR`, volta, fnm). E2E real reproduciendo el bug de campo: settings a
+  `openrouter` + `.env` escondido + GitHub REAL → analizar #70 de clevr-merlin → panel
+  muestra "El proveedor de IA activo (OpenRouter) no tiene API key configurada en esta
+  máquina. Agregala en Settings..." (captura CDP MIRADA; sin prefijo IPC, sin "Pull
+  request no encontrado"). Regresión demo: `MINERVA_MOCK=1` sin key → `smoke-didactic`
+  13/13 (fallback al mock intacto, warn en consola de main). Entorno restaurado
+  (settings/.env) al terminar.
+  Gotcha nuevo: la pantalla puede estar con hyprlock (verificación remota) —
+  `scripts/screenshot-app.sh` (grim) captura el lock; usar `scripts/screenshot-cdp.mjs`
+  (Page.captureScreenshot) que ve el contenido renderizado igual. Y para lanzar la app
+  desde una shell sin sesión gráfica: exportar `WAYLAND_DISPLAY=wayland-1`,
+  `XDG_RUNTIME_DIR=/run/user/1000` y `DISPLAY=:0` antes de `npm run dev`.

@@ -31,7 +31,7 @@
  * bit de "ejecutable" real (NTFS no tiene ese concepto) y degrada a un chequeo
  * de existencia, que alcanza para el propósito de este resolver.
  */
-import { accessSync, constants as fsConstants } from 'node:fs'
+import { accessSync, constants as fsConstants, readdirSync } from 'node:fs'
 import { homedir, platform } from 'node:os'
 import { delimiter, join } from 'node:path'
 
@@ -44,6 +44,62 @@ const cache = new Map<CliBinaryName, string | null>()
 function pathDirectories(): string[] {
   const pathEnv = process.env.PATH ?? process.env.Path ?? ''
   return pathEnv.split(delimiter).filter((entry) => entry.length > 0)
+}
+
+/**
+ * Orden descendente por versión semver-ish (`v22.11.0`, `22.4.1`): los
+ * directorios de un version manager se prueban de la versión más nueva a la
+ * más vieja — si el CLI está instalado en varias, gana la más reciente, que
+ * es la que un `nvm use` típico dejaría activa en la terminal del usuario.
+ */
+function compareVersionsDesc(a: string, b: string): number {
+  const parse = (v: string): number[] =>
+    v
+      .replace(/^v/, '')
+      .split('.')
+      .map((part) => Number.parseInt(part, 10) || 0)
+  const [a0 = 0, a1 = 0, a2 = 0] = parse(a)
+  const [b0 = 0, b1 = 0, b2 = 0] = parse(b)
+  return b0 - a0 || b1 - a1 || b2 - a2
+}
+
+/** Subdirectorios de `dir` ordenados como versiones descendentes; `[]` si `dir` no existe o no se puede leer. */
+function listVersionsDesc(dir: string): string[] {
+  try {
+    return readdirSync(dir).sort(compareVersionsDesc)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Directorios `bin` de los version managers de Node más comunes (nvm, fnm,
+ * volta, asdf). Un CLI instalado con `npm install -g` bajo nvm/fnm vive en
+ * `<versions>/<vX.Y.Z>/bin`, ruta que SOLO entra al PATH cuando el shell
+ * ejecuta el hook del manager (`nvm.sh`, `fnm env`) — un proceso GUI lanzado
+ * desde Finder/launcher nunca lo corre, así que sin esto el probe reportaba
+ * "no disponible" con el CLI perfectamente instalado (visto en macOS con la
+ * 0.2.1 empaquetada). Se respetan los overrides `NVM_DIR`/`FNM_DIR` si el
+ * proceso los trae.
+ */
+function nodeVersionManagerDirectories(home: string): string[] {
+  const dirs = [join(home, '.volta', 'bin'), join(home, '.asdf', 'shims')]
+
+  const nvmVersions = join(process.env.NVM_DIR ?? join(home, '.nvm'), 'versions', 'node')
+  for (const version of listVersionsDesc(nvmVersions)) {
+    dirs.push(join(nvmVersions, version, 'bin'))
+  }
+
+  // fnm: instalación oficial en ~/.local/share/fnm (XDG) o ~/.fnm (legado).
+  const fnmBases = [process.env.FNM_DIR ?? join(home, '.local', 'share', 'fnm'), join(home, '.fnm')]
+  for (const base of fnmBases) {
+    const fnmVersions = join(base, 'node-versions')
+    for (const version of listVersionsDesc(fnmVersions)) {
+      dirs.push(join(fnmVersions, version, 'installation', 'bin'))
+    }
+  }
+
+  return dirs
 }
 
 /**
@@ -77,6 +133,8 @@ function commonInstallDirectories(): string[] {
     // Homebrew en Apple Silicon instala bajo /opt/homebrew, no /usr/local.
     dirs.push('/opt/homebrew/bin')
   }
+
+  dirs.push(...nodeVersionManagerDirectories(home))
 
   return dirs
 }
