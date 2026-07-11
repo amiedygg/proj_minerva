@@ -32,8 +32,11 @@ jobs:
             runner: windows-latest
             flag: --win
             assets: dist/*.exe
+          # macos pineado (no -latest): GitHub está migrando macos-latest a
+          # macOS 26 desde 2026-06-15 y no queremos que el entorno de build
+          # cambie por sorpresa. Subir de versión a propósito, no por drift.
           - os-name: mac
-            runner: macos-latest
+            runner: macos-15
             flag: --mac
             assets: dist/*.dmg
     runs-on: ${{ matrix.runner }}
@@ -79,7 +82,7 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
       - name: Upload dev binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: minerva-${{ steps.version.outputs.version }}-${{ matrix.os-name }}
           path: ${{ matrix.assets }}

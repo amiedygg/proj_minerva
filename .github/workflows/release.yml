@@ -21,8 +21,11 @@ jobs:
             runner: windows-latest
             flag: --win
             assets: dist/*.exe
+          # macos pineado (no -latest): GitHub está migrando macos-latest a
+          # macOS 26 desde 2026-06-15 y no queremos que el entorno de build
+          # cambie por sorpresa. Subir de versión a propósito, no por drift.
           - os-name: mac
-            runner: macos-latest
+            runner: macos-15
             flag: --mac
             assets: dist/*.dmg
     runs-on: ${{ matrix.runner }}
