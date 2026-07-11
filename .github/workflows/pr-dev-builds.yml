@@ -1,0 +1,87 @@
+name: PR dev builds
+
+# Binarios de distribución "dev" por Pull Request: mismos 3 SOs que
+# release.yml pero con versión pre-release (p. ej. 0.2.3-dev.pr6) y subidos
+# como ARTIFACTS del run (no como release assets) — se descargan desde la
+# pestaña del workflow run y expiran solos a los 14 días.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Un push nuevo al PR cancela los builds del push anterior.
+concurrency:
+  group: pr-dev-builds-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os-name: linux
+            runner: ubuntu-latest
+            flag: --linux
+            assets: dist/*.AppImage
+          - os-name: windows
+            runner: windows-latest
+            flag: --win
+            assets: dist/*.exe
+          - os-name: mac
+            runner: macos-latest
+            flag: --mac
+            assets: dist/*.dmg
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set dev version
+        id: version
+        shell: bash
+        # 0.2.3 → 0.2.3-dev.pr6 (semver pre-release; el sufijo .pr<N> evita
+        # que dos PRs abiertos a la vez produzcan binarios indistinguibles).
+        # En workflow_dispatch no hay PR: queda 0.2.3-dev a secas.
+        run: |
+          BASE_VERSION="$(node -p "require('./package.json').version")"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          DEV_VERSION="${BASE_VERSION}-dev${PR_NUMBER:+.pr${PR_NUMBER}}"
+          npm version --no-git-tag-version "$DEV_VERSION"
+          echo "version=$DEV_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build (electron-vite)
+        run: npm run build
+
+      - name: Package (electron-builder)
+        run: npx electron-builder ${{ matrix.flag }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Upload dev binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: minerva-${{ steps.version.outputs.version }}-${{ matrix.os-name }}
+          path: ${{ matrix.assets }}
+          retention-days: 14
+          if-no-files-found: error

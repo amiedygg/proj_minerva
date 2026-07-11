@@ -1710,3 +1710,11 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   por CDP antes del click. Matiz de F10: con hyprlock activo `Page.captureScreenshot`
   puede COLGARSE (el compositor no produce frames) — no solo grim; la captura visual
   queda pendiente de desbloqueo.
+
+- [x] **T45. Workflow de binarios dev por PR** (`.github/workflows/pr-dev-builds.yml`)
+  _Hecha (2026-07-11)._ Mismo matrix de 3 SOs que `release.yml`, pero disparado por
+  `pull_request` a main (+`workflow_dispatch`): re-versiona con
+  `npm version --no-git-tag-version` a `<version>-dev.pr<N>` (p. ej. `0.2.3-dev.pr6`)
+  y sube los binarios como ARTIFACTS del run (retención 14 días), no como release.
+  Corre typecheck + `npm test` antes de empaquetar. Concurrency por PR: un push
+  nuevo cancela los builds del anterior. Verificado: run verde en el PR #6.
