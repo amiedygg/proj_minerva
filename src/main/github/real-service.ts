@@ -44,6 +44,7 @@ interface GraphqlCommentNode {
   body: string
   createdAt: string
   isMinimized: boolean
+  url: string
   author: GraphqlAuthor | null
 }
 
@@ -220,12 +221,12 @@ const PULL_REQUEST_THREADS_QUERY = `
             originalLine
             diffSide
             comments(first: 100) {
-              nodes { id body createdAt isMinimized author { login avatarUrl } }
+              nodes { id body createdAt isMinimized url author { login avatarUrl } }
             }
           }
         }
         comments(first: 100) {
-          nodes { id body createdAt isMinimized author { login avatarUrl } }
+          nodes { id body createdAt isMinimized url author { login avatarUrl } }
         }
       }
     }
@@ -240,6 +241,7 @@ const ADD_REVIEW_THREAD_REPLY_MUTATION = `
         body
         createdAt
         isMinimized
+        url
         author { login avatarUrl }
       }
     }
@@ -370,6 +372,7 @@ function mapGraphqlCommentToPrComment(comment: GraphqlCommentNode): PrComment {
     bodyMarkdown: comment.body,
     createdAt: comment.createdAt,
     isMinimized: comment.isMinimized,
+    htmlUrl: comment.url,
   }
 }
 
@@ -418,6 +421,7 @@ function mapRestCommentToPrComment(data: {
   id: number
   body?: string | null
   created_at: string
+  html_url?: string
   user?: { login: string; avatar_url: string } | null
 }): PrComment {
   return {
@@ -428,6 +432,7 @@ function mapRestCommentToPrComment(data: {
     bodyMarkdown: data.body ?? '',
     createdAt: data.created_at,
     isMinimized: false,
+    htmlUrl: data.html_url,
   }
 }
 
