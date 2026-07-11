@@ -1727,3 +1727,31 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   cambia `node:path`, que sigue siendo el de la plataforma real. Segundo run
   (d94bf8b): 3/3 SOs verdes, artifacts `minerva-0.2.3-dev.pr6-{linux,mac,windows}`
   (124/235/100 MB, retención 14 días).
+
+- [x] **T46. Familia GPT-5.6 (Sol/Terra/Luna) en los catálogos + v0.2.4**
+  _Hecha y verificada e2e (2026-07-11, rama `fix/codex-gpt-5.6-models`)._ Issue:
+  los modelos nuevos de OpenAI no aparecían en Settings. Diagnóstico (RPC
+  `model/list` en vivo): el catálogo dinámico de Codex funciona, pero un CLI
+  `codex` < 0.144 NO expone la familia 5.6 (0.142.5 devolvía los 4 viejos, 0.144.1
+  devuelve `gpt-5.6-sol|terra|luna`) — se actualizó el CLI standalone de la máquina
+  con `codex update`. Cambios de código (necesarios igual): (a) los 3 modelos en
+  `CODEX_MODELS` estático (`shared/ai-providers.ts`) — CLAVE porque
+  `getEffectiveAiSelection` resuelve el `effort` contra el catálogo ESTÁTICO y un
+  modelo dinámico fuera de él perdía el effort en silencio; Sol/Terra traen efforts
+  nuevos `max|ultra`, Luna hasta `max` (default `medium` los tres, verificado por
+  RPC). (b) `ultra` en `EFFORT_CHOICE_LABELS/DESCRIPTIONS` y en
+  `KNOWN_EFFORT_LABELS` del catálogo dinámico. (c) `openai/gpt-5.6-{sol,terra,luna}`
+  en `OPENROUTER_MODELS` (IDs verificados contra la API pública de OpenRouter).
+  (d) versión 0.2.4. Verificación: typecheck/lint/`npm test` verdes (484, con 3
+  tests nuevos: effort `ultra` se respeta en Sol, resolución robusta `ultra`→
+  `medium` en Luna, labels `max`/`ultra`/desconocido en el catálogo dinámico);
+  e2e vía CDP: `ai:getProviderModels` devuelve los 3 en codex (dinámico, con
+  max/ultra) y openrouter; visual (screenshot CDP): modal Settings con los 3
+  listados y RAZONAMIENTO mostrando Bajo…Máximo/Ultra al seleccionar Sol.
+  Gotchas nuevos: (1) `scripts/smoke-settings.mjs` quedó OBSOLETA desde T26:
+  valida el campo legacy `aiModel` que `settings:get` ya no devuelve y asume
+  OpenRouter activo — falla por estado, no por regresión; ojo: su paso 2 PERSISTE
+  un modelo inválido en el settings.json real y si crashea a mitad no lo restaura
+  (pendiente re-escribirla). (2) Con hyprlock activo `screenshot-app.sh` captura
+  el splash del lock; `screenshot-cdp.mjs` sí funciona (esta vez no se colgó,
+  matiz vs. T44).

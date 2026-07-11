@@ -251,6 +251,34 @@ describe('getEffectiveAiSelection().options (T34, resolución de option descript
       options: { effort: 'xhigh' },
     })
   })
+
+  it('Codex GPT-5.6 (Sol) soporta los niveles nuevos: un effort "ultra" guardado se respeta', () => {
+    vi.mocked(settingsStore.getPersistedSettings).mockReturnValue({
+      aiProvider: 'codex',
+      models: { codex: 'gpt-5.6-sol' },
+    })
+    vi.mocked(settingsStore.getPersistedModelOptions).mockReturnValue({ effort: 'ultra' })
+
+    expect(getEffectiveAiSelection()).toEqual({
+      provider: 'codex',
+      model: 'gpt-5.6-sol',
+      options: { effort: 'ultra' },
+    })
+  })
+
+  it('resolución robusta en Codex: "ultra" guardado no aplica a GPT-5.6-Luna (llega hasta "max") y cae a su default ("medium")', () => {
+    vi.mocked(settingsStore.getPersistedSettings).mockReturnValue({
+      aiProvider: 'codex',
+      models: { codex: 'gpt-5.6-luna' },
+    })
+    vi.mocked(settingsStore.getPersistedModelOptions).mockReturnValue({ effort: 'ultra' })
+
+    expect(getEffectiveAiSelection()).toEqual({
+      provider: 'codex',
+      model: 'gpt-5.6-luna',
+      options: { effort: 'medium' },
+    })
+  })
 })
 
 describe('getEffectiveAiModel (shim de compatibilidad pre-T26, OpenRouter-only)', () => {

@@ -70,6 +70,7 @@ const EFFORT_CHOICE_LABELS: Record<string, string> = {
   high: 'Alto',
   xhigh: 'Muy alto',
   max: 'Máximo',
+  ultra: 'Ultra',
 }
 
 const EFFORT_CHOICE_DESCRIPTIONS: Record<string, string> = {
@@ -78,6 +79,7 @@ const EFFORT_CHOICE_DESCRIPTIONS: Record<string, string> = {
   high: 'Razonamiento más profundo; respuestas más lentas.',
   xhigh: 'Razonamiento extendido para tareas complejas.',
   max: 'El máximo razonamiento disponible; la opción más lenta.',
+  ultra: 'Razonamiento máximo con delegación automática de tareas.',
 }
 
 /**
@@ -129,6 +131,24 @@ const OPENROUTER_MODELS = [
   { id: 'google/gemini-3.5-flash', label: 'Gemini 3.5 Flash', vendor: 'Google' },
   { id: 'openai/gpt-5.5', label: 'GPT-5.5', vendor: 'OpenAI', options: [OPENROUTER_REASONING_EFFORT] },
   {
+    id: 'openai/gpt-5.6-sol',
+    label: 'GPT-5.6 Sol',
+    vendor: 'OpenAI',
+    options: [OPENROUTER_REASONING_EFFORT],
+  },
+  {
+    id: 'openai/gpt-5.6-terra',
+    label: 'GPT-5.6 Terra',
+    vendor: 'OpenAI',
+    options: [OPENROUTER_REASONING_EFFORT],
+  },
+  {
+    id: 'openai/gpt-5.6-luna',
+    label: 'GPT-5.6 Luna',
+    vendor: 'OpenAI',
+    options: [OPENROUTER_REASONING_EFFORT],
+  },
+  {
     id: 'anthropic/claude-opus-4.8',
     label: 'Claude Opus 4.8',
     vendor: 'Anthropic',
@@ -155,18 +175,25 @@ const CLAUDE_CODE_MODELS = [
 ] as const satisfies readonly AiModelOption[]
 
 /**
- * Todos los modelos de Codex comparten el mismo set de reasoning efforts
- * (`low|medium|high|xhigh`) según `model/list` de `codex app-server` 0.142.x —
- * los `defaultReasoningEffort` varían por modelo (gpt-5.5=medium,
- * spark=high) pero eso solo cambia a qué cae cuando NO hay valor elegido, y el
- * catálogo DINÁMICO (`codex-model-catalog.ts`) trae el default real por modelo
- * para la UI. Acá el default es `medium` (el más común).
+ * Matriz de `effort` de Codex según `model/list` de `codex app-server`
+ * 0.144.x: la familia GPT-5.6 (Sol/Terra/Luna) amplía el set — Sol y Terra
+ * soportan `low|medium|high|xhigh|max|ultra`, Luna llega hasta `max`, y los
+ * modelos previos (gpt-5.5 y anteriores) se quedan en `low|medium|high|xhigh`.
+ * Los `defaultReasoningEffort` varían por modelo (spark=high, el resto=medium)
+ * pero eso solo cambia a qué cae cuando NO hay valor elegido, y el catálogo
+ * DINÁMICO (`codex-model-catalog.ts`) trae el default real por modelo para la
+ * UI. Acá el default es `medium` (el más común).
  */
 const CODEX_EFFORT = effortDescriptor(['low', 'medium', 'high', 'xhigh'], 'medium')
+const CODEX_GPT56_EFFORT = effortDescriptor(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], 'medium')
+const CODEX_GPT56_LUNA_EFFORT = effortDescriptor(['low', 'medium', 'high', 'xhigh', 'max'], 'medium')
 
 /**
- * IDs verificados contra la RPC `model/list` de `codex app-server` 0.142.x
- * (T29/T35). Esta lista ESTÁTICA cumple dos roles: (a) fallback cuando no hay
+ * IDs verificados contra la RPC `model/list` de `codex app-server` 0.144.x
+ * (T29/T35; familia GPT-5.6 Sol/Terra/Luna agregada en 0.2.4 — OJO: un CLI
+ * `codex` < 0.144 NO expone estos modelos por la RPC, hay que actualizarlo
+ * para verlos en el catálogo dinámico). Esta lista ESTÁTICA cumple dos roles:
+ * (a) fallback cuando no hay
  * sesión Codex / la RPC falla, y (b) — CLAVE — es el catálogo contra el que
  * `getEffectiveAiSelection` (`main/ai/env.ts`, SÍNCRONO) resuelve el `effort`
  * elegido: por eso cada modelo lleva su descriptor `effort`, sin el cual el
@@ -177,6 +204,9 @@ const CODEX_EFFORT = effortDescriptor(['low', 'medium', 'high', 'xhigh'], 'mediu
  * se resuelve en main si comparte los valores de `CODEX_EFFORT` (hoy, todos).
  */
 const CODEX_MODELS = [
+  { id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol', vendor: 'OpenAI', options: [CODEX_GPT56_EFFORT] },
+  { id: 'gpt-5.6-terra', label: 'GPT-5.6-Terra', vendor: 'OpenAI', options: [CODEX_GPT56_EFFORT] },
+  { id: 'gpt-5.6-luna', label: 'GPT-5.6-Luna', vendor: 'OpenAI', options: [CODEX_GPT56_LUNA_EFFORT] },
   { id: 'gpt-5.5', label: 'GPT-5.5', vendor: 'OpenAI', options: [CODEX_EFFORT] },
   { id: 'gpt-5.4', label: 'GPT-5.4', vendor: 'OpenAI', options: [CODEX_EFFORT] },
   { id: 'gpt-5.4-mini', label: 'GPT-5.4-Mini', vendor: 'OpenAI', options: [CODEX_EFFORT] },
