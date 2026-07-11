@@ -133,6 +133,51 @@ describe('fetchCodexModelCatalog', () => {
     ])
   })
 
+  it('etiqueta los niveles de la familia GPT-5.6: "max" → "Máximo", "ultra" → "Ultra", y un nivel desconocido cae a capitalizado', async () => {
+    const { createClient } = withFakeClient({
+      pages: [
+        {
+          data: [
+            {
+              id: 'gpt-5.6-sol',
+              displayName: 'GPT-5.6-Sol',
+              supportedReasoningEfforts: [
+                { reasoningEffort: 'max', description: 'Maximum reasoning depth for the hardest problems' },
+                { reasoningEffort: 'ultra', description: 'Maximum reasoning with automatic task delegation' },
+                { reasoningEffort: 'hyper', description: 'Un nivel futuro que este mapa no conoce' },
+              ],
+              defaultReasoningEffort: 'ultra',
+            },
+          ],
+          nextCursor: null,
+        },
+      ],
+    })
+
+    const models = await fetchCodexModelCatalog(createClient)
+
+    expect(models[0]!.options![0]!.choices).toEqual([
+      {
+        value: 'max',
+        label: 'Máximo',
+        description: 'Maximum reasoning depth for the hardest problems',
+        isDefault: false,
+      },
+      {
+        value: 'ultra',
+        label: 'Ultra',
+        description: 'Maximum reasoning with automatic task delegation',
+        isDefault: true,
+      },
+      {
+        value: 'hyper',
+        label: 'Hyper',
+        description: 'Un nivel futuro que este mapa no conoce',
+        isDefault: false,
+      },
+    ])
+  })
+
   it('un modelo con defaultReasoningEffort que SÍ está entre sus choices marca isDefault en la choice correcta', async () => {
     const { createClient } = withFakeClient({
       pages: [

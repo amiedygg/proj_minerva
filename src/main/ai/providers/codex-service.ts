@@ -36,7 +36,8 @@
  *        de `result.thread.id`.
  *      - `turn/start` (request) con `input` = `Array<UserInput>` (un solo
  *        bloque `{ type: 'text', text, text_elements: [] }`) y, desde T36,
- *        `effort` (string `'low'|'medium'|'high'|'xhigh'`) SOLO si
+ *        `effort` (string `'low'|'medium'|'high'|'xhigh'`, y desde 0.2.4
+ *        también `'max'|'ultra'` en la familia GPT-5.6) SOLO si
  *        `getEffectiveAiSelection().options.effort` resolvió a algo — el
  *        modelo activo sin descriptor de effort (T34) deja `options` vacío y
  *        el campo se omite, comportamiento idéntico a antes de T36. CLAVE:

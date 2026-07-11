@@ -83,6 +83,7 @@ const KNOWN_EFFORT_LABELS: Record<string, string> = {
   high: 'Alto',
   xhigh: 'Muy alto',
   max: 'Máximo',
+  ultra: 'Ultra',
 }
 
 function capitalize(value: string): string {
