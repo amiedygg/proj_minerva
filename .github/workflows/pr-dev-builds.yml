@@ -57,13 +57,15 @@ jobs:
       - name: Set dev version
         id: version
         shell: bash
-        # 0.2.3 → 0.2.3-dev.pr6 (semver pre-release; el sufijo .pr<N> evita
-        # que dos PRs abiertos a la vez produzcan binarios indistinguibles).
-        # En workflow_dispatch no hay PR: queda 0.2.3-dev a secas.
+        # 0.2.3 → 0.2.3-c426f14-dev: el SHA corto del commit REAL de la rama
+        # (head del PR, NO el merge commit sintético que checkout usa en
+        # pull_request) va en la versión, para poder confirmar en el
+        # "About" de la app instalada exactamente qué commit se está
+        # probando. En workflow_dispatch sí aplica github.sha.
         run: |
           BASE_VERSION="$(node -p "require('./package.json').version")"
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          DEV_VERSION="${BASE_VERSION}-dev${PR_NUMBER:+.pr${PR_NUMBER}}"
+          SHORT_SHA="$(cut -c1-7 <<< '${{ github.event.pull_request.head.sha || github.sha }}')"
+          DEV_VERSION="${BASE_VERSION}-${SHORT_SHA}-dev"
           npm version --no-git-tag-version "$DEV_VERSION"
           echo "version=$DEV_VERSION" >> "$GITHUB_OUTPUT"
 
