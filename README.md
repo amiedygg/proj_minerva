@@ -172,6 +172,9 @@ npm run build
 - [x] Panel de IA: sección "Cómo levantar la app" (Docker/local, env vars requeridas y NUEVAS del PR)
 - [x] Syntax highlighting (Shiki) en snippets del panel didáctico y fences de Markdown
 - [x] Empaquetado (electron-builder) — `npm run dist` → `dist/Minerva-<v>.AppImage` _(icono propio pendiente)_
+- [x] Lista de PRs v0.3.0: filtro de estado (Abiertos/Cerrados/Todos, badges `merged`/`closed`)
+- [x] Lista de PRs v0.3.0: refresh manual + watcher de cambios (polling 60s en main, evento push `prListChanged`)
+- [x] Lista de PRs v0.3.0: leído/no-leído por PR (dots rojos, contador de comentarios, persistido en userData)
 - [ ] `OPENROUTER_API_KEY` vía safeStorage + campo en Settings (hoy: `.env`)
 - [ ] Comentar en un PR real de prueba (verificación con cuenta real)
 

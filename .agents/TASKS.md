@@ -1855,7 +1855,16 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   _Aceptación:_ typecheck/lint/`npm test` verdes (los servicios main aún ignoran
   `state`: compilar debe seguir en verde porque el campo es opcional).
 
-- [ ] **T51. Main: filtro de estado, fixtures cerrados, seen-store, unread y watcher**
+- [x] **T51. Main: filtro de estado, fixtures cerrados, seen-store, unread y watcher**
+  _Hecha (subagente `acd2fc94719bd523f`) y verificada por el orquestador (2026-07-11):
+  typecheck/lint/530 tests verdes (33 nuevos: seen-store y pr-watcher con fake timers);
+  smoke-pr-list 10/10 x2 corridas. FIX del orquestador tras la 1ª corrida e2e:
+  `mock-service.listPullRequests` devolvía LOS MISMOS objetos `record.detail` en cada
+  llamada — el snapshot del watcher guardaba referencias y la mutación in-place de
+  `postComment` (commentCount += 1) mutaba también el snapshot "viejo": el diff nunca
+  veía cambios y `prListChanged` jamás se emitía (solo en mock; el real construye
+  objetos frescos por fetch). Fix: copia shallow por PR en el mock. GOTCHA NUEVO en
+  bitácora al final._
   Depende de T50. Alcance: `src/main/github/` + `src/main/ipc/handlers.ts`.
   Entregables:
   (a) `real-service.ts`: en `listPullRequests`, qualifier según `state`
@@ -1899,7 +1908,15 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   seen-store y pr-watcher; `MINERVA_MOCK=1` lista PRs con `unread` poblado y
   los fixtures closed/merged aparecen con `state: 'closed'|'merged'` según filtro.
 
-- [ ] **T52. Renderer: segmented de estado, refresh manual, dots y visto-al-abrir**
+- [x] **T52. Renderer: segmented de estado, refresh manual, dots y visto-al-abrir**
+  _Hecha (subagente `af689a5a3c683b136`) y verificada por el orquestador (2026-07-11):
+  typecheck/lint verdes; smoke-pr-list 10/10 x2; captura MIRADA de la sidebar con
+  segmented + refresh + dots + badges + contadores. Decisiones del subagente aceptadas:
+  placeholder "Cargando" solo si no hay datos previos (los refetches de fondo no
+  blanquean la lista), icono de estado coherente con el badge (GitMerge morado,
+  GitPullRequestClosed muted). Sin tests de componentes: no existe infraestructura
+  jsdom/RTL en el repo (vitest corre en node y solo cubre lib/ puro) — la cobertura de
+  UI queda en la suite e2e (T53)._
   Depende de T50 (puede correr en paralelo con T51 — con mock aún sin filtro
   main, la UI compila y los estados llegan con T51).
   Alcance: `src/renderer/src/` (store, hook, Sidebar, PrListItem, tests).
@@ -1939,7 +1956,20 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   vistos y se apagan al seleccionar, badges merged/closed en el filtro
   Cerrados/Todos, contador de comentarios visible.
 
-- [ ] **T53. Suite e2e `scripts/smoke-pr-list.mjs` + verificación integral v0.3.0**
+- [x] **T53. Suite e2e `scripts/smoke-pr-list.mjs` + verificación integral v0.3.0**
+  _Hecha por el orquestador (2026-07-11). 10 casos: filtros (3), refresh, unread por
+  IPC con sellado determinístico (markPrSeen con updatedAt/commentCount VIEJOS fuerza
+  hasUpdates+hasNewComments sin importar qué dejó en pr-seen.json una corrida
+  anterior), dots en DOM, clear optimista al seleccionar, persistencia en main, y
+  watcher end-to-end (MINERVA_WATCH_INTERVAL_MS=1500 + postComment → la lista se
+  refresca SOLA). Verificación integral: 10/10 x2 corridas + regresión smoke-e2e 5/5,
+  smoke-search 1/1, smoke-comments 5/5 (falló primero por la contaminación conocida:
+  smoke-search deja "refunds" en el buscador y smoke-comments no limpia estado — se
+  confirmó con reload + corrida sola; NO es regresión), smoke-didactic 13/13, captura
+  mirada del filtro "Todos". El primer FAIL del caso watcher destapó el bug de
+  aliasing del mock (ver T51) Y un matcher débil de la propia suite
+  (includes('2') sobre el texto completo del item matchea +adds/-dels — endurecido a
+  extraer el contador exacto del span del MessageSquare)._
   Depende de T51+T52. Nueva suite CDP siguiendo las reglas del CLAUDE.md:
   target excluye `#didactic`; limpiar estado global al arrancar
   (`location.reload()` para resetear el store — gotcha T49 —, buscador vacío);
@@ -1957,3 +1987,26 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   MIRADA de la sidebar (segmented + dots + badges).
   _Aceptación:_ suite verde 2 corridas seguidas (sin flakiness); regresiones
   verdes; captura revisada.
+
+### Bitácora F10 (2026-07-11) — gotchas nuevos
+
+- **Mock que muta in-place + consumidores con snapshot = cambios invisibles.** El
+  watcher de PRs diffea snapshots de `listPullRequests`; el mock devolvía el MISMO
+  objeto `record.detail` en cada llamada, así que la mutación de `postComment`
+  alcanzaba también al snapshot anterior y el diff daba siempre vacío. Regla: los
+  servicios mock devuelven COPIAS por llamada (paridad con el real, que construye
+  objetos frescos del fetch). Solo se manifestó en la 2ª corrida de la suite porque
+  la 1ª tenía un matcher débil (ver siguiente).
+- **`includes(dígito)` sobre innerText de un item es un matcher inválido**: los
+  +adds/-dels, #número y contadores matchean cualquier dígito suelto. Extraer el
+  valor exacto del nodo específico (span del contador) antes de comparar. (Instancia
+  nueva de la lección "matchers ambiguos" de T15.)
+- **Lanzar la app desde el shell del agente (sesión tty)**: exportar
+  `WAYLAND_DISPLAY=wayland-1 DISPLAY=:0` para que Electron arranque, y
+  `HYPRLAND_INSTANCE_SIGNATURE=$(ls -t /run/user/1000/hypr/ | head -1)` para que
+  `hyprctl` (screenshot-app.sh) funcione. Sin eso: "Missing X server or $DISPLAY" /
+  "HYPRLAND_INSTANCE_SIGNATURE not set".
+- **smoke-search deja "refunds" en el buscador** y las suites que no limpian estado
+  (smoke-comments) fallan si corren después en la misma sesión. Mitigación barata al
+  correr en cadena: `location.reload()` entre suites; fix de fondo pendiente:
+  smoke-comments debería limpiar el buscador al arrancar como manda el CLAUDE.md.
