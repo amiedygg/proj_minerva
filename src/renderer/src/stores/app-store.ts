@@ -127,7 +127,9 @@ export const useAppStore = create<AppState>((set) => ({
   selectedFilePath: null,
   diffViewMode: 'split',
   fileTreeMode: 'tree',
-  wordWrap: false,
+  // Wrap activado por defecto (T49): sin wrap las líneas largas obligan a
+  // scroll horizontal y en split el lado nuevo arranca fuera de la vista.
+  wordWrap: true,
 
   expandedThreadId: null,
   pendingThreadFocus: null,
