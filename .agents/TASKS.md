@@ -1825,7 +1825,11 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
 > (Cerrados incluye merged, badge distingue), polling 60s desde main, solo
 > indicadores in-app, visto = abrir el PR en el detalle.
 
-- [ ] **T50. Contrato compartido: filtro de estado, markPrSeen y evento prListChanged**
+- [x] **T50. Contrato compartido: filtro de estado, markPrSeen y evento prListChanged**
+  _Hecha y verificada (2026-07-11, subagente `afa37fd0570d5544e`). Verificación del
+  orquestador: typecheck/lint/500 tests verdes + revisión del diff (guards de payload
+  en preload calcados de onAnalysisProgress, validators con hasOnlyKeys, sin
+  ipcRenderer crudo). 16 casos de test nuevos en validators.test.ts._
   Alcance: SOLO `src/shared/` + `src/preload/` + `src/main/ipc/validators.ts`.
   Entregables:
   (a) `types.ts`: `PrStateFilter = 'open' | 'closed' | 'all'`; `PrUnread =

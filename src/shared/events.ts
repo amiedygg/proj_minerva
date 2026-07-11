@@ -69,8 +69,35 @@ export interface AnalysisProgressEvent {
   error?: string
 }
 
+/**
+ * Un cambio individual detectado por el watcher de PRs (T50/T51, F10,
+ * `main/github/pr-watcher.ts`) entre dos snapshots de
+ * `listPullRequests({ state: 'all' })`: `new_pr` (id nuevo), `pr_closed` /
+ * `pr_merged` (transición desde `open`), `new_comments` (`commentCount`
+ * subió) o `updated` (cualquier otro cambio de `updatedAt`). `title`/`repo`
+ * viajan para que la UI pueda mostrar un cambio sin otro roundtrip.
+ */
+export interface PrChange {
+  type: 'new_pr' | 'pr_closed' | 'pr_merged' | 'new_comments' | 'updated'
+  prId: string
+  number: number
+  title: string
+  repo: RepoRef
+}
+
+/**
+ * Payload de `minerva:event:prListChanged` (T50/T51, F10): se emite SOLO
+ * cuando el watcher detecta al menos un cambio frente al snapshot anterior
+ * (el primer tick establece el baseline en silencio, sin emitir evento) —
+ * `changes` nunca viaja vacío.
+ */
+export interface PrListChangedEvent {
+  changes: PrChange[]
+}
+
 export interface EventContract {
   'minerva:event:analysisProgress': AnalysisProgressEvent
+  'minerva:event:prListChanged': PrListChangedEvent
 }
 
 export type EventChannel = keyof EventContract
@@ -83,4 +110,5 @@ export type EventPayload<C extends EventChannel> = EventContract[C]
  */
 export const MINERVA_EVENTS = {
   analysisProgress: 'minerva:event:analysisProgress',
+  prListChanged: 'minerva:event:prListChanged',
 } satisfies Record<string, EventChannel>
