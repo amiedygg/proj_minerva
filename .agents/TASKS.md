@@ -1717,4 +1717,11 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   `npm version --no-git-tag-version` a `<version>-dev.pr<N>` (p. ej. `0.2.3-dev.pr6`)
   y sube los binarios como ARTIFACTS del run (retención 14 días), no como release.
   Corre typecheck + `npm test` antes de empaquetar. Concurrency por PR: un push
-  nuevo cancela los builds del anterior. Verificado: run verde en el PR #6.
+  nuevo cancela los builds del anterior.
+  Verificación (PR #6): primer run linux+mac VERDES; windows rojo — no por el
+  empaquetado sino porque `npm test` nunca había corrido en Windows (release.yml
+  solo typechequea) y `resolve-cli.test.ts` armaba un PATH multi-entrada con ':'
+  hardcodeado, que sobre Node de Windows (`path.delimiter` = ';') queda como UNA
+  entrada inválida → `resolveCliPath` devolvía null. Gotcha: en tests que armen
+  `process.env.PATH`, SIEMPRE `['a','b'].join(delimiter)` — mockear `node:os` no
+  cambia `node:path`, que sigue siendo el de la plataforma real.
