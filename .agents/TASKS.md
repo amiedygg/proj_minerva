@@ -1681,3 +1681,49 @@ culpaba al PR cuando el problema era la configuración de IA de esa máquina.
   (Page.captureScreenshot) que ve el contenido renderizado igual. Y para lanzar la app
   desde una shell sin sesión gráfica: exportar `WAYLAND_DISPLAY=wayland-1`,
   `XDG_RUNTIME_DIR=/run/user/1000` y `DISPLAY=:0` antes de `npm run dev`.
+
+## F11 — Copiar URL de comentarios de GitHub — 2026-07-11 (v0.2.3)
+
+Pedido de Edilson: cada comentario de un PR debe ofrecer un botón para copiar su URL
+permanente de github.com, para poder referenciar el comentario en otros agentes.
+
+- [x] **T44. Botón "copiar URL" por comentario en ThreadCard**
+  _Hecha y verificada e2e (2026-07-11, rama `fix/copy-comment-url`)._ Cambios:
+  (a) `shared/types.ts`: `PrComment.htmlUrl?` (opcional: sin URL la UI simplemente no
+    ofrece el botón — las fixtures no la traen y no hizo falta tocarlas).
+  (b) `main/github/real-service.ts`: campo `url` en las dos selecciones GraphQL de
+    comentarios (query de hilos + mutation de reply) y `html_url` en el mapeo REST.
+  (c) `main/github/mock-service.ts`: `mockCommentUrl` sella la URL al hidratar las
+    fixtures y en `postComment`, con el mismo formato de ancla que GitHub real
+    (`#discussion_r…` hilos de línea, `#issuecomment-…` generales; al responder por
+    `threadId` se mira `thread.isLineThread`, no el request).
+  (d) `renderer .../pr-detail/ThreadCard.tsx`: botón por comentario (icono `Link`,
+    lucide) con feedback "Copiado" 1.5s, mismo patrón que `CodeSnippet`. Cubre
+    Conversación e hilos inline del diff (ThreadCard se reutiliza).
+  Verificación: typecheck/lint/`npm test` verdes (481); suite nueva
+  `scripts/smoke-copy-url.mjs` 5/5 (presencia, CONTENIDO real del portapapeles vía
+  `navigator.clipboard.readText` con match del formato de URL, feedback aparece y
+  desaparece, variante inline) + `smoke-comments` 5/5 sin regresión.
+  Gotcha nuevo: `navigator.clipboard` (write Y read) exige documento CON FOCO — en un
+  e2e la ventana suele estar desenfocada y el `writeText` falla SILENCIOSO (el catch
+  del botón se lo traga: no aparece "Copiado"). La suite manda `Page.bringToFront`
+  por CDP antes del click. Matiz de F10: con hyprlock activo `Page.captureScreenshot`
+  puede COLGARSE (el compositor no produce frames) — no solo grim; la captura visual
+  queda pendiente de desbloqueo.
+
+- [x] **T45. Workflow de binarios dev por PR** (`.github/workflows/pr-dev-builds.yml`)
+  _Hecha (2026-07-11)._ Mismo matrix de 3 SOs que `release.yml`, pero disparado por
+  `pull_request` a main (+`workflow_dispatch`): re-versiona con
+  `npm version --no-git-tag-version` a `<version>-dev.pr<N>` (p. ej. `0.2.3-dev.pr6`)
+  y sube los binarios como ARTIFACTS del run (retención 14 días), no como release.
+  Corre typecheck + `npm test` antes de empaquetar. Concurrency por PR: un push
+  nuevo cancela los builds del anterior.
+  Verificación (PR #6): primer run linux+mac VERDES; windows rojo — no por el
+  empaquetado sino porque `npm test` nunca había corrido en Windows (release.yml
+  solo typechequea) y `resolve-cli.test.ts` armaba un PATH multi-entrada con ':'
+  hardcodeado, que sobre Node de Windows (`path.delimiter` = ';') queda como UNA
+  entrada inválida → `resolveCliPath` devolvía null. Gotcha: en tests que armen
+  `process.env.PATH`, SIEMPRE `['a','b'].join(delimiter)` — mockear `node:os` no
+  cambia `node:path`, que sigue siendo el de la plataforma real. Segundo run
+  (d94bf8b): 3/3 SOs verdes, artifacts `minerva-0.2.3-dev.pr6-{linux,mac,windows}`
+  (124/235/100 MB, retención 14 días).

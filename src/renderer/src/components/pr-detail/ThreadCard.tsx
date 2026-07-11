@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Check, Link } from 'lucide-react'
 import type { CommentThread } from '../../../../shared/types'
 import { Avatar } from '../ui/Avatar'
 import { Badge } from '../ui/Badge'
@@ -38,6 +39,18 @@ export function ThreadCard({
   const [draft, setDraft] = useState('')
   const [posting, setPosting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [copiedCommentId, setCopiedCommentId] = useState<string | null>(null)
+
+  async function handleCopyUrl(commentId: string, htmlUrl: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(htmlUrl)
+      setCopiedCommentId(commentId)
+      setTimeout(() => setCopiedCommentId((current) => (current === commentId ? null : current)), 1500)
+    } catch {
+      // Sin permiso de portapapeles o API no disponible en este contexto:
+      // no hay un fallback razonable, se ignora silenciosamente el clic.
+    }
+  }
 
   async function handleReply(event: React.FormEvent): Promise<void> {
     event.preventDefault()
@@ -114,6 +127,24 @@ export function ThreadCard({
                   <Avatar user={comment.author} size={16} />
                   <span className="font-medium text-text">{comment.author.login}</span>
                   <span>{formatShortDate(comment.createdAt)}</span>
+                  {comment.htmlUrl && (
+                    <button
+                      type="button"
+                      onClick={() => void handleCopyUrl(comment.id, comment.htmlUrl!)}
+                      title="Copiar URL del comentario en GitHub"
+                      aria-label="Copiar URL del comentario en GitHub"
+                      className="ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-muted transition-colors hover:bg-border/60 hover:text-text"
+                    >
+                      {copiedCommentId === comment.id ? (
+                        <>
+                          <Check size={12} className="text-success" />
+                          Copiado
+                        </>
+                      ) : (
+                        <Link size={12} />
+                      )}
+                    </button>
+                  )}
                 </div>
                 <Markdown content={comment.bodyMarkdown} />
               </li>

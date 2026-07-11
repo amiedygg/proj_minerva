@@ -45,6 +45,21 @@ function notFoundError(repo: RepoRef, number: number): Error {
   return new Error(`Pull request no encontrado: ${repo.fullName}#${number}`)
 }
 
+/**
+ * URL estilo github.com para un comentario mock, con el mismo formato de ancla
+ * que la API real (`#discussion_r…` para hilos de línea, `#issuecomment-…`
+ * para generales). Las fixtures no la traen: se sella aquí al hidratar.
+ */
+function mockCommentUrl(
+  repo: RepoRef,
+  prNumber: number,
+  commentId: string,
+  isLineThread: boolean,
+): string {
+  const anchor = isLineThread ? `discussion_r${commentId}` : `issuecomment-${commentId}`
+  return `https://github.com/${repo.fullName}/pull/${prNumber}#${anchor}`
+}
+
 export class MockGithubService implements GithubService {
   private readonly records = new Map<string, PrRecord>()
   private nextCommentSeq = 1000
@@ -55,7 +70,13 @@ export class MockGithubService implements GithubService {
       this.records.set(prKey(detail.repo, detail.number), {
         detail: { ...detail },
         files: fixture.files.map((file) => ({ ...file })),
-        threads: fixture.threads.map((thread) => ({ ...thread, comments: [...thread.comments] })),
+        threads: fixture.threads.map((thread) => ({
+          ...thread,
+          comments: thread.comments.map((comment) => ({
+            ...comment,
+            htmlUrl: mockCommentUrl(detail.repo, detail.number, comment.id, thread.isLineThread),
+          })),
+        })),
       })
     }
   }
@@ -106,8 +127,9 @@ export class MockGithubService implements GithubService {
     await delay(LATENCY_MS.postComment)
     const record = this.getRecord(req.repo, req.number)
 
+    const commentId = `c-mock-${this.nextCommentSeq}`
     const comment: PrComment = {
-      id: `c-mock-${this.nextCommentSeq}`,
+      id: commentId,
       author: { login: 'edygg', avatarUrl: '' },
       bodyMarkdown: req.bodyMarkdown,
       createdAt: new Date().toISOString(),
@@ -117,8 +139,10 @@ export class MockGithubService implements GithubService {
     if (req.threadId) {
       const thread = record.threads.find((t) => t.id === req.threadId)
       if (!thread) throw new Error(`Hilo de comentarios no encontrado: ${req.threadId}`)
+      comment.htmlUrl = mockCommentUrl(req.repo, req.number, commentId, thread.isLineThread)
       thread.comments.push(comment)
     } else {
+      comment.htmlUrl = mockCommentUrl(req.repo, req.number, commentId, Boolean(req.path))
       record.threads.push({
         id: `thread-mock-${this.nextCommentSeq}`,
         isResolved: false,

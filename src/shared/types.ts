@@ -75,6 +75,13 @@ export interface PrComment {
   bodyMarkdown: string
   createdAt: string
   isMinimized: boolean
+  /**
+   * URL permanente del comentario en github.com (`#issuecomment-…` /
+   * `#discussion_r…`), para copiarla y referenciar el comentario fuera de la
+   * app (p. ej. en otros agentes). Opcional: sin ella la UI simplemente no
+   * ofrece el botón de copiar.
+   */
+  htmlUrl?: string
 }
 
 export interface CommentThread {

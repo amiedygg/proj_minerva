@@ -1,0 +1,92 @@
+name: PR dev builds
+
+# Binarios de distribución "dev" por Pull Request: mismos 3 SOs que
+# release.yml pero con versión pre-release (p. ej. 0.2.3-dev.pr6) y subidos
+# como ARTIFACTS del run (no como release assets) — se descargan desde la
+# pestaña del workflow run y expiran solos a los 14 días.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Un push nuevo al PR cancela los builds del push anterior.
+concurrency:
+  group: pr-dev-builds-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os-name: linux
+            runner: ubuntu-latest
+            flag: --linux
+            assets: dist/*.AppImage
+          - os-name: windows
+            runner: windows-latest
+            flag: --win
+            assets: dist/*.exe
+          # macos pineado (no -latest): GitHub está migrando macos-latest a
+          # macOS 26 desde 2026-06-15 y no queremos que el entorno de build
+          # cambie por sorpresa. Subir de versión a propósito, no por drift.
+          - os-name: mac
+            runner: macos-15
+            flag: --mac
+            assets: dist/*.dmg
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set dev version
+        id: version
+        shell: bash
+        # 0.2.3 → 0.2.3-c426f14-dev: el SHA corto del commit REAL de la rama
+        # (head del PR, NO el merge commit sintético que checkout usa en
+        # pull_request) va en la versión, para poder confirmar en el
+        # "About" de la app instalada exactamente qué commit se está
+        # probando. En workflow_dispatch sí aplica github.sha.
+        run: |
+          BASE_VERSION="$(node -p "require('./package.json').version")"
+          SHORT_SHA="$(cut -c1-7 <<< '${{ github.event.pull_request.head.sha || github.sha }}')"
+          DEV_VERSION="${BASE_VERSION}-${SHORT_SHA}-dev"
+          npm version --no-git-tag-version "$DEV_VERSION"
+          echo "version=$DEV_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build (electron-vite)
+        run: npm run build
+
+      - name: Package (electron-builder)
+        run: npx electron-builder ${{ matrix.flag }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Upload dev binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: minerva-${{ steps.version.outputs.version }}-${{ matrix.os-name }}
+          path: ${{ matrix.assets }}
+          retention-days: 14
+          if-no-files-found: error

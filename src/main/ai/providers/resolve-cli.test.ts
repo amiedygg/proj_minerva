@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 
 /**
  * `resolve-cli.ts` toca el filesystem real (`node:fs.accessSync`) y lee
@@ -64,7 +64,10 @@ describe('resolveCliPath', () => {
   })
 
   it('encuentra el binario en un directorio de PATH', () => {
-    process.env.PATH = '/usr/bin:/opt/tools/bin'
+    // `delimiter` real de la plataforma (';' en Windows, ':' en POSIX):
+    // resolve-cli separa con él, y un ':' hardcodeado deja UNA sola entrada
+    // inválida cuando la suite corre sobre Node de Windows (CI de T45).
+    process.env.PATH = ['/usr/bin', '/opt/tools/bin'].join(delimiter)
     accessSyncMock.mockImplementation((path: string) => {
       if (path === join('/opt/tools/bin', 'claude')) return ok()
       return enoent()
