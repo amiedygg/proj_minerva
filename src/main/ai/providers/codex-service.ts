@@ -11,13 +11,20 @@
  * Pipeline de `analyzePullRequest` (mismo contrato que `OpenRouterAiService`/
  * `ClaudeCodeAiService`, ver `../service.ts`):
  * 1. Pide el detalle y los archivos del PR al `GithubService` ACTIVO
- *    (inyectado por constructor) y arma el mismo mensaje de usuario que el
- *    resto de proveedores (`../analysis-prompt.ts`).
- * 2. Spawnea un `codex app-server` EFÍMERO (una instancia de
+ *    (inyectado por constructor).
+ * 2. AGÉNTICO (F11/T58): `ensureSnapshot(this.github, req.repo, detail.headSha)`
+ *    (`../../github/snapshot-store.ts`, T54) materializa una copia local del
+ *    repo AL COMMIT del PR; ese directorio va como `cwd` de `thread/start`
+ *    (nombre del parámetro VERIFICADO contra el esquema real generado con
+ *    `codex app-server generate-json-schema` en esta tarea —
+ *    `ThreadStartParams.cwd: string | null`, T29-lección: no adivinar). El
+ *    mensaje de usuario (`buildAgenticUserMessage`, en vez de
+ *    `buildUserMessage`) le pide explícitamente que lo explore.
+ * 3. Spawnea un `codex app-server` EFÍMERO (una instancia de
  *    `CodexAppServerClient` por análisis, muerta en el `finally`) y hace el
  *    handshake, con la forma de mensajes VERIFICADA contra el protocolo real
- *    de `codex app-server` 0.142.x (esquema generado con
- *    `codex app-server generate-ts` + un turno real de humo):
+ *    de `codex app-server` 0.144.x (esquema generado con
+ *    `codex app-server generate-json-schema` + un turno real de humo):
  *      - `initialize` (request) con `clientInfo` + `capabilities`
  *        (`experimentalApi: true` — los métodos v2 `thread/start`/`turn/start`/
  *        `account/read`/`model/list` viven bajo esa capability).
@@ -29,11 +36,17 @@
  *        sesión" es `account != null`. Sin cuenta → mensaje accionable.
  *      - `thread/start` (request) con `model`, `baseInstructions` (= nuestro
  *        `ANALYZE_PR_SYSTEM_PROMPT`; es el análogo de Codex al `systemPrompt`
- *        custom del Agent SDK) y `sandbox: 'read-only'` + `approvalPolicy:
- *        'never'`: Codex es un agente de código; sin acotarlo intentaría
- *        ejecutar comandos y pedir aprobaciones. Nosotros solo queremos que
- *        GENERE el texto del análisis, sin tocar el disco. El id del hilo sale
- *        de `result.thread.id`.
+ *        custom del Agent SDK), `cwd: snapshotDir` (arriba) y `sandbox:
+ *        'read-only'` + `approvalPolicy: 'never'` SIN CAMBIOS (T29): Codex es
+ *        un agente de código; sin acotarlo intentaría ejecutar comandos y
+ *        pedir aprobaciones. `sandbox: 'read-only'` restringe ESCRITURA, no
+ *        LECTURA — el esquema (`SandboxMode` = `'read-only' |
+ *        'workspace-write' | 'danger-full-access'`, y el `--help` del propio
+ *        binario documenta `sandbox_permissions=["disk-full-read-access"]`
+ *        como algo aparte de escritura) confirma que un thread read-only
+ *        puede LEER el `cwd` apuntado al snapshot sin problema; nunca podrá
+ *        escribir en él ni en ningún otro lado. El id del hilo sale de
+ *        `result.thread.id`.
  *      - `turn/start` (request) con `input` = `Array<UserInput>` (un solo
  *        bloque `{ type: 'text', text, text_elements: [] }`) y, desde T36,
  *        `effort` (string `'low'|'medium'|'high'|'xhigh'`, y desde 0.2.4
@@ -46,14 +59,22 @@
  *        la notificación `turn/completed`. (El bug original de esta clase era
  *        matar el proceso apenas resolvía `turn/start`, antes de recibir un
  *        solo delta.)
- * 3. Durante el turno, el servidor emite notificaciones; los deltas de texto
- *    del asistente llegan como `item/agentMessage/delta` con `params.delta`
- *    (string) y se empujan al `StreamSectionParser` (`../stream-parser.ts`),
- *    con `onProgress` throttleado. El fin del turno es `turn/completed`; una
- *    notificación `error` o un `turn.status: 'failed'` lo aborta.
- * 4. Timeouts compartidos (`../analysis-timeouts.ts`, total 120s / inactividad
- *    20s) sobre el mismo `AbortController`; al abortar se mata el cliente.
- * 5. El proceso hijo se mata SIEMPRE en el `finally` — nunca queda huérfano.
+ * 4. Durante el turno, el servidor emite notificaciones de items agénticos
+ *    (lectura/grep/etc. del snapshot) además de las de texto; los deltas de
+ *    texto del asistente llegan SOLO como `item/agentMessage/delta` con
+ *    `params.delta` (string) y se empujan al `StreamSectionParser`
+ *    (`../stream-parser.ts`), con `onProgress` throttleado — CUALQUIER
+ *    notificación (delta de texto o item de tool-use) resetea el timer de
+ *    inactividad, no solo las de texto (ver el listener de abajo: el reset
+ *    está al tope, antes de distinguir el método). El fin del turno es
+ *    `turn/completed`; una notificación `error` o un `turn.status: 'failed'`
+ *    lo aborta.
+ * 5. Timeouts AGÉNTICOS compartidos (`../analysis-timeouts.ts`, T56: total
+ *    300s / inactividad 60s — más altos que la generación directa porque
+ *    explorar el snapshot toma varias notificaciones de tool-use antes del
+ *    primer delta de texto) sobre el mismo `AbortController`; al abortar se
+ *    mata el cliente.
+ * 6. El proceso hijo se mata SIEMPRE en el `finally` — nunca queda huérfano.
  */
 import type { AiService, AnalyzePullRequestOptions } from '../service'
 import type { GithubService } from '../../github/service'
@@ -61,14 +82,15 @@ import type { IpcRequest } from '../../../shared/ipc'
 import type { GeneratedAnalysis } from '../../../shared/types'
 import { getEffectiveAiSelection } from '../env'
 import { ANALYZE_PR_SYSTEM_PROMPT } from '../prompts/analyze-pr'
-import { buildUserMessage, prId } from '../analysis-prompt'
+import { buildAgenticUserMessage, prId } from '../analysis-prompt'
 import { StreamSectionParser } from '../stream-parser'
 import { createThrottle } from '../throttle'
+import { ensureSnapshot } from '../../github/snapshot-store'
 import {
+  AGENTIC_INACTIVITY_TIMEOUT_MS,
+  AGENTIC_REQUEST_TIMEOUT_MS,
   createAnalysisTimeouts,
-  INACTIVITY_TIMEOUT_MS,
   PROGRESS_THROTTLE_MS,
-  REQUEST_TIMEOUT_MS,
 } from '../analysis-timeouts'
 import {
   CodexAppServerClient,
@@ -151,10 +173,18 @@ export class CodexAiService implements AiService {
       this.github.getPullRequestFiles(req),
     ])
 
-    const userMessage = buildUserMessage(detail, files)
+    // AGÉNTICO (F11/T58): copia local del repo al commit del PR — el `cwd`
+    // que se le pasa a `thread/start` (ver el comentario del módulo).
+    // Dedupeado/cacheado en disco por `ensureSnapshot` (T54).
+    const snapshotDir = await ensureSnapshot(this.github, req.repo, detail.headSha)
+
+    const userMessage = buildAgenticUserMessage(detail, files)
 
     const controller = new AbortController()
-    const timeouts = createAnalysisTimeouts(controller)
+    const timeouts = createAnalysisTimeouts(controller, {
+      totalMs: AGENTIC_REQUEST_TIMEOUT_MS,
+      inactivityMs: AGENTIC_INACTIVITY_TIMEOUT_MS,
+    })
 
     const parser = new StreamSectionParser()
     const throttle = createThrottle(PROGRESS_THROTTLE_MS)
@@ -169,12 +199,12 @@ export class CodexAiService implements AiService {
       if (reason === 'inactivity-timeout') {
         return (
           'Codex dejó de enviar datos: sin ningún fragmento nuevo por más de ' +
-          INACTIVITY_TIMEOUT_MS / 1000 +
+          AGENTIC_INACTIVITY_TIMEOUT_MS / 1000 +
           's (timeout de inactividad).'
         )
       }
       if (reason === 'total-timeout') {
-        return 'Codex no respondió a tiempo (timeout total de ' + REQUEST_TIMEOUT_MS / 1000 + 's).'
+        return 'Codex no respondió a tiempo (timeout total de ' + AGENTIC_REQUEST_TIMEOUT_MS / 1000 + 's).'
       }
       return null
     }
@@ -203,6 +233,13 @@ export class CodexAiService implements AiService {
       const threadResult = await client.request('thread/start', {
         model,
         baseInstructions: ANALYZE_PR_SYSTEM_PROMPT,
+        // AGÉNTICO (F11/T58): apunta el thread al snapshot local del PR.
+        // Nombre de param VERIFICADO contra `ThreadStartParams` del esquema
+        // real (`codex app-server generate-json-schema`, T58): `cwd: string
+        // | null`. `sandbox: 'read-only'` restringe ESCRITURA, no lectura
+        // (ver comentario del módulo) — el thread puede leer libremente
+        // dentro (y fuera) de este `cwd`.
+        cwd: snapshotDir,
         sandbox: 'read-only',
         approvalPolicy: 'never',
       })
@@ -219,6 +256,10 @@ export class CodexAiService implements AiService {
       })
 
       const unsubscribe = client.onNotification((notification) => {
+        // AGÉNTICO (F11/T58): se resetea con CUALQUIER notificación del
+        // thread (items de tool-use explorando el snapshot incluidos), no
+        // solo con deltas de texto — el agente sigue vivo aunque una vuelta
+        // entera sea puro `item/*` de lectura/grep sin texto nuevo.
         timeouts.resetInactivityTimer()
 
         const delta = extractAgentDelta(notification)

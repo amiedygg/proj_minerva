@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GithubService } from '../../github/service'
 import type { DiffFile, PullRequestDetail } from '../../../shared/types'
 import type { DraftDidacticSection } from '../../../shared/events'
+import { AGENTIC_INACTIVITY_TIMEOUT_MS, AGENTIC_REQUEST_TIMEOUT_MS } from '../analysis-timeouts'
 
 /**
  * `CodexAiService` (T29) habla con `codex app-server` vía
@@ -18,6 +19,39 @@ const getEffectiveAiSelectionMock = vi.fn()
 vi.mock('../env', () => ({
   getEffectiveAiSelection: (...args: unknown[]) => getEffectiveAiSelectionMock(...args),
 }))
+
+/**
+ * `ensureSnapshot` (T54) se mockea: los tests de este servicio NO deben
+ * pagar una descarga real de GitHub ni tocar disco, solo verificar que el
+ * servicio lo llama con `(github, repo, detail.headSha)` y usa lo que
+ * devuelve como `cwd` de `thread/start` (T58).
+ */
+const ensureSnapshotMock = vi.fn()
+vi.mock('../../github/snapshot-store', () => ({
+  ensureSnapshot: (...args: unknown[]) => ensureSnapshotMock(...args),
+}))
+
+/**
+ * `createAnalysisTimeouts` (T56) se envuelve (NO se reemplaza: se preserva
+ * el comportamiento real) solo para capturar con QUÉ `{ totalMs, inactivityMs }`
+ * lo llama `CodexAiService` — T58 pide verificar que usa los valores
+ * AGÉNTICOS (`AGENTIC_REQUEST_TIMEOUT_MS`/`AGENTIC_INACTIVITY_TIMEOUT_MS`),
+ * no los de generación directa.
+ */
+const createAnalysisTimeoutsCalls: Array<{ totalMs?: number; inactivityMs?: number } | undefined> = []
+vi.mock('../analysis-timeouts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../analysis-timeouts')>()
+  return {
+    ...actual,
+    createAnalysisTimeouts: (
+      controller: AbortController,
+      options?: { totalMs?: number; inactivityMs?: number },
+    ) => {
+      createAnalysisTimeoutsCalls.push(options)
+      return actual.createAnalysisTimeouts(controller, options)
+    },
+  }
+})
 
 interface FakeClientScript {
   requestResults: Map<string, unknown[]>
@@ -189,6 +223,9 @@ function makeGithubService(): GithubService {
 describe('CodexAiService.analyzePullRequest', () => {
   beforeEach(() => {
     getEffectiveAiSelectionMock.mockReturnValue({ provider: 'codex', model: 'gpt-5.5', options: {} })
+    ensureSnapshotMock.mockReset()
+    ensureSnapshotMock.mockResolvedValue('/home/test-user/.minerva/snapshots/shopwave-api-a1b2c3d')
+    createAnalysisTimeoutsCalls.length = 0
   })
 
   afterEach(() => {
@@ -223,6 +260,9 @@ describe('CodexAiService.analyzePullRequest', () => {
     expect(threadStartCall.params).toEqual({
       model: 'gpt-5.5',
       baseInstructions: expect.any(String),
+      // AGÉNTICO (T58): cwd = snapshot local del PR, sandbox/approvalPolicy
+      // SIN CAMBIOS (T29).
+      cwd: '/home/test-user/.minerva/snapshots/shopwave-api-a1b2c3d',
       sandbox: 'read-only',
       approvalPolicy: 'never',
     })
@@ -235,7 +275,41 @@ describe('CodexAiService.analyzePullRequest', () => {
       ],
     })
 
+    // `ensureSnapshot` se llama con el headSha del detail (T58).
+    expect(ensureSnapshotMock).toHaveBeenCalledWith(expect.anything(), repo, detail.headSha)
+
     expect(fake.getKillCalls()).toBeGreaterThan(0)
+  })
+
+  it('usa los timeouts AGÉNTICOS (300s/60s), no los de generación directa (T58)', async () => {
+    setupFakeClient({
+      requestResults: happyPathResults(),
+      notifications: [itemDelta('@@@SECTION kind=summary\nok\n')],
+    })
+
+    const service = new CodexAiService(makeGithubService())
+    await service.analyzePullRequest({ repo, number: 482 })
+
+    expect(createAnalysisTimeoutsCalls).toEqual([
+      { totalMs: AGENTIC_REQUEST_TIMEOUT_MS, inactivityMs: AGENTIC_INACTIVITY_TIMEOUT_MS },
+    ])
+  })
+
+  it('resetea el timer de inactividad con notificaciones que no son deltas de texto (item de tool-use, T58)', async () => {
+    setupFakeClient({
+      requestResults: happyPathResults(),
+      notifications: [
+        { method: 'item/started', params: { item: { id: 'x', type: 'fileRead' } } },
+        { method: 'item/completed', params: { item: { id: 'x', type: 'fileRead' } } },
+        itemDelta('@@@SECTION kind=summary\nok\n'),
+      ],
+    })
+
+    const service = new CodexAiService(makeGithubService())
+    const result = await service.analyzePullRequest({ repo, number: 482 })
+    // No revienta por inactividad ni pierde contenido: las notificaciones de
+    // tool-use (sin delta de texto) igual cuentan como actividad.
+    expect(result.sections).toEqual([{ kind: 'summary', markdown: 'ok' }])
   })
 
   it('llama a onProgress con snapshots parciales y una vez final con done:true', async () => {

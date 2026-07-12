@@ -1910,7 +1910,24 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   (server arranca, `/global/health` responde `{ healthy: true, version }`, se mata
   limpio sin huérfanos).
 
-- [ ] **T56. `OpenCodeAiService` + user message agéntico compartido + timeouts agénticos**
+- [x] **T56. `OpenCodeAiService` + user message agéntico compartido + timeouts agénticos**
+  _(a)+(b) hechos por el orquestador (commit 187a5a6); (c) por subagente Sonnet
+  (2026-07-11) y VERIFICADO por el orquestador. SDK: se usa `@opencode-ai/sdk/v2`
+  (la raíz v1 NO tiene `message.part.delta` ni `session.idle`; v1 queda para
+  provider.list de T57 — conviven). GOTCHA CRÍTICO de wire: las firmas del .d.ts
+  genérico (`{path, body}`) MIENTEN — las clases reales del cliente usan params
+  FLAT (`promptAsync({ sessionID, model, system, parts })`); la forma anidada hace
+  500 con el placeholder sin reemplazar. Filtro de texto real: delta con
+  `field==='text'` + rol assistant (message.updated) + parte tipo 'text'
+  (message.part.updated solo para bookkeeping de tipos, jamás su .text — bug
+  #27966/#26697); las partes reasoning/tool se excluyen. 19 unit tests. Humo real
+  del subagente: clase real bundleada + binario real + `opencode/big-pickle` →
+  3 secciones con detalles solo visibles leyendo el snapshot. VERIFICACIÓN
+  INTEGRAL del orquestador (app real, MINERVA_MOCK=1 + CDP): análisis agéntico de
+  shopwave/api#482 con opencode/big-pickle en 54.4s → 4 secciones (summary, setup,
+  architecture, endpoint) selladas con generatedWith correcto. Cableado del case
+  'opencode' en createAiService por el orquestador (mensajes accionables distintos
+  para installed-sin-upstreams vs binario ausente)._
   Contexto: cuarto `AiService` real (patrón `OpenCodeAdapter.ts` de t3code, adaptado a
   nuestra vuelta única). Depende de T54+T55.
   Entregables:
@@ -1941,7 +1958,22 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   inactividad); reporte de UNA corrida de humo real (snapshot pequeño, modelo del
   gateway `opencode/*`) con las secciones parseadas.
 
-- [ ] **T57. Proveedor `opencode` en registry/probe/modelos/settings (aditivo)**
+- [x] **T57. Proveedor `opencode` en registry/probe/modelos/settings (aditivo)**
+  _Hecha (2026-07-11, subagente Sonnet) y VERIFICADA por el orquestador. Forma de
+  `provider.list` verificada empíricamente (GET /provider): `{ all, default,
+  connected }` — OJO: los tipos con nombre `Provider`/`Model` que exporta el SDK
+  v1 son de OTRA forma (sin `variants`), se usan interfaces estructurales locales
+  (patrón codex-model-catalog). Probe: authenticated = server + ≥1 upstream en
+  `connected` (criterio t3code), `account.plan` describe los upstreams; nunca
+  arranca el server si el binario/versión fallan. Catálogo dinámico con cache TTL
+  60s generalizada (Map codex+opencode) y fallback curado (gateway free). UI:
+  ProviderPicker ya era genérico; CLI_META gana opencode; "Otro (avanzado)" ahora
+  también para opencode con placeholder por proveedor. VERIFICADO e2e (CDP):
+  status opencode authenticated "3 upstreams: openai, github-copilot, opencode",
+  56 modelos dinámicos, selección persiste. NOTA: abrir Settings arranca el server
+  de OpenCode en frío para el probe (paridad t3code; singleton T55 + TTL lo
+  amortiguan). Captura mirada de Settings PENDIENTE (pantalla con lock/screensaver
+  al verificar — el DOM sí muestra OpenCode en el modal); se cubre en T61._
   Contexto: cablear `opencode` como proveedor de PRIMERA clase. `openrouter` NO se toca
   acá (se elimina en T59 — orden importa). Depende de T55.
   Entregables: `AiProviderId` gana `'opencode'` (`shared/ai-providers.ts`: catálogo con
@@ -1964,7 +1996,22 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   Settings muestra OpenCode "Conectado" en esta máquina y el picker lista modelos
   reales del `provider.list()`.
 
-- [ ] **T58. Agentizar Claude Code y Codex sobre el snapshot**
+- [x] **T58. Agentizar Claude Code y Codex sobre el snapshot**
+  _Hecha (2026-07-11, subagente Sonnet) y VERIFICADA por el orquestador (revisión
+  de código + suites). Claude: `cwd` snapshot, `tools`/`allowedTools`
+  ['Read','Grep','Glob'] (verificados contra sdk.d.ts; NO existe tool de listado
+  aparte de Glob), `permissionMode: 'dontAsk'` (los modos con prompt colgarían un
+  headless; bypassPermissions salta TODO, descartado), maxTurns 30, settingSources
+  []/persistSession false ahora CRÍTICOS (cwd hostil). PRUEBA DE SEGURIDAD real
+  (cuenta Max): snapshot trampa con CLAUDE.md "responde BANANA" → IGNORADO; 16
+  tool_use reales (solo Glob/Read/Grep), 9 turnos, 3 secciones que citan el código
+  real. Codex: `ThreadStartParams.cwd` verificado con `codex app-server
+  generate-json-schema` (0.144.1; `--out`, no `--out-dir`); sandbox read-only
+  restringe ESCRITURA no lectura (ReadOnlySandboxPolicy solo tiene networkAccess)
+  — humo real: el agente citó contenido del snapshot vía cwd. GOTCHAS: el
+  CodexAppServerClient no se puede importar fuera de Electron (constructor toca
+  app.on) — para humos, JSON-RPC a mano; scripts de scratchpad que importan SDKs
+  necesitan symlink de node_modules (Node resuelve desde el archivo, no cwd)._
   Contexto: igualdad de condiciones día 1 (decisión de Edilson). Depende de T54.
   Entregables:
   (a) `claude-code-service.ts`: `ensureSnapshot` → `query({ options: { cwd: snapshot,
