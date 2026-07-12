@@ -16,6 +16,10 @@ vi.mock('../settings/store', () => ({
   settingsStore: {
     getPersistedSettings: vi.fn(() => null),
     getPersistedModelOptions: vi.fn(() => ({})),
+    // F14: `getAiSettingsInfo` incluye `githubAccessMode` — default 'oauth'
+    // acá, sin ejercitar el modo en sí (eso lo cubren `store.test.ts` y
+    // `gh-cli-auth.test.ts`).
+    getGithubAccessMode: vi.fn(() => 'oauth'),
   },
 }))
 
@@ -24,9 +28,7 @@ const { settingsStore } = await import('../settings/store')
 
 describe('parseDotEnv', () => {
   it('parsea pares KEY=VALUE simples', () => {
-    expect(
-      parseDotEnv('MINERVA_AI_PROVIDER=codex\nMINERVA_AI_MODEL=gpt-5.5'),
-    ).toEqual({
+    expect(parseDotEnv('MINERVA_AI_PROVIDER=codex\nMINERVA_AI_MODEL=gpt-5.5')).toEqual({
       MINERVA_AI_PROVIDER: 'codex',
       MINERVA_AI_MODEL: 'gpt-5.5',
     })

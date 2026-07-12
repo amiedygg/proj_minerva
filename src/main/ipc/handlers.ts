@@ -10,6 +10,7 @@ import { getProviderModels } from '../ai/providers/provider-models'
 import { analysisCache } from '../ai/analysis-cache'
 import { settingsStore } from '../settings/store'
 import { authManager } from '../auth/auth-manager'
+import { ghCliAuth } from '../auth/gh-cli-auth'
 import { openDidacticWindow } from '../windows/didactic-window'
 import {
   MINERVA_EVENTS,
@@ -349,6 +350,21 @@ export async function registerIpcHandlers(): Promise<{ stopPrWatcher: () => void
   // `AiSettingsInfo` actualizado, mismo patrón que los dos handlers de arriba.
   handle('settings:setModelOption', (req) => {
     settingsStore.setModelOption(req.provider, req.optionId, req.value)
+    return getAiSettingsInfo()
+  })
+
+  // Modo de acceso a GitHub (F14, v0.5.0): persiste el modo, cancela un
+  // device flow oauth que hubiera quedado a mitad de camino si el modo nuevo
+  // es `gh-cli` (huérfano — la UI ya cambió de modo, nadie lo va a
+  // completar), calienta el probe de `gh` (así la UI ve el estado fresco de
+  // inmediato en vez de esperar al próximo poll) y responde el mismo
+  // `AiSettingsInfo` agregado que los canales `settings:set*` de IA.
+  handle('settings:setGithubAccessMode', async (req) => {
+    settingsStore.setGithubAccessMode(req.mode)
+    if (req.mode === 'gh-cli') {
+      authManager.cancelDeviceFlowIfPending()
+      await ghCliAuth.getStatus()
+    }
     return getAiSettingsInfo()
   })
 

@@ -2,6 +2,8 @@ import { app, BrowserWindow, safeStorage } from 'electron'
 import { join } from 'node:path'
 import { registerIpcHandlers } from './ipc/handlers'
 import { authManager } from './auth/auth-manager'
+import { ghCliAuth } from './auth/gh-cli-auth'
+import { settingsStore } from './settings/store'
 import { createSnapshotCleaner } from './github/snapshot-store'
 import { stopOpencodeServer } from './ai/providers/opencode-runtime'
 import { secureWebPreferences } from './windows/secure-web-preferences'
@@ -85,6 +87,15 @@ void app.whenReady().then(async () => {
   // lo hay), en vez de reportar `signed_out` un instante y luego "saltar" a
   // `signed_in` sin que nada haya disparado ese cambio.
   await authManager.init()
+
+  // F14: si el modo de acceso a GitHub persistido es `gh-cli`, calienta el
+  // probe de `gh` ANTES de registrar los handlers, mismo criterio que
+  // `authManager.init()` arriba (para que la primera `auth:getStatus` del
+  // renderer no reporte "cargando" un instante). El timeout interno de
+  // `ghCliAuth` (3s por spawn) garantiza no bloquear el arranque más de eso.
+  if (settingsStore.getGithubAccessMode() === 'gh-cli') {
+    await ghCliAuth.getStatus()
+  }
 
   const { stopPrWatcher } = await registerIpcHandlers()
 

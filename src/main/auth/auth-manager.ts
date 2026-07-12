@@ -3,23 +3,33 @@
  *
  * `signed_out` -> `device_pending` (esperando que el usuario ingrese el
  * código en github.com/login/device) -> `signed_in` (con el `UserRef`
- * obtenido de `GET /user`).
+ * obtenido de `GET /user`). Esta máquina modela SOLO el modo `oauth` — desde
+ * F14 (v0.5.0) `AuthManager` es CONSCIENTE del modo de acceso a GitHub
+ * (`settingsStore.getGithubAccessMode()`) y en modo `gh-cli` delega TODO a
+ * `./gh-cli-auth.ts` (`ghCliAuth`), que tiene su propio mapeo de estados
+ * (`cli_unavailable`/`cli_unauthenticated`/`signed_in`) — ver el comentario de
+ * cabecera de ese módulo.
  *
  * El token vive únicamente en el campo privado `token` del estado interno de
- * esta clase: `getStatus()` (lo que sale por IPC como `AuthStatus`) nunca lo
- * incluye. Solo `getToken()` lo expone, y solo dentro de `main` (lo consume
- * `RealGithubService` vía el provider que le pasa `src/main/github/index.ts`).
+ * esta clase (modo oauth) o en `ghCliAuth` (modo gh-cli): `getStatus()` (lo
+ * que sale por IPC como `AuthStatus`) nunca lo incluye. Solo `getToken()` lo
+ * expone, y solo dentro de `main` (lo consume `RealGithubService` vía el
+ * provider que le pasa `src/main/github/index.ts`).
  *
  * No hay canales IPC de eventos push en esta tarea: el renderer se entera del
  * avance del polling repitiendo `auth:getStatus` (ver `useAuth` en el
  * renderer). Esta clase solo necesita, entonces, que `getStatus()` siempre
  * refleje el estado más reciente — el polling real hacia GitHub lo maneja
  * ella misma con `setTimeout` recursivo, independiente de que el renderer
- * esté o no preguntando.
+ * esté o no preguntando. F14: `getStatus()` pasa a ASYNC (delega a
+ * `ghCliAuth.getStatus()`, que spawnea `gh` on-demand) — el `handle()` de IPC
+ * ya soporta promesas, así que el canal `auth:getStatus` no cambia de forma.
  */
-import { GITHUB_USER_API_URL } from './config'
 import { pollAccessToken, requestDeviceCode, type PollOutcome } from './device-flow'
+import { ghCliAuth } from './gh-cli-auth'
+import { fetchGithubUser } from './github-user'
 import { clearToken, loadToken, saveToken } from './token-store'
+import { settingsStore } from '../settings/store'
 import type { AuthStatus, UserRef } from '../../shared/types'
 
 interface SignedOutState {
@@ -49,20 +59,6 @@ function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-async function fetchGithubUser(token: string): Promise<UserRef> {
-  const response = await fetch(GITHUB_USER_API_URL, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-    },
-  })
-  if (!response.ok) {
-    throw new Error(`GET /user respondió ${response.status}`)
-  }
-  const data = (await response.json()) as { login: string; avatar_url: string }
-  return { login: data.login, avatarUrl: data.avatar_url }
-}
-
 export class AuthManager {
   private state: InternalState = { kind: 'signed_out' }
 
@@ -86,12 +82,28 @@ export class AuthManager {
     }
   }
 
-  getStatus(): AuthStatus {
+  /**
+   * F14: en modo `gh-cli` delega ÍNTEGRAMENTE a `ghCliAuth.getStatus()` (su
+   * propio cache TTL + single-flight, ver `./gh-cli-auth.ts`) — la máquina de
+   * estados oauth de esta clase queda "congelada" pero intacta en memoria
+   * (`this.state`), lista para reflejarse de nuevo apenas el usuario vuelva a
+   * modo `oauth` desde Settings.
+   */
+  getStatus(): Promise<AuthStatus> {
+    if (settingsStore.getGithubAccessMode() === 'gh-cli') {
+      return ghCliAuth.getStatus()
+    }
+    return Promise.resolve(this.oauthStatus())
+  }
+
+  /** Estado oauth puro, sin considerar el modo — lo reutilizan `startDeviceFlow`/`signOut` para construir su respuesta cuando el modo activo SÍ es oauth. */
+  private oauthStatus(): AuthStatus {
     switch (this.state.kind) {
       case 'signed_out':
-        return { state: 'signed_out' }
+        return { mode: 'oauth', state: 'signed_out' }
       case 'device_pending':
         return {
+          mode: 'oauth',
           state: 'device_pending',
           deviceCode: {
             userCode: this.state.userCode,
@@ -100,19 +112,37 @@ export class AuthManager {
           },
         }
       case 'signed_in':
-        return { state: 'signed_in', user: this.state.user }
+        return { mode: 'oauth', state: 'signed_in', user: this.state.user }
     }
   }
 
-  /** Único punto por el que el token cruza la frontera main -> resto de main. Nunca sale por IPC. */
+  /**
+   * Único punto por el que el token cruza la frontera main -> resto de main.
+   * Nunca sale por IPC. F14: en modo `gh-cli` delega a `ghCliAuth.getTokenSync()`
+   * (snapshot en memoria del último probe, sin spawnear nada — sigue siendo
+   * SÍNCRONO porque lo consume `RealGithubService` en cada request).
+   */
   getToken(): string | null {
+    if (settingsStore.getGithubAccessMode() === 'gh-cli') {
+      return ghCliAuth.getTokenSync()
+    }
     return this.state.kind === 'signed_in' ? this.state.token : null
   }
 
-  /** Idempotente: si ya hay un device flow en curso, devuelve ese mismo código en vez de pedir uno nuevo. */
+  /**
+   * Idempotente: si ya hay un device flow en curso, devuelve ese mismo código
+   * en vez de pedir uno nuevo. F14: NO-OP en modo `gh-cli` — el login en ese
+   * modo es cosa de `gh auth login` en una terminal, jamás de un Device Flow
+   * de Minerva; devuelve el status gh actual sin tocar la máquina de estados
+   * oauth.
+   */
   async startDeviceFlow(): Promise<AuthStatus> {
+    if (settingsStore.getGithubAccessMode() === 'gh-cli') {
+      return ghCliAuth.getStatus()
+    }
+
     if (this.state.kind === 'device_pending') {
-      return this.getStatus()
+      return this.oauthStatus()
     }
 
     const info = await requestDeviceCode()
@@ -127,16 +157,44 @@ export class AuthManager {
     }
     this.state = pending
     this.schedulePoll(pending)
-    return this.getStatus()
+    return this.oauthStatus()
   }
 
-  signOut(): AuthStatus {
+  /**
+   * F14: NO-OP en modo `gh-cli` — "cerrar sesión" en ese modo no tiene
+   * sentido (la sesión es de `gh`, no de Minerva) y JAMÁS debe correr
+   * `gh auth logout` (es la sesión del usuario, ajena a esta app) ni
+   * `clearToken()` del token OAuth persistido (volver a modo oauth debe
+   * restaurar esa sesión tal cual estaba). Devuelve el status gh actual.
+   */
+  async signOut(): Promise<AuthStatus> {
+    if (settingsStore.getGithubAccessMode() === 'gh-cli') {
+      return ghCliAuth.getStatus()
+    }
+
     if (this.state.kind === 'device_pending' && this.state.pollTimer !== null) {
       clearTimeout(this.state.pollTimer)
     }
     clearToken()
     this.state = { kind: 'signed_out' }
-    return this.getStatus()
+    return this.oauthStatus()
+  }
+
+  /**
+   * Cancela un device flow oauth EN CURSO sin tocar el token OAuth persistido
+   * (F14): la llama el handler de `settings:setGithubAccessMode` cuando el
+   * usuario activa `gh-cli` mientras había un login oauth a mitad de camino
+   * (esperando el código en github.com/login/device) — ese polling quedaría
+   * huérfano (nadie lo va a completar desde la UI, que ya cambió de modo) si
+   * no se cancela. Si NO hay un device flow pendiente (p. ej. ya estaba
+   * `signed_in` o `signed_out`), es un no-op: en particular, un usuario ya
+   * `signed_in` con OAuth conserva esa sesión en memoria, lista para
+   * reaparecer si vuelve a modo `oauth`.
+   */
+  cancelDeviceFlowIfPending(): void {
+    if (this.state.kind !== 'device_pending') return
+    if (this.state.pollTimer !== null) clearTimeout(this.state.pollTimer)
+    this.state = { kind: 'signed_out' }
   }
 
   private schedulePoll(pending: DevicePendingState): void {

@@ -51,11 +51,27 @@ export function CliLoginGuide({
 
   return (
     <div className="mt-2 rounded-md border border-border bg-bg/40 p-2.5">
-      {value === 'unavailable' && (
+      {value === 'unavailable' && status?.reason === 'probe-failed' && (
         <p className="text-xs text-muted">
-          No se encontró el CLI <span className="font-mono text-text">{meta.binary}</span> en tu
-          PATH. Instalalo desde <ExternalLink href={meta.installUrl}>la documentación oficial</ExternalLink>{' '}
-          y volvé a intentar.
+          Encontramos el CLI <span className="font-mono text-text">{meta.binary}</span>
+          {status.resolvedPath ? (
+            <>
+              {' '}
+              en <span className="font-mono text-text break-all">{status.resolvedPath}</span>
+            </>
+          ) : null}{' '}
+          pero no respondió a la comprobación (versión demasiado vieja, o no terminó a tiempo —
+          p. ej. justo después de una actualización del CLI). Probá{' '}
+          <span className="font-mono text-text">{meta.binary} --version</span> en una terminal y
+          volvé a comprobar acá.
+        </p>
+      )}
+      {value === 'unavailable' && status?.reason !== 'probe-failed' && (
+        <p className="text-xs text-muted">
+          No se encontró el CLI <span className="font-mono text-text">{meta.binary}</span> ni en tu
+          PATH ni en las ubicaciones de instalación comunes. Instalalo desde{' '}
+          <ExternalLink href={meta.installUrl}>la documentación oficial</ExternalLink> y volvé a
+          intentar.
         </p>
       )}
       {value === 'installed' && provider === 'opencode' && (

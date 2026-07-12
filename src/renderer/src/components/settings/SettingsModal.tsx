@@ -4,9 +4,10 @@ import { useAppStore } from '../../stores/app-store'
 import { useSettings } from '../../hooks/use-settings'
 import { useProviderStatus } from '../../hooks/use-provider-status'
 import type { AiProviderId } from '../../../../shared/ai-providers'
-import type { AiProviderStatus, AiSettingsInfo } from '../../../../shared/types'
+import type { AiProviderStatus, AiSettingsInfo, GithubAccessMode } from '../../../../shared/types'
 import { IconButton } from '../ui/IconButton'
 import { ActiveConfigSummary } from './ActiveConfigSummary'
+import { GithubAccessSection } from './GithubAccessSection'
 import { ProviderTabs } from './ProviderTabs'
 import { ProviderModelPanel } from './ProviderModelPanel'
 
@@ -33,7 +34,7 @@ import { ProviderModelPanel } from './ProviderModelPanel'
  */
 export function SettingsModal(): React.JSX.Element {
   const closeSettings = useAppStore((s) => s.closeSettings)
-  const { info, error, selectProvider, saveModel, setModelOption } = useSettings()
+  const { info, error, selectProvider, saveModel, setModelOption, setGithubAccessMode } = useSettings()
   const providerStatus = useProviderStatus()
   const cardRef = useRef<HTMLDivElement>(null)
 
@@ -78,6 +79,7 @@ export function SettingsModal(): React.JSX.Element {
             selectProvider={selectProvider}
             saveModel={saveModel}
             setModelOption={setModelOption}
+            setGithubAccessMode={setGithubAccessMode}
           />
         )}
       </div>
@@ -94,6 +96,7 @@ interface SettingsModalBodyProps {
   selectProvider: (provider: AiProviderId) => Promise<boolean>
   saveModel: (provider: AiProviderId, model: string) => Promise<boolean>
   setModelOption: (provider: AiProviderId, optionId: string, value: string) => Promise<boolean>
+  setGithubAccessMode: (mode: GithubAccessMode) => Promise<boolean>
 }
 
 /**
@@ -115,11 +118,20 @@ function SettingsModalBody({
   selectProvider,
   saveModel,
   setModelOption,
+  setGithubAccessMode,
 }: SettingsModalBodyProps): React.JSX.Element {
   const [viewedProvider, setViewedProvider] = useState<AiProviderId>(info.provider)
 
   return (
     <>
+      {/*
+        Primera sección no-IA del modal (T72, F14): "Acceso a GitHub" antes
+        que nada relacionado a proveedor/modelo — con heading propio y el
+        mismo `border-b` que separa a `ActiveConfigSummary`, para que quede
+        visualmente aparte del resto (que sí es todo config de IA).
+      */}
+      <GithubAccessSection info={info} setGithubAccessMode={setGithubAccessMode} />
+
       <ActiveConfigSummary info={info} statuses={statuses} />
       <ProviderTabs info={info} statuses={statuses} viewed={viewedProvider} onChange={setViewedProvider} />
       <div className="flex-1 overflow-y-auto">

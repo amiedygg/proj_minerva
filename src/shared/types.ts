@@ -122,9 +122,35 @@ export interface CommentThread {
   comments: PrComment[]
 }
 
-export type AuthState = 'signed_out' | 'device_pending' | 'signed_in'
+/**
+ * Modo de acceso a GitHub (F14, v0.5.0): `oauth` es el Device Flow de siempre
+ * (`main/auth/auth-manager.ts`); `gh-cli` delega la autenticación al CLI `gh`
+ * ya logueado del usuario (`main/auth/gh-cli-auth.ts`) — pensado para orgs
+ * enterprise que bloquean la OAuth App de Minerva (*OAuth app access
+ * restrictions*) pero sí permiten GitHub CLI. En ambos modos los datos
+ * siguen fluyendo por el mismo `RealGithubService` (Octokit), solo cambia de
+ * dónde sale el token (ver `main/github/index.ts` y `./PLAN.md` § F14).
+ */
+export type GithubAccessMode = 'oauth' | 'gh-cli'
+
+/**
+ * `cli_unavailable`/`cli_unauthenticated` (F14) solo aplican en modo
+ * `gh-cli`: el binario `gh` no se encontró en PATH, o se encontró pero no
+ * hay sesión válida (`gh auth token` falló, devolvió vacío, o el token ya no
+ * sirve contra `GET /user`) — ver `main/auth/gh-cli-auth.ts`. `signed_in` se
+ * reutiliza para "gh autenticado", no hace falta un estado nuevo para eso.
+ */
+export type AuthState =
+  'signed_out' | 'device_pending' | 'signed_in' | 'cli_unavailable' | 'cli_unauthenticated'
 
 export interface AuthStatus {
+  /**
+   * Modo con el que se generó este status (F14): REQUERIDO desde que existe
+   * más de un modo — sin esto la UI no podría distinguir un `signed_out` de
+   * OAuth (ofrece "Iniciar sesión") de uno hipotético de gh-cli (no
+   * aplicable, `gh-cli` nunca reporta `signed_out`, ver `gh-cli-auth.ts`).
+   */
+  mode: GithubAccessMode
   state: AuthState
   user?: UserRef
   deviceCode?: {
@@ -253,6 +279,11 @@ export type AiModelSource = 'settings' | 'env' | 'default'
  * (`NoCliProvidersCard`): con GitHub mock la demo funciona sin ningún CLI
  * instalado (vía `MockAiService`), así que la card NO debe aparecer aunque
  * los tres proveedores reales reporten `unavailable`.
+ *
+ * `githubAccessMode` (F14): el modo de acceso a GitHub persistido (o el
+ * default `'oauth'` si no hay nada guardado, ver
+ * `settingsStore.getGithubAccessMode()`) — expuesto acá para que la sección
+ * "Acceso a GitHub" de Settings (T72) no necesite un canal aparte.
  */
 export interface AiSettingsInfo {
   provider: AiProviderId
@@ -262,6 +293,7 @@ export interface AiSettingsInfo {
   catalog: Record<AiProviderId, AiProviderCatalogEntry>
   selectedOptions?: Partial<Record<AiProviderId, Record<string, string>>>
   mockGithub: boolean
+  githubAccessMode: GithubAccessMode
 }
 
 /**
@@ -269,17 +301,26 @@ export interface AiSettingsInfo {
  * los tres proveedores son `cli` desde T59 — hasta entonces OpenRouter
  * resolvía `unavailable`/`authenticated` de forma síncrona según hubiera o
  * no `OPENROUTER_API_KEY` configurada):
- * - `unavailable`: el CLI (`claude`/`codex`/`opencode`) no se encontró en
- *   PATH (o cuya detección expiró por timeout — ver
- *   `main/ai/providers/cli-probe.ts`).
+ * - `unavailable`: el CLI (`claude`/`codex`/`opencode`) no está usable. Desde
+ *   F14.1 trae `reason` para distinguir las DOS causas que antes se
+ *   mezclaban (y que la UI reportaba igual, como "no está en tu PATH" —
+ *   mensaje engañoso cuando el binario SÍ estaba pero el probe falló):
+ *   - `'not-found'`: no se encontró en PATH ni en las ubicaciones comunes.
+ *   - `'probe-failed'`: se encontró (ver `resolvedPath`) pero la
+ *     comprobación (`--version` con timeout, o la versión mínima en
+ *     OpenCode) falló — ver `main/ai/providers/cli-probe.ts`.
  * - `installed`: el CLI existe y responde, pero no se pudo confirmar sesión
  *   iniciada (best-effort en T27; T28/T29/T57 lo reemplazan por el handshake
  *   real del SDK/RPC de cada proveedor).
  * - `authenticated`: un CLI con indicios de sesión iniciada.
  *
  * `account` NUNCA lleva tokens/keys — a lo sumo un email/plan de exhibición.
+ * `resolvedPath` es la ruta del binario del usuario (no un secreto): existe
+ * para que el mensaje de `probe-failed` sea accionable.
  */
 export type AiProviderStatusValue = 'unavailable' | 'installed' | 'authenticated'
+
+export type AiProviderUnavailableReason = 'not-found' | 'probe-failed'
 
 export interface AiAccountInfo {
   email?: string
@@ -288,5 +329,9 @@ export interface AiAccountInfo {
 
 export interface AiProviderStatus {
   status: AiProviderStatusValue
+  /** Solo con `status: 'unavailable'`: por qué (ver el comentario de arriba). */
+  reason?: AiProviderUnavailableReason
+  /** Solo con `reason: 'probe-failed'`: dónde se encontró el binario que no respondió. */
+  resolvedPath?: string
   account?: AiAccountInfo
 }

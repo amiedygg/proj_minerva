@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { AiProviderId } from '../../../shared/ai-providers'
-import type { AiSettingsInfo } from '../../../shared/types'
+import type { AiSettingsInfo, GithubAccessMode } from '../../../shared/types'
 import { useAppStore } from '../stores/app-store'
 
 function toErrorMessage(error: unknown): string {
@@ -31,6 +31,15 @@ interface UseSettingsResult {
    * `false` si falló (revisar `error`).
    */
   setModelOption: (provider: AiProviderId, optionId: string, value: string) => Promise<boolean>
+  /**
+   * Cambia el modo de acceso a GitHub (T72, F14; patrón `selectProvider`):
+   * persiste vía `settings:setGithubAccessMode` y ADEMÁS refresca
+   * `auth:getStatus` al store (`setAuthStatus`) para que TitleBar/Sidebar
+   * reaccionen de inmediato, sin esperar al polling declarativo de
+   * `use-auth.ts`. `true` si se guardó bien; `false` si falló (revisar
+   * `error`) — el refresco de auth es best-effort y no afecta este resultado.
+   */
+  setGithubAccessMode: (mode: GithubAccessMode) => Promise<boolean>
   reload: () => void
 }
 
@@ -54,6 +63,7 @@ interface UseSettingsResult {
 export function useSettings(): UseSettingsResult {
   const info = useAppStore((s) => s.aiModelInfo)
   const setInfo = useAppStore((s) => s.setAiModelInfo)
+  const setAuthStatus = useAppStore((s) => s.setAuthStatus)
   const [loading, setLoading] = useState(() => useAppStore.getState().aiModelInfo === null)
   const [error, setError] = useState<string | null>(null)
 
@@ -131,5 +141,36 @@ export function useSettings(): UseSettingsResult {
     [setInfo],
   )
 
-  return { info, loading, error, selectProvider, saveModel, setModelOption, reload }
+  const setGithubAccessMode = useCallback(
+    async (mode: GithubAccessMode): Promise<boolean> => {
+      setError(null)
+      try {
+        const result = await window.minerva.settings.setGithubAccessMode({ mode })
+        setInfo(result)
+        try {
+          const authStatus = await window.minerva.auth.getStatus()
+          setAuthStatus(authStatus)
+        } catch {
+          // Best-effort: si este refresco puntual falla, el polling
+          // declarativo de `use-auth.ts` (T71) lo recupera en ≤3s.
+        }
+        return true
+      } catch (err) {
+        setError(toErrorMessage(err))
+        return false
+      }
+    },
+    [setInfo, setAuthStatus],
+  )
+
+  return {
+    info,
+    loading,
+    error,
+    selectProvider,
+    saveModel,
+    setModelOption,
+    setGithubAccessMode,
+    reload,
+  }
 }

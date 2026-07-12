@@ -6,6 +6,7 @@ import { useSettings } from '../../hooks/use-settings'
 import { getModelOption } from '../../../../shared/ai-providers'
 import { resolveModelHintLabels } from '../../lib/model-labels'
 import { IconButton } from '../ui/IconButton'
+import { Badge } from '../ui/Badge'
 
 /**
  * Chip resumen "Proveedor · Modelo" en el engrane de Settings (T63, F12):
@@ -70,16 +71,43 @@ const CONNECTION_LABEL: Record<ReturnType<typeof useConnectionStatus>, string> =
 }
 
 /**
- * Controles de login/logout de GitHub, tres formas según `AuthStatus.state`:
- * - `signed_out`: botón para arrancar el device flow.
- * - `device_pending`: chip con el código (click = copiar al portapapeles) +
- *   enlace a github.com/login/device (`target="_blank"`: main ya filtra que
- *   `setWindowOpenHandler` solo abra http(s) en el navegador del sistema) +
- *   spinner mientras `main` hace polling en segundo plano.
- * - `signed_in`: login del usuario + botón de cerrar sesión.
+ * Controles de login/logout de GitHub, según `AuthStatus.state`/`.mode`:
+ * - `signed_out` (oauth): botón para arrancar el device flow.
+ * - `device_pending` (oauth): chip con el código (click = copiar al
+ *   portapapeles) + enlace a github.com/login/device (`target="_blank"`:
+ *   main ya filtra que `setWindowOpenHandler` solo abra http(s) en el
+ *   navegador del sistema) + spinner mientras `main` hace polling en segundo
+ *   plano.
+ * - `signed_in` (oauth): login del usuario + botón de cerrar sesión.
+ * - `signed_in` (gh-cli, F14/T71): login del usuario + badge discreto "vía
+ *   GitHub CLI"; SIN botón de cerrar sesión (`signOut()` es no-op en este
+ *   modo, ver `auth-manager.ts` — salir es cambiar a OAuth desde Settings) y
+ *   en su lugar un botón sutil que abre el modal de Settings.
+ * - `cli_unavailable` (gh-cli, F14/T71): el binario `gh` no está en PATH —
+ *   texto compacto + botón a Settings.
+ * - `cli_unauthenticated` (gh-cli, F14/T71): chip copiable con el comando
+ *   `gh auth login` (mismo patrón visual que el chip del userCode del device
+ *   flow) + spinner sutil — el polling declarativo de `use-auth.ts` sigue
+ *   corriendo en este estado y descubre solo cuando el usuario complete el
+ *   login en una terminal.
  */
 function AuthControls(): React.JSX.Element {
   const { status, signIn, signOut } = useAuth()
+  const openSettings = useAppStore((s) => s.openSettings)
+
+  if (status.state === 'signed_in' && status.mode === 'gh-cli') {
+    return (
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-text">{status.user?.login}</span>
+        <Badge tone="neutral">vía GitHub CLI</Badge>
+        <IconButton
+          icon={<Settings size={13} />}
+          label="El acceso se gestiona con GitHub CLI; cámbialo en Configuración"
+          onClick={openSettings}
+        />
+      </div>
+    )
+  }
 
   if (status.state === 'signed_in') {
     return (
@@ -92,6 +120,41 @@ function AuthControls(): React.JSX.Element {
         >
           Cerrar sesión
         </button>
+      </div>
+    )
+  }
+
+  if (status.state === 'cli_unavailable') {
+    return (
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-muted">GitHub CLI no encontrado</span>
+        <button
+          type="button"
+          onClick={openSettings}
+          className="rounded-md border border-border px-2 py-1 text-muted transition-colors duration-150 hover:border-accent hover:text-text"
+        >
+          Abrir configuración
+        </button>
+      </div>
+    )
+  }
+
+  if (status.state === 'cli_unauthenticated') {
+    return (
+      <div className="flex items-center gap-2 text-xs">
+        <span
+          className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent"
+          aria-hidden
+        />
+        <button
+          type="button"
+          title="Copiar comando"
+          onClick={() => void navigator.clipboard?.writeText('gh auth login').catch(() => {})}
+          className="rounded-md border border-accent/50 bg-accent/10 px-2 py-1 font-mono text-sm font-semibold text-accent transition-colors duration-150 hover:bg-accent/20"
+        >
+          gh auth login
+        </button>
+        <span className="text-muted">Esperando sesión…</span>
       </div>
     )
   }

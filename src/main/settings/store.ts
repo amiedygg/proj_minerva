@@ -68,6 +68,14 @@ import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 
 import { join } from 'node:path'
 import { app } from 'electron'
 import { DEFAULT_AI_PROVIDER, isAiProviderId, type AiProviderId } from '../../shared/ai-providers'
+import type { GithubAccessMode } from '../../shared/types'
+
+/** Default cuando no hay `githubAccessMode` persistido (F14): comportamiento previo a F14. */
+const DEFAULT_GITHUB_ACCESS_MODE: GithubAccessMode = 'oauth'
+
+function isGithubAccessMode(value: unknown): value is GithubAccessMode {
+  return value === 'oauth' || value === 'gh-cli'
+}
 
 const SETTINGS_FILE_NAME = 'settings.json'
 
@@ -88,10 +96,19 @@ const ORPHANED_OPENROUTER_KEY_FILE_NAME = 'openrouter-key.bin'
  * clave (cualquier instalación pre-T34) se lee igual, tratando la ausencia
  * como "sin opciones guardadas" (`{}`), nunca como settings inválidos.
  */
+/**
+ * `githubAccessMode` (F14, v0.5.0): OPCIONAL, mismo patrón aditivo que
+ * `modelOptions` (T34) — ausente = `'oauth'` (comportamiento previo a F14),
+ * ver `DEFAULT_GITHUB_ACCESS_MODE`/`getGithubAccessMode()`. Vive en el MISMO
+ * `settings.json` que la selección de IA (no es un archivo aparte) porque es
+ * una preferencia de usuario más, no un secreto — el token de `gh` nunca
+ * toca este store, solo el MODO elegido.
+ */
 export interface PersistedSettings {
   aiProvider: AiProviderId
   models: Partial<Record<AiProviderId, string>>
   modelOptions?: Partial<Record<AiProviderId, Record<string, string>>>
+  githubAccessMode?: GithubAccessMode
 }
 
 /** Forma pre-T26 (T12): la única que existía cuando solo había OpenRouter. Puede seguir en disco en instalaciones viejas. */
@@ -127,14 +144,20 @@ function isModelOptionsMap(
   value: unknown,
 ): value is Partial<Record<AiProviderId, Record<string, string>>> {
   if (!isPlainObject(value)) return false
-  return Object.entries(value).every(([provider, options]) => isAiProviderId(provider) && isOptionValuesMap(options))
+  return Object.entries(value).every(
+    ([provider, options]) => isAiProviderId(provider) && isOptionValuesMap(options),
+  )
 }
 
 function isNewPersistedSettings(value: unknown): value is PersistedSettings {
   if (!isPlainObject(value)) return false
   if (!isAiProviderId(value.aiProvider) || !isModelsMap(value.models)) return false
   // `modelOptions` es ADITIVO (T34): ausente = settings pre-T34, sigue siendo válido.
-  return value.modelOptions === undefined || isModelOptionsMap(value.modelOptions)
+  if (value.modelOptions !== undefined && !isModelOptionsMap(value.modelOptions)) return false
+  // `githubAccessMode` es ADITIVO (F14): ausente = settings pre-F14, sigue siendo válido;
+  // presente pero con un valor fuera de `GithubAccessMode` se rechaza (settings.json
+  // corrupto/editado a mano no debe colar un modo inventado).
+  return value.githubAccessMode === undefined || isGithubAccessMode(value.githubAccessMode)
 }
 
 function isLegacyPersistedSettings(value: unknown): value is LegacyPersistedSettings {
@@ -313,6 +336,22 @@ export class SettingsStore {
     return this.load()?.modelOptions?.[provider] ?? {}
   }
 
+  /** Modo de acceso a GitHub persistido (F14), o el default `'oauth'` si nunca se guardó nada (patrón de `modelOptions`). */
+  getGithubAccessMode(): GithubAccessMode {
+    return this.load()?.githubAccessMode ?? DEFAULT_GITHUB_ACCESS_MODE
+  }
+
+  /** Persiste el modo de acceso a GitHub elegido (F14), sin tocar la selección de IA. */
+  setGithubAccessMode(mode: GithubAccessMode): void {
+    const current = this.load()
+    this.persist({
+      aiProvider: current?.aiProvider ?? DEFAULT_AI_PROVIDER,
+      models: current?.models ?? {},
+      modelOptions: current?.modelOptions,
+      githubAccessMode: mode,
+    })
+  }
+
   /** Cambia el proveedor ACTIVO, sin tocar los modelos ni las opciones ya elegidas por cada proveedor. */
   setAiProvider(provider: AiProviderId): void {
     const current = this.load()
@@ -320,6 +359,10 @@ export class SettingsStore {
       aiProvider: provider,
       models: current?.models ?? {},
       modelOptions: current?.modelOptions,
+      // GOTCHA (F14): este objeto se construye A MANO — si no se arrastra
+      // `githubAccessMode` del estado previo, un cambio de proveedor/modelo
+      // BORRARÍA en silencio el modo de acceso a GitHub que el usuario eligió.
+      githubAccessMode: current?.githubAccessMode,
     })
   }
 
@@ -330,6 +373,8 @@ export class SettingsStore {
       aiProvider: current?.aiProvider ?? DEFAULT_AI_PROVIDER,
       models: { ...current?.models, [provider]: modelId },
       modelOptions: current?.modelOptions,
+      // Ver el gotcha de `setAiProvider` de arriba: mismo riesgo, mismo fix.
+      githubAccessMode: current?.githubAccessMode,
     })
   }
 
@@ -356,6 +401,8 @@ export class SettingsStore {
         ...currentModelOptions,
         [provider]: { ...currentProviderOptions, [optionId]: value },
       },
+      // Ver el gotcha de `setAiProvider` (arriba): mismo riesgo, mismo fix.
+      githubAccessMode: current?.githubAccessMode,
     })
   }
 

@@ -153,6 +153,7 @@ const minervaApi = {
     setAiProvider: invoke('settings:setAiProvider'),
     setProviderModel: invoke('settings:setProviderModel'),
     setModelOption: invoke('settings:setModelOption'),
+    setGithubAccessMode: invoke('settings:setGithubAccessMode'),
   },
   window: {
     openDidactic: invoke('window:openDidactic'),

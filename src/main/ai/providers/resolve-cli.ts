@@ -18,12 +18,20 @@
  * oficiales, etc.) que una terminal interactiva sí vería pero un proceso GUI
  * podría no heredar.
  *
- * Cachea el resultado (por binario, en memoria del proceso main): resolver
- * implica tocar el filesystem por cada directorio candidato, y este módulo se
- * llama desde el probe de estado (`./cli-probe.ts`, que ya se invoca on-demand
- * desde Settings) y desde cada análisis real — no hace falta repetir la
- * búsqueda en disco en cada llamada, el usuario no reinstala el CLI a mitad
- * de una sesión de la app. `clearCliPathCache()` existe solo para tests.
+ * Cachea SOLO los resultados positivos (por binario, en memoria del proceso
+ * main): resolver implica tocar el filesystem por cada directorio candidato,
+ * y este módulo se llama desde el probe de estado (`./cli-probe.ts`, que ya
+ * se invoca on-demand desde Settings) y desde cada análisis real. El `null`
+ * (no encontrado) NO se cachea — cachearlo de por vida dejaba a Minerva
+ * "atascada" en "no está en tu PATH" si el usuario instalaba el CLI (o su
+ * auto-update reescribía el symlink) DESPUÉS de la primera resolución
+ * fallida: "Volver a comprobar" re-ejecutaba el probe pero este módulo
+ * servía el `null` de memoria hasta reiniciar la app (visto en macOS con
+ * claude 2.1.x, F14.1). Re-escanear en el caso fallido son unas decenas de
+ * `stat` — barato, y el TTL del probe (`cli-probe.ts`) ya acota la
+ * frecuencia. `clearCliPathCache(binary?)` invalida (todo, o un binario):
+ * el probe la usa cuando un binario resuelto deja de responder (ruta
+ * positiva que quedó vieja tras un update), y los tests para aislarse.
  *
  * NOTA: las rutas de Windows (`%APPDATA%\npm`, extensiones `.cmd`/`.exe`/
  * `.ps1`) son best-effort — no se pudieron probar contra un Windows real en
@@ -35,8 +43,14 @@ import { accessSync, constants as fsConstants, readdirSync } from 'node:fs'
 import { homedir, platform } from 'node:os'
 import { delimiter, join } from 'node:path'
 
-/** Los binarios que Minerva necesita resolver (T28/T29/T55: `opencode`, mismas ubicaciones). */
-export type CliBinaryName = 'claude' | 'codex' | 'opencode'
+/**
+ * Los binarios que Minerva necesita resolver (T28/T29/T55: `opencode`, mismas
+ * ubicaciones). `'gh'` (F14): NO es un CLI de IA — es el GitHub CLI que el
+ * modo de acceso `gh-cli` reutiliza (`main/auth/gh-cli-auth.ts`) para el
+ * puente de token; comparte este resolver solo porque el problema (un
+ * proceso GUI con `PATH` recortado) es el mismo.
+ */
+export type CliBinaryName = 'claude' | 'codex' | 'opencode' | 'gh'
 
 const cache = new Map<CliBinaryName, string | null>()
 
@@ -158,8 +172,10 @@ function isExecutableFile(path: string): boolean {
 /**
  * Busca `binary` en `PATH` y, si no aparece, en las ubicaciones comunes de
  * `commonInstallDirectories()`. Devuelve la primera ruta existente y
- * ejecutable, o `null` si no se encontró en ningún lado. Resultado cacheado
- * en memoria (ver comentario del módulo).
+ * ejecutable, o `null` si no se encontró en ningún lado. Solo el hallazgo se
+ * cachea en memoria; el `null` se re-busca en cada llamada (ver comentario
+ * del módulo — un `null` cacheado de por vida no se recupera de una
+ * instalación posterior sin reiniciar la app).
  */
 export function resolveCliPath(binary: CliBinaryName): string | null {
   const cached = cache.get(binary)
@@ -178,11 +194,16 @@ export function resolveCliPath(binary: CliBinaryName): string | null {
     }
   }
 
-  cache.set(binary, null)
   return null
 }
 
-/** Solo para tests: fuerza a que la próxima llamada vuelva a tocar el filesystem en vez de servir la cache. */
-export function clearCliPathCache(): void {
-  cache.clear()
+/**
+ * Invalida la cache de rutas: entera (tests) o un solo binario — el probe
+ * (`./cli-probe.ts`) invalida el binario cuya ruta resuelta dejó de
+ * responder, para que el siguiente intento re-resuelva contra el disco (p.
+ * ej. el auto-update de `claude` reemplaza el target del symlink).
+ */
+export function clearCliPathCache(binary?: CliBinaryName): void {
+  if (binary === undefined) cache.clear()
+  else cache.delete(binary)
 }
