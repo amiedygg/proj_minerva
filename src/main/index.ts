@@ -2,6 +2,8 @@ import { app, BrowserWindow, safeStorage } from 'electron'
 import { join } from 'node:path'
 import { registerIpcHandlers } from './ipc/handlers'
 import { authManager } from './auth/auth-manager'
+import { createSnapshotCleaner } from './github/snapshot-store'
+import { stopOpencodeServer } from './ai/providers/opencode-runtime'
 import { secureWebPreferences } from './windows/secure-web-preferences'
 import { installExternalLinkGuard } from './windows/external-link-guard'
 import { hydratePathFromLoginShell } from './system/shell-path'
@@ -85,6 +87,20 @@ void app.whenReady().then(async () => {
   await authManager.init()
 
   await registerIpcHandlers()
+
+  // Limpieza periódica de snapshots de PRs (T54): barrido inmediato + timer.
+  // Se crea DESPUÉS de `whenReady` porque el sweep usa `app.getPath('userData')`.
+  const snapshotCleaner = createSnapshotCleaner()
+  snapshotCleaner.start()
+
+  app.on('before-quit', () => {
+    snapshotCleaner.stop()
+    // Fire-and-forget: el SIGTERM al grupo se envía sincrónicamente dentro;
+    // la escalada a SIGKILL (1s después) puede no llegar a correr si el
+    // proceso principal muere antes, y está bien — opencode termina con
+    // SIGTERM (verificado en T55).
+    void stopOpencodeServer()
+  })
 
   createWindow()
 

@@ -1864,7 +1864,24 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   service): ensureSnapshot crea/reusa/dedupea, sanitización de paths, LRU expulsa por
   count y por bytes, rename atómico (un fallo a mitad no deja dir final).
 
-- [~] **T55. `opencode-runtime`: server OpenCode gestionado desde main**
+- [x] **T55. `opencode-runtime`: server OpenCode gestionado desde main**
+  _Hecha (2026-07-11, subagente Sonnet) y VERIFICADA por el orquestador: revisión de
+  código completa, 23 unit + typecheck/lint/519 tests verdes. WIRE VERIFICADO contra el
+  binario real 1.17.18: ready-line "opencode server listening on http://127.0.0.1:<p>"
+  (NO es la primera línea de stdout — la precede un warning de OPENCODE_SERVER_PASSWORD),
+  `/global/health` → `{"healthy":true,"version":"1.17.18"}`, `--version` → "1.17.18"
+  pelado. Verificación manual del subagente (bundle esbuild del módulo real): version
+  gate ok, un solo spawn con llamadas concurrentes, stop sin huérfanos (ps antes/después).
+  FIX del orquestador: si el server muere DESPUÉS de estar listo (crash externo), el
+  handler de exit ahora resetea el singleton — sin eso todo análisis posterior fallaba
+  contra una URL muerta hasta reiniciar la app. Cableado en `main/index.ts` (orquestador):
+  `before-quit` → `snapshotCleaner.stop()` (T54) + `stopOpencodeServer()` fire-and-forget
+  (el SIGTERM sale sincrónico; la escalada a SIGKILL puede no correr si main muere antes,
+  aceptable — opencode termina con SIGTERM). GOTCHAS NUEVOS: (1) el `opencode` de omarchy
+  es un wrapper que resuelve vía npx en frío (~3-4s) — el timeout de ready de 10s tiene
+  margen real pero no sobra; (2) en tests, aserciones de rechazo disparadas por
+  `vi.advanceTimersByTimeAsync` necesitan un `.catch()` no-op ANTES de avanzar el timer
+  (si no, PromiseRejectionHandledWarning)._
   Contexto: patrón T3 Code (`opencodeRuntime.ts` del repo `pingdotgg/t3code`). El
   binario `opencode` 1.17.18 ESTÁ instalado en esta máquina (`~/.local/bin/opencode`):
   verificar el wire EMPÍRICAMENTE (lección T29 — nunca adivinar el protocolo; se puede
