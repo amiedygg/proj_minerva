@@ -21,6 +21,16 @@ export const INACTIVITY_TIMEOUT_MS = 20_000
 /** Cuánto, como mucho, se llama a `onProgress` mientras llegan deltas (ver `./throttle.ts`). */
 export const PROGRESS_THROTTLE_MS = 150
 
+/**
+ * Timeouts AGÉNTICOS (F11): un análisis con herramientas explora el snapshot
+ * (grep/read del repo) ANTES de emitir la primera sección — mucho más lento
+ * que la generación directa de texto. El de inactividad también sube: entre
+ * delta y delta puede haber vueltas enteras de tool-use sin texto nuevo.
+ * Los usan los tres proveedores agentizados (OpenCode/Claude Code/Codex).
+ */
+export const AGENTIC_REQUEST_TIMEOUT_MS = 300_000
+export const AGENTIC_INACTIVITY_TIMEOUT_MS = 60_000
+
 export type AbortReason = 'total-timeout' | 'inactivity-timeout' | null
 
 export interface AnalysisTimeouts {
@@ -32,13 +42,18 @@ export interface AnalysisTimeouts {
   getAbortReason(): AbortReason
 }
 
-export function createAnalysisTimeouts(controller: AbortController): AnalysisTimeouts {
+export function createAnalysisTimeouts(
+  controller: AbortController,
+  options?: { totalMs?: number; inactivityMs?: number },
+): AnalysisTimeouts {
+  const totalMs = options?.totalMs ?? REQUEST_TIMEOUT_MS
+  const inactivityMs = options?.inactivityMs ?? INACTIVITY_TIMEOUT_MS
   let abortReason: AbortReason = null
 
   const totalTimeoutId = setTimeout(() => {
     abortReason = 'total-timeout'
     controller.abort()
-  }, REQUEST_TIMEOUT_MS)
+  }, totalMs)
 
   let inactivityTimeoutId: ReturnType<typeof setTimeout> | null = null
 
@@ -47,7 +62,7 @@ export function createAnalysisTimeouts(controller: AbortController): AnalysisTim
     inactivityTimeoutId = setTimeout(() => {
       abortReason = 'inactivity-timeout'
       controller.abort()
-    }, INACTIVITY_TIMEOUT_MS)
+    }, inactivityMs)
   }
 
   function clearAll(): void {
