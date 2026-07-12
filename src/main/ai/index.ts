@@ -5,6 +5,7 @@ import { MockAiService } from './mock-service'
 import { OpenRouterAiService } from './openrouter-service'
 import { ClaudeCodeAiService } from './providers/claude-code-service'
 import { CodexAiService } from './providers/codex-service'
+import { OpenCodeAiService } from './providers/opencode-service'
 import { getCliProviderStatus } from './providers/cli-probe'
 import { getAiEnv, getEffectiveAiSelection } from './env'
 
@@ -132,6 +133,31 @@ async function createAiServiceForProvider(
         return new CodexAiService(github)
       }
       return mockFallbackOrThrow(cliUnavailableReason('Codex', 'codex', status.status))
+    }
+    case 'opencode': {
+      // El probe de opencode (T57, `./providers/cli-probe.ts`) ya encapsula
+      // el criterio real de "autenticado": server local respondiendo Y ≥1
+      // proveedor upstream conectado (`provider.list`). `installed` acá
+      // significa "binario OK pero sin upstreams" — el remedio no es un
+      // login del CLI en sí, sino conectar un proveedor DENTRO de OpenCode.
+      const status = await getCliProviderStatus('opencode')
+      if (status.status === 'authenticated') {
+        return new OpenCodeAiService(github)
+      }
+      if (status.status === 'installed') {
+        return mockFallbackOrThrow(
+          'OpenCode está instalado pero no reporta ningún proveedor de modelos conectado. ' +
+            'Corré «opencode auth login» en una terminal para conectar uno (OpenRouter, ' +
+            'Anthropic, etc.) y reintentá, o elegí otro proveedor en Settings (engrane de ' +
+            'la barra de título).',
+        )
+      }
+      return mockFallbackOrThrow(
+        'No se encontró el CLI «opencode» del proveedor de IA activo (OpenCode) en esta ' +
+          'máquina (o su versión es más vieja que la mínima soportada). Instalalo o ' +
+          'actualizalo (https://opencode.ai/docs/) y reintentá, o elegí otro proveedor en ' +
+          'Settings (engrane de la barra de título).',
+      )
     }
   }
 }
