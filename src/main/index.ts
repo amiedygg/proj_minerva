@@ -84,7 +84,14 @@ void app.whenReady().then(async () => {
   // `signed_in` sin que nada haya disparado ese cambio.
   await authManager.init()
 
-  await registerIpcHandlers()
+  const { stopPrWatcher } = await registerIpcHandlers()
+
+  // Watcher de PRs en background (T51, F10): para el timer antes de que la
+  // app termine de cerrarse — sin esto seguiría re-armándose (`setTimeout`)
+  // tras destruir todas las ventanas, hasta que el proceso muriera solo.
+  app.on('before-quit', () => {
+    stopPrWatcher()
+  })
 
   createWindow()
 

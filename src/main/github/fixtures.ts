@@ -687,4 +687,173 @@ export const prFixtures: PrFixture[] = [
     ],
     threads: [],
   },
+  // Los siguientes 3 PRs (T51, F10) existen para poder ejercitar el filtro
+  // de estado (`PrStateFilter`) en el mock: 1 `closed` (rechazado, no
+  // mergeado) y 2 `merged`. Mismo estilo/universo shopwave que los de arriba.
+  {
+    detail: {
+      id: 'shopwave/api#455',
+      number: 455,
+      title: 'Add experimental GraphQL gateway proxy',
+      author: lchen,
+      repo: apiRepo,
+      state: 'closed',
+      isDraft: false,
+      createdAt: '2026-06-10T10:00:00.000Z',
+      updatedAt: '2026-06-18T16:40:00.000Z',
+      headRef: 'experiment/graphql-gateway',
+      baseRef: 'main',
+      headSha: 'c455f009c455f009c455f009c455f009c455f009',
+      commentCount: 1,
+      reviewDecision: 'changes_requested',
+      ciStatus: 'failure',
+      additions: 38,
+      deletions: 2,
+      changedFiles: 1,
+      bodyMarkdown:
+        '## Qué hace\n\nSpike de un gateway GraphQL delante de los endpoints REST existentes. Se cierra sin mergear: el equipo decidió posponerlo hasta evaluar Federation vs. un schema monolítico.',
+      labels: [{ name: 'declined', color: '6b7280' }],
+      reviewers: [mgarcia],
+      commits: 2,
+    },
+    files: [
+      {
+        path: 'src/gateway/graphql-proxy.ts',
+        status: 'added',
+        additions: 38,
+        deletions: 0,
+        isBinary: false,
+        patch:
+          '@@ -0,0 +1,38 @@\n+export function createGraphqlProxy(): GraphqlProxy {\n+  // spike: reenvía queries a los endpoints REST existentes\n+}',
+      },
+    ],
+    threads: [
+      {
+        id: 'thread-455-1',
+        isResolved: false,
+        isLineThread: false,
+        comments: [
+          {
+            id: 'c-455-1',
+            author: mgarcia,
+            bodyMarkdown:
+              'Mejor lo cerramos por ahora y retomamos cuando decidamos si vamos con Federation.',
+            createdAt: '2026-06-18T16:35:00.000Z',
+            isMinimized: false,
+          },
+        ],
+      },
+    ],
+  },
+  {
+    detail: {
+      id: 'shopwave/web#185',
+      number: 185,
+      title: 'Add pagination to order history table',
+      author: sfontaine,
+      repo: webRepo,
+      state: 'merged',
+      isDraft: false,
+      createdAt: '2026-06-20T09:00:00.000Z',
+      updatedAt: '2026-06-24T14:10:00.000Z',
+      headRef: 'feature/order-history-pagination',
+      baseRef: 'main',
+      headSha: 'd185f010d185f010d185f010d185f010d185f010',
+      commentCount: 0,
+      reviewDecision: 'approved',
+      ciStatus: 'success',
+      additions: 52,
+      deletions: 9,
+      changedFiles: 2,
+      bodyMarkdown:
+        '## Qué hace\n\nPagina la tabla de historial de pedidos en Ajustes de cuenta (20 por página) en vez de traer todo el historial de una vez.',
+      labels: [{ name: 'ui', color: 'ec4899' }],
+      reviewers: [lchen],
+      commits: 2,
+    },
+    files: [
+      {
+        path: 'src/features/account/OrderHistoryTable.tsx',
+        status: 'modified',
+        additions: 30,
+        deletions: 9,
+        isBinary: false,
+        patch:
+          '@@ -12,10 +12,20 @@ export function OrderHistoryTable(): JSX.Element {\n+  const { page, setPage } = usePagination(20)',
+      },
+      {
+        path: 'src/hooks/usePagination.ts',
+        status: 'added',
+        additions: 22,
+        deletions: 0,
+        isBinary: false,
+        patch:
+          '@@ -0,0 +1,22 @@\n+export function usePagination(pageSize: number) {\n+  // maneja page/pageSize y expone slice() sobre el array de items\n+}',
+      },
+    ],
+    threads: [],
+  },
+  {
+    detail: {
+      id: 'shopwave/checkout-service#68',
+      number: 68,
+      title: 'Add multi-currency support to payment totals',
+      author: dkumar,
+      repo: checkoutRepo,
+      state: 'merged',
+      isDraft: false,
+      createdAt: '2026-06-15T11:20:00.000Z',
+      updatedAt: '2026-06-22T17:05:00.000Z',
+      headRef: 'feature/multi-currency-totals',
+      baseRef: 'main',
+      headSha: 'e068f011e068f011e068f011e068f011e068f011',
+      commentCount: 1,
+      reviewDecision: 'approved',
+      ciStatus: 'success',
+      additions: 61,
+      deletions: 6,
+      changedFiles: 2,
+      bodyMarkdown:
+        '## Qué hace\n\nLos totales de pago ahora se calculan y muestran en la moneda del cliente (antes siempre USD), usando la tasa de cambio vigente al momento del charge.',
+      labels: [{ name: 'payments', color: '14b8a6' }],
+      reviewers: [jrivas, mgarcia],
+      commits: 3,
+    },
+    files: [
+      {
+        path: 'src/services/currency-service.ts',
+        status: 'added',
+        additions: 41,
+        deletions: 0,
+        isBinary: false,
+        patch:
+          '@@ -0,0 +1,41 @@\n+export const CurrencyService = {\n+  async convert(amount: number, from: string, to: string): Promise<number> {\n+    const rate = await getExchangeRate(from, to)\n+    return Math.round(amount * rate)\n+  },\n+}',
+      },
+      {
+        path: 'src/routes/charge.ts',
+        status: 'modified',
+        additions: 20,
+        deletions: 6,
+        isBinary: false,
+        patch:
+          "@@ -22,10 +22,24 @@ export async function chargeHandler(req: Request, res: Response): Promise<void> {\n+  const total = await CurrencyService.convert(req.body.amount, 'USD', req.body.currency)",
+      },
+    ],
+    threads: [
+      {
+        id: 'thread-68-1',
+        isResolved: true,
+        isLineThread: false,
+        comments: [
+          {
+            id: 'c-68-1',
+            author: jrivas,
+            bodyMarkdown: 'Probado con EUR y MXN, los totales redondean bien. Apruebo.',
+            createdAt: '2026-06-22T16:55:00.000Z',
+            isMinimized: false,
+          },
+        ],
+      },
+    ],
+  },
 ]

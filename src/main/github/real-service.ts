@@ -530,7 +530,23 @@ export class RealGithubService implements GithubService {
     try {
       const client = this.client(token)
       const extra = req.search?.trim()
-      const searchQuery = ['is:pr', 'is:open', 'involves:@me', 'archived:false', extra]
+      // Qualifier de estado (T51, F10): 'open' (default, comportamiento
+      // previo) → `is:open`; 'closed' → `is:closed` (GitHub reporta los
+      // mergeados como `is:closed is:merged`, así que sin qualifier extra ya
+      // incluye ambos); 'all' → sin qualifier de estado. `sort:updated-desc`
+      // SIEMPRE: determinismo del top-50, relevante sobre todo con `closed`
+      // en juego.
+      const state = req.state ?? 'open'
+      const stateQualifier =
+        state === 'open' ? 'is:open' : state === 'closed' ? 'is:closed' : undefined
+      const searchQuery = [
+        'is:pr',
+        stateQualifier,
+        'involves:@me',
+        'archived:false',
+        extra,
+        'sort:updated-desc',
+      ]
         .filter((part): part is string => Boolean(part))
         .join(' ')
       const data = await client.graphql<SearchPullRequestsResponse>(SEARCH_PULL_REQUESTS_QUERY, {

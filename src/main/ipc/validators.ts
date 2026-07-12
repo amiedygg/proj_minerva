@@ -28,6 +28,8 @@ const MAX_PR_TITLE_LEN = 300
 const MAX_OPENROUTER_KEY_LEN = 500
 const MAX_OPTION_ID_LEN = 50
 const MAX_OPTION_VALUE_LEN = 50
+const MAX_PR_ID_LEN = 200
+const MAX_UPDATED_AT_LEN = 64
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -82,10 +84,29 @@ function isVoidPayload(value: unknown): boolean {
   return value === undefined
 }
 
+/** `state` (T50, F10): filtro de estado opcional, uno de los tres valores de `PrStateFilter`. */
+function isOptionalPrStateFilter(value: unknown): boolean {
+  return value === undefined || value === 'open' || value === 'closed' || value === 'all'
+}
+
 function isListPullRequestsPayload(value: unknown): boolean {
   if (!isPlainObject(value)) return false
-  if (!hasOnlyKeys(value, ['search'])) return false
-  return isOptionalString(value.search, MAX_SEARCH_LEN)
+  if (!hasOnlyKeys(value, ['search', 'state'])) return false
+  if (!isOptionalString(value.search, MAX_SEARCH_LEN)) return false
+  return isOptionalPrStateFilter(value.state)
+}
+
+/**
+ * `github:markPrSeen` (T50/T51, F10): `prId` no vacío (id opaco de GitHub,
+ * puede no ser numérico), `updatedAt` no vacío (string ISO), `commentCount`
+ * entero ≥0 — sin claves extra.
+ */
+function isMarkPrSeenPayload(value: unknown): boolean {
+  if (!isPlainObject(value)) return false
+  if (!hasOnlyKeys(value, ['prId', 'updatedAt', 'commentCount'])) return false
+  if (!isNonEmptyString(value.prId, MAX_PR_ID_LEN)) return false
+  if (!isNonEmptyString(value.updatedAt, MAX_UPDATED_AT_LEN)) return false
+  return isIntInRange(value.commentCount, 0, Number.MAX_SAFE_INTEGER)
 }
 
 function isPostCommentPayload(value: unknown): boolean {
@@ -187,6 +208,7 @@ export const payloadValidators: Record<IpcChannel, (payload: unknown) => boolean
   'auth:startDeviceFlow': isVoidPayload,
   'auth:signOut': isVoidPayload,
   'github:listPullRequests': isListPullRequestsPayload,
+  'github:markPrSeen': isMarkPrSeenPayload,
   'github:getPullRequestDetail': isRepoAndNumberPayload,
   'github:getPullRequestFiles': isRepoAndNumberPayload,
   'github:getCommentThreads': isRepoAndNumberPayload,
