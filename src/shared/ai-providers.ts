@@ -1,16 +1,18 @@
 /**
- * Catálogo de proveedores de IA (T26): OpenRouter, Claude Code y Codex, cada
- * uno con su propia lista curada de modelos. Antes de esta tarea solo existía
- * OpenRouter y su lista vivía plana en `ai-models.ts`; esos IDs de OpenRouter
- * (`z-ai/glm-5.2`, etc.) aplican SOLO a OpenRouter — Claude Code y Codex no
- * llaman a una API HTTP con un id de modelo libre, usan los CLIs/SDK
- * oficiales (T27/T28/T29), así que su catálogo es curado a mano.
+ * Catálogo de proveedores de IA (T26): OpenRouter, Claude Code, Codex y
+ * OpenCode (T57), cada uno con su propia lista curada de modelos. Antes de
+ * esta tarea solo existía OpenRouter y su lista vivía plana en
+ * `ai-models.ts`; esos IDs de OpenRouter (`z-ai/glm-5.2`, etc.) aplican SOLO a
+ * OpenRouter — Claude Code, Codex y OpenCode no llaman a una API HTTP con un
+ * id de modelo libre, usan los CLIs/SDK oficiales (T27/T28/T29/T55-T57), así
+ * que su catálogo curado es el FALLBACK cuando no hay lista dinámica (T35,
+ * T57: `main/ai/providers/{codex,opencode}-model-catalog.ts`).
  *
  * `ai-models.ts` ahora re-exporta el slice de OpenRouter desde acá para no
  * romper imports existentes (`ModelPicker.tsx`, `main/ai/env.ts`) — no
  * agregar nada nuevo en `ai-models.ts`, el catálogo real vive acá.
  */
-export type AiProviderId = 'openrouter' | 'claude-code' | 'codex'
+export type AiProviderId = 'openrouter' | 'claude-code' | 'codex' | 'opencode'
 
 /**
  * Una opción concreta dentro de un `ModelOptionDescriptor` (T34, F8): p. ej.
@@ -218,16 +220,41 @@ const CODEX_MODELS = [
   },
 ] as const satisfies readonly AiModelOption[]
 
+/**
+ * Catálogo curado MÍNIMO de OpenCode (T57): fallback cuando el catálogo
+ * DINÁMICO (`main/ai/providers/opencode-model-catalog.ts`, vía
+ * `provider.list()` del server local) no está disponible — binario ausente,
+ * server que no arranca, o sin ningún upstream `connected` todavía. Verificado
+ * EMPÍRICAMENTE contra `opencode` 1.17.18 (`opencode models`, gateway
+ * `opencode/*` visible sin ningún upstream configurado): `big-pickle` es el
+ * modelo por default del gateway (sin costo, sin necesidad de credenciales
+ * propias) y el resto son los `*-free` del mismo gateway. Estos ids NO
+ * requieren autenticación adicional (a diferencia de `anthropic/*`,
+ * `openai/*`, etc., que solo aparecen tras `opencode auth login` y viven en el
+ * catálogo DINÁMICO, nunca en este fallback estático). Sin descriptor
+ * `effort`/`variant` a propósito: el catálogo dinámico trae las variantes
+ * reales por modelo, y este fallback deliberadamente minimalista solo cubre
+ * el caso "no hay nada más que mostrar".
+ */
+const OPENCODE_MODELS = [
+  { id: 'opencode/big-pickle', label: 'Big Pickle', vendor: 'OpenCode' },
+  { id: 'opencode/deepseek-v4-flash-free', label: 'DeepSeek V4 Flash Free', vendor: 'OpenCode' },
+  { id: 'opencode/hy3-free', label: 'Hy3 Free', vendor: 'OpenCode' },
+  { id: 'opencode/mimo-v2.5-free', label: 'MiMo V2.5 Free', vendor: 'OpenCode' },
+] as const satisfies readonly AiModelOption[]
+
 export const AI_PROVIDER_CATALOG: Record<AiProviderId, AiProviderCatalogEntry> = {
   openrouter: { provider: 'openrouter', label: 'OpenRouter', models: OPENROUTER_MODELS },
   'claude-code': { provider: 'claude-code', label: 'Claude Code', models: CLAUDE_CODE_MODELS },
   codex: { provider: 'codex', label: 'Codex', models: CODEX_MODELS },
+  opencode: { provider: 'opencode', label: 'OpenCode', models: OPENCODE_MODELS },
 }
 
 export const AI_PROVIDER_IDS = [
   'openrouter',
   'claude-code',
   'codex',
+  'opencode',
 ] as const satisfies readonly AiProviderId[]
 
 /** Guard de runtime: valida un `unknown` (payload IPC, JSON persistido, env var) como `AiProviderId`. */
@@ -243,6 +270,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<AiProviderId, string> = {
   openrouter: 'z-ai/glm-5.2',
   'claude-code': 'claude-sonnet-5',
   codex: 'gpt-5.5',
+  opencode: 'opencode/big-pickle',
 }
 
 /**

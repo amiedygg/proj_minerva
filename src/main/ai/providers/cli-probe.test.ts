@@ -33,6 +33,26 @@ vi.mock('./resolve-cli', () => ({
   resolveCliPath: (...args: unknown[]) => resolveCliPathMock(...args),
 }))
 
+/**
+ * OpenCode (T57) tiene su propio criterio de probe — se mockean
+ * `checkOpencodeVersion`/`getOpencodeServer` (`./opencode-runtime.ts`, T55) y
+ * el cliente del SDK (`provider.list`, forma verificada empíricamente contra
+ * el binario real, ver `./opencode-model-catalog.ts`) para no depender de
+ * tener `opencode` instalado ni un server real corriendo.
+ */
+const checkOpencodeVersionMock = vi.fn()
+const getOpencodeServerMock = vi.fn()
+vi.mock('./opencode-runtime', () => ({
+  checkOpencodeVersion: (...args: unknown[]) => checkOpencodeVersionMock(...args),
+  getOpencodeServer: (...args: unknown[]) => getOpencodeServerMock(...args),
+}))
+
+const providerListMock = vi.fn()
+const createOpencodeClientMock = vi.fn((..._args: unknown[]) => ({ provider: { list: providerListMock } }))
+vi.mock('@opencode-ai/sdk', () => ({
+  createOpencodeClient: (...args: unknown[]) => createOpencodeClientMock(...args),
+}))
+
 const { getCliProviderStatus, clearCliProbeCache } = await import('./cli-probe')
 
 type ExecFileCallback = (error: Error | null) => void
@@ -58,6 +78,10 @@ describe('getCliProviderStatus', () => {
     readFileSyncMock.mockReset()
     resolveCliPathMock.mockReset()
     resolveCliPathMock.mockImplementation((binary: string) => '/usr/local/bin/' + binary)
+    checkOpencodeVersionMock.mockReset()
+    getOpencodeServerMock.mockReset()
+    providerListMock.mockReset()
+    createOpencodeClientMock.mockClear()
   })
 
   it('unavailable sin siquiera intentar spawnear cuando resolveCliPath no encuentra el binario en ninguna ubicación conocida', async () => {
@@ -150,5 +174,61 @@ describe('getCliProviderStatus', () => {
     await getCliProviderStatus('codex')
 
     expect(execFileMock).toHaveBeenCalledTimes(2)
+  })
+
+  describe('opencode (T57): criterio distinto — server local + provider.list, no archivo de credenciales', () => {
+    it('unavailable sin intentar nada más cuando resolveCliPath no encuentra el binario', async () => {
+      resolveCliPathMock.mockImplementation((binary: string) =>
+        binary === 'opencode' ? null : '/usr/local/bin/' + binary,
+      )
+
+      await expect(getCliProviderStatus('opencode')).resolves.toEqual({ status: 'unavailable' })
+      expect(checkOpencodeVersionMock).not.toHaveBeenCalled()
+      expect(getOpencodeServerMock).not.toHaveBeenCalled()
+    })
+
+    it('unavailable cuando checkOpencodeVersion reporta una versión por debajo del mínimo (nunca arranca el server)', async () => {
+      checkOpencodeVersionMock.mockResolvedValue({ ok: false, version: '1.0.0', error: 'muy vieja' })
+
+      await expect(getCliProviderStatus('opencode')).resolves.toEqual({ status: 'unavailable' })
+      expect(getOpencodeServerMock).not.toHaveBeenCalled()
+    })
+
+    it('installed cuando el server responde pero provider.list no reporta ningún upstream connected', async () => {
+      checkOpencodeVersionMock.mockResolvedValue({ ok: true, version: '1.17.18' })
+      getOpencodeServerMock.mockResolvedValue({ url: 'http://127.0.0.1:12345' })
+      providerListMock.mockResolvedValue({ data: { all: [], default: {}, connected: [] } })
+
+      await expect(getCliProviderStatus('opencode')).resolves.toEqual({ status: 'installed' })
+    })
+
+    it('authenticated con el conteo/nombres de upstreams conectados en account.plan cuando connected no está vacío', async () => {
+      checkOpencodeVersionMock.mockResolvedValue({ ok: true, version: '1.17.18' })
+      getOpencodeServerMock.mockResolvedValue({ url: 'http://127.0.0.1:12345' })
+      providerListMock.mockResolvedValue({
+        data: { all: [], default: {}, connected: ['openai', 'opencode'] },
+      })
+
+      const status = await getCliProviderStatus('opencode')
+
+      expect(status.status).toBe('authenticated')
+      expect(status.account?.plan).toContain('openai')
+      expect(status.account?.plan).toContain('opencode')
+    })
+
+    it('installed (no unavailable) cuando el server no arranca a tiempo: el binario+versión ya se confirmaron OK', async () => {
+      checkOpencodeVersionMock.mockResolvedValue({ ok: true, version: '1.17.18' })
+      getOpencodeServerMock.mockRejectedValue(new Error('timeout arrancando el server'))
+
+      await expect(getCliProviderStatus('opencode')).resolves.toEqual({ status: 'installed' })
+    })
+
+    it('installed cuando provider.list rechaza (server arriba pero la llamada falla)', async () => {
+      checkOpencodeVersionMock.mockResolvedValue({ ok: true, version: '1.17.18' })
+      getOpencodeServerMock.mockResolvedValue({ url: 'http://127.0.0.1:12345' })
+      providerListMock.mockRejectedValue(new Error('ECONNREFUSED'))
+
+      await expect(getCliProviderStatus('opencode')).resolves.toEqual({ status: 'installed' })
+    })
   })
 })

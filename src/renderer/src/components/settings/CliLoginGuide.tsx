@@ -1,7 +1,7 @@
 import { RefreshCw } from 'lucide-react'
 import type { AiProviderStatus } from '../../../../shared/types'
 
-type CliProvider = 'claude-code' | 'codex'
+type CliProvider = 'claude-code' | 'codex' | 'opencode'
 
 interface CliMeta {
   binary: string
@@ -9,7 +9,13 @@ interface CliMeta {
   installHint: string
 }
 
-/** Metadata puramente de UI (comando a mostrar): la lógica real de detección vive en `main` (T27). */
+/**
+ * Metadata puramente de UI (comando a mostrar): la lógica real de detección
+ * vive en `main` (T27; OpenCode en T57). La entrada de OpenCode acá es
+ * MÍNIMA a propósito (mismo `installHint` de texto plano que el resto) — la
+ * generalización completa con `installUrl` clicable (`<a target="_blank">`
+ * vía `external-link-guard`) para los TRES proveedores es T60, no esta tarea.
+ */
 const CLI_META: Record<CliProvider, CliMeta> = {
   'claude-code': {
     binary: 'claude',
@@ -20,6 +26,11 @@ const CLI_META: Record<CliProvider, CliMeta> = {
     binary: 'codex',
     loginCmd: 'codex login',
     installHint: 'Instalá el CLI de Codex y volvé a intentar.',
+  },
+  opencode: {
+    binary: 'opencode',
+    loginCmd: 'opencode auth login',
+    installHint: 'Instalá OpenCode (ver https://opencode.ai/docs/) y volvé a intentar.',
   },
 }
 

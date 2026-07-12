@@ -148,7 +148,7 @@ export function ProviderPicker({
           onClear={onClearOpenRouterKey}
         />
       )}
-      {(info.provider === 'claude-code' || info.provider === 'codex') && (
+      {(info.provider === 'claude-code' || info.provider === 'codex' || info.provider === 'opencode') && (
         <CliLoginGuide
           provider={info.provider}
           status={statuses?.[info.provider]}

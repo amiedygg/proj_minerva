@@ -1,12 +1,12 @@
 /**
  * Agregado de estado de login por proveedor (T27) que consume el handler del
  * canal IPC `ai:getProviderStatus` (`../../ipc/handlers.ts`): un `Record` con
- * los TRES proveedores del catálogo, cada uno resuelto según su
- * `authKind` (`./registry.ts`):
+ * TODOS los proveedores del catálogo (`AI_PROVIDER_IDS`), cada uno resuelto
+ * según su `authKind` (`./registry.ts`):
  * - `api-key` (OpenRouter): síncrono, `getAiEnv().openRouterApiKey` (nunca la
  *   key misma) via `../env.ts`.
- * - `cli` (Claude Code, Codex): `./cli-probe.ts`, con su propio timeout+cache
- *   — nunca bloqueante.
+ * - `cli` (Claude Code, Codex, OpenCode — T57): `./cli-probe.ts`, con su
+ *   propio timeout+cache — nunca bloqueante.
  *
  * Mismo patrón que `AuthManager.getStatus()` (`../../auth/auth-manager.ts`):
  * estado expuesto sin secretos, calculado on-demand (no hay estado propio que

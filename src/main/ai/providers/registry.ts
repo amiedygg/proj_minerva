@@ -8,9 +8,10 @@
  * - `api-key`: no hay CLI ni proceso que consultar, "autenticado" es
  *   simplemente tener la key configurada (hoy solo OpenRouter, ver
  *   `../env.ts` -> `getAiEnv().openRouterApiKey`).
- * - `cli`: el proveedor se opera vía un binario externo (`claude`/`codex`)
- *   que hay que encontrar en PATH y, más adelante (T28/T29), hablarle un
- *   protocolo propio (Agent SDK / JSON-RPC de `codex app-server`).
+ * - `cli`: el proveedor se opera vía un binario externo (`claude`/`codex`/
+ *   `opencode`) que hay que encontrar en PATH y hablarle un protocolo propio
+ *   (Agent SDK / JSON-RPC de `codex app-server` / server HTTP local de
+ *   `opencode serve`, T28/T29/T55-T57).
  *
  * No incluye la lista de modelos (eso ya vive en
  * `../../../shared/ai-providers.ts`, `AI_PROVIDER_CATALOG`, T26) — esto es
@@ -39,4 +40,5 @@ export const AI_PROVIDER_REGISTRY: Record<AiProviderId, AiProviderRegistryEntry>
     binary: 'claude',
   },
   codex: { id: 'codex', label: 'Codex', authKind: 'cli', binary: 'codex' },
+  opencode: { id: 'opencode', label: 'OpenCode', authKind: 'cli', binary: 'opencode' },
 }

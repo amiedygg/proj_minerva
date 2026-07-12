@@ -20,7 +20,7 @@ const { getAiProviderStatusMap } = await import('./provider-status')
 describe('getAiProviderStatusMap', () => {
   afterEach(() => vi.clearAllMocks())
 
-  it('openrouter authenticated (hay key) y delega claude-code/codex al probe de CLI', async () => {
+  it('openrouter authenticated (hay key) y delega claude-code/codex/opencode al probe de CLI', async () => {
     getAiEnvMock.mockReturnValue({ openRouterApiKey: 'sk-x', aiModel: 'z-ai/glm-5.2' })
     getCliProviderStatusMock.mockImplementation(async (provider: string) =>
       provider === 'claude-code'
@@ -34,9 +34,11 @@ describe('getAiProviderStatusMap', () => {
       openrouter: { status: 'authenticated' },
       'claude-code': { status: 'authenticated', account: { plan: 'max' } },
       codex: { status: 'installed' },
+      opencode: { status: 'installed' },
     })
     expect(getCliProviderStatusMock).toHaveBeenCalledWith('claude-code')
     expect(getCliProviderStatusMock).toHaveBeenCalledWith('codex')
+    expect(getCliProviderStatusMock).toHaveBeenCalledWith('opencode')
   })
 
   it('openrouter unavailable cuando no hay key configurada', async () => {

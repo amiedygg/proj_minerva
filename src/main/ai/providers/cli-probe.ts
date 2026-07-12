@@ -1,6 +1,7 @@
 /**
- * Detección NO BLOQUEANTE del estado de los CLIs `claude`/`codex` (T27):
- * ¿está el binario en PATH? y, si sí, ¿hay indicios de sesión iniciada?
+ * Detección NO BLOQUEANTE del estado de los CLIs `claude`/`codex`/`opencode`
+ * (T27, `opencode` en T57): ¿está el binario en PATH? y, si sí, ¿hay indicios
+ * de sesión iniciada?
  *
  * Nunca cuelga el arranque de la app: cada spawn tiene un timeout corto
  * (`PROBE_TIMEOUT_MS`) y CUALQUIER falla (binario ausente -> ENOENT, timeout,
@@ -55,13 +56,27 @@
  * `./resolve-cli.ts` busca la ruta absoluta (PATH + ubicaciones comunes) y
  * ese resultado es lo que se pasa a `execFile`; si no se encuentra en NINGÚN
  * lado se reporta `'unavailable'` directamente, sin intentar spawnear nada.
+ *
+ * OPENCODE (T57): criterio DISTINTO al resto de los CLI — no hay archivo de
+ * credenciales que inspeccionar, "autenticado" es que el server local
+ * (`./opencode-runtime.ts`, T55, singleton lazy) reporte al menos un upstream
+ * en `connected` vía `provider.list()` (criterio t3code, forma verificada
+ * EMPÍRICAMENTE contra el binario real 1.17.18 — ver el comentario de
+ * `./opencode-model-catalog.ts`). `unavailable` si el binario no está o
+ * `checkOpencodeVersion()` reporta una versión por debajo del mínimo;
+ * `installed` si el binario+versión están OK pero no se pudo confirmar ningún
+ * upstream conectado (server que no reporta ninguno, o que no llegó a
+ * responder a tiempo — nunca se interpreta como "no instalado", el binario sí
+ * está ahí). Jamás arranca el server si el binario ni existe.
  */
+import { createOpencodeClient } from '@opencode-ai/sdk'
 import { execFile } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { AiProviderId } from '../../../shared/ai-providers'
 import type { AiAccountInfo, AiProviderStatus } from '../../../shared/types'
+import { checkOpencodeVersion, getOpencodeServer } from './opencode-runtime'
 import { AI_PROVIDER_REGISTRY } from './registry'
 import { resolveCliPath } from './resolve-cli'
 
@@ -123,7 +138,48 @@ function readAccountFor(provider: AiProviderId): AiAccountInfo | null {
     case 'codex':
       return readCodexAccount()
     case 'openrouter':
+    case 'opencode':
+      // OpenRouter no es un CLI (no pasa por acá). OpenCode SÍ es un CLI pero
+      // su probe (`probeOpencode`) nunca llega a `readAccountFor` — no hay
+      // archivo de credenciales que leer, el criterio es el server local (ver
+      // el comentario del módulo). Este caso queda solo por exhaustividad.
       return null
+  }
+}
+
+/**
+ * Describe cuántos/cuáles upstreams reporta `connected` como texto corto para
+ * `account.plan` (no hay un campo dedicado en `AiAccountInfo`, ver
+ * `shared/types.ts`) — la UI (`ProviderPicker`/`CliLoginGuide`) ya sabe pintar
+ * `account.plan` junto al badge de estado.
+ */
+function describeConnectedUpstreams(connected: readonly string[]): string {
+  const count = connected.length
+  return String(count) + (count === 1 ? ' upstream' : ' upstreams') + ': ' + connected.join(', ')
+}
+
+/** Probe específico de OpenCode (T57) — ver el comentario grande del módulo. */
+async function probeOpencode(): Promise<AiProviderStatus> {
+  const resolvedPath = resolveCliPath('opencode')
+  if (resolvedPath === null) return { status: 'unavailable' }
+
+  const version = await checkOpencodeVersion()
+  if (!version.ok) return { status: 'unavailable' }
+
+  try {
+    const server = await getOpencodeServer()
+    const client = createOpencodeClient({ baseUrl: server.url })
+    const result = await client.provider.list()
+    const connected = result.data?.connected ?? []
+    if (connected.length === 0) return { status: 'installed' }
+
+    return { status: 'authenticated', account: { plan: describeConnectedUpstreams(connected) } }
+  } catch {
+    // El server no arrancó a tiempo, o `provider.list` no respondió: el
+    // binario y la versión SÍ están OK (ya se confirmó arriba), así que se
+    // reporta "instalado" en vez de "no disponible" — no hay indicio de que
+    // el CLI en sí sea el problema.
+    return { status: 'installed' }
   }
 }
 
@@ -132,6 +188,8 @@ async function probeCli(provider: AiProviderId): Promise<AiProviderStatus> {
   if (entry.authKind !== 'cli' || !entry.binary) {
     throw new Error('probeCli llamado con un proveedor que no es CLI: ' + provider)
   }
+
+  if (provider === 'opencode') return probeOpencode()
 
   const resolvedPath = resolveCliPath(entry.binary)
   if (resolvedPath === null) return { status: 'unavailable' }
@@ -153,9 +211,13 @@ interface CacheEntry {
 const cache = new Map<AiProviderId, CacheEntry>()
 
 /**
- * Estado de un proveedor `cli` (`claude-code`/`codex`), cacheado con TTL
- * corto. Un rechazo (no debería ocurrir, `probeCli` no lanza salvo mal uso)
- * no se cachea, para no dejar el proveedor "atascado" en error.
+ * Estado de un proveedor `cli` (`claude-code`/`codex`/`opencode`), cacheado
+ * con TTL corto. Un rechazo (no debería ocurrir, `probeCli` no lanza salvo
+ * mal uso) no se cachea, para no dejar el proveedor "atascado" en error. Para
+ * OpenCode este TTL corto conviene con el singleton lazy del server
+ * (`./opencode-runtime.ts`, T55): el arranque en frío es caro, pero una vez
+ * arriba las llamadas siguientes (aunque hayan expirado este TTL) reusan el
+ * mismo proceso.
  */
 export function getCliProviderStatus(provider: AiProviderId): Promise<AiProviderStatus> {
   const now = Date.now()
