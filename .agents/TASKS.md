@@ -2080,7 +2080,22 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   con settings.json viejo (provider openrouter persistido) migra sin crash y Settings
   muestra OpenCode activo.
 
-- [~] **T60. UI: card "sin CLIs" con enlaces oficiales + CliLoginGuide x3 + fase "explorando"**
+- [x] **T60. UI: card "sin CLIs" con enlaces oficiales + CliLoginGuide x3 + fase "explorando"**
+  _Hecha (2026-07-11, subagente Sonnet) y VERIFICADA por el orquestador (código +
+  visual e2e). CLI_META extraído a `lib/cli-meta.ts` (gotcha:
+  react-refresh/only-export-components prohíbe exportar datos desde un archivo de
+  componente); `AiSettingsInfo.mockGithub` gates la card en modo demo; phase
+  'exploring'|'writing' aditivo end-to-end (servicios → meta → broadcast → preload
+  validado → hook → panel), done sin phase. VERIFICACIÓN VISUAL (capturas miradas):
+  (1) "Explorando el repositorio…" visible a los ~2s de un análisis agéntico real con
+  opencode/big-pickle; (2) análisis final con hallazgos SOLO posibles leyendo el
+  snapshot (findByCode inexistente, import a archivo ausente, min_amount_cents de la
+  migración 0012 ignorada) + C4 renderizado + banner sellado; (3) card "Necesitás al
+  menos un CLI de IA" con binarios renombrados temporalmente (real GitHub): copy,
+  3 enlaces "instalación" + comandos login + "Volver a comprobar"; (4) click del
+  enlace de OpenCode abre Chrome con opencode.ai/docs (external-link-guard e2e).
+  NOTA UX (follow-up F12 potencial): la card vive en DidacticAnalysisArea → requiere
+  un PR seleccionado; sin selección se ve el placeholder estático de DidacticPanel._
   Contexto: decisión de Edilson — sin ningún CLI instalado, guiar con enlaces
   oficiales. Depende de T57 (y de T59 para el copy final sin OpenRouter).
   Entregables:
@@ -2107,7 +2122,24 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   CliLoginGuide con enlace de instalación visible; click de un enlace abre el
   navegador del sistema (verificación manual del orquestador).
 
-- [ ] **T61. Verificación integral F11 + revisión de seguridad + docs + v0.4.0**
+- [x] **T61. Verificación integral F11 + revisión de seguridad + docs + v0.4.0**
+  _Del orquestador (2026-07-11). typecheck/lint/539 tests verdes. E2e determinista
+  (MINERVA_MOCK=1 + MINERVA_MOCK_AI=1, reload entre suites): smoke-e2e 5/5, didactic
+  13/13, streaming 6/6, diff 7/7, comments 5/5, search, detach 17/17, copy-url 5/5,
+  bugfixes 7/7, f9-ui (banner "vía OpenCode · opencode/big-pickle" sellado tras
+  cambiar a claude-code), persistence completa CON reinicio real de la app. E2e con
+  IA real: smoke-settings 9/9 (modelo inexistente rechaza con "Model not found"
+  accionable); análisis agéntico vía UI en ~33-54s → 4 secciones. MIGRACIÓN VIVA
+  verificada: settings.json con openrouter activo migró a opencode al primer acceso
+  (elección real de opencode ganó sobre el mapeo, modelOptions.openrouter descartado,
+  key huérfana borrada). Seguridad: ver bitácora F11 (1 fix aplicado, 1 hallazgo
+  refutado empíricamente). Infra nueva: MINERVA_MOCK_AI=1 (la vieja receta
+  "openrouter sin key" murió con T59). Docs: CLAUDE.md al mundo F11 (stack IA,
+  frontera del snapshot, layout, comandos, nota e2e), README (T59) y v0.4.0.
+  Capturas miradas: exploring, análisis final, card sin CLIs, CliLoginGuide,
+  Settings x4 proveedores (pre-T59). GOTCHA de sesión: el salvapantallas de Omarchy
+  bloquea screenshot-app.sh igual que hyprlock — coordinar capturas con pantalla
+  activa. **F11 COMPLETA.**_
   Del orquestador (no delegable la verificación): typecheck/lint/tests; suites e2e
   (smoke-didactic + smoke-settings ajustadas al mundo sin OpenRouter; caso nuevo o
   suite nueva para: análisis agéntico mock end-to-end, card sin CLIs si es
