@@ -267,6 +267,11 @@ export class OpenCodeAiService implements AiService {
     const onProgress = options?.onProgress
     let sawAnyDelta = false
     let sessionId: string | null = null
+    // Fase del streaming (F11/T60, ver `AnalyzeProgressMeta` en `../service.ts`):
+    // arranca "exploring" (la sesión todavía no emitió ningún delta de texto
+    // del asistente, solo pudo haber actividad de bookkeeping/tool-use) y
+    // pasa a "writing" en el PRIMER delta de texto ACEPTADO, sin volver atrás.
+    let phase: 'exploring' | 'writing' = 'exploring'
 
     timeouts.resetInactivityTimer()
 
@@ -303,6 +308,12 @@ export class OpenCodeAiService implements AiService {
       sessionDone.catch(() => {})
 
       const currentSessionId = sessionId
+      /** Progreso de actividad SIN delta de texto aceptado (T60) mientras seguimos "exploring": throttleado, nunca cambia `sections`. */
+      const pingExploring = (): void => {
+        if (phase === 'exploring' && onProgress && throttle.shouldRun()) {
+          onProgress(parser.snapshot(), { done: false, phase })
+        }
+      }
       void (async () => {
         try {
           for await (const event of subscription.stream) {
@@ -310,25 +321,36 @@ export class OpenCodeAiService implements AiService {
 
             if (event.type === 'message.updated') {
               messageRoleById.set(event.properties.info.id, event.properties.info.role)
+              pingExploring()
               continue
             }
 
             if (event.type === 'message.part.updated') {
               const part = event.properties.part
               partTypeById.set(part.id, part.type)
+              pingExploring()
               continue
             }
 
             if (event.type === 'message.part.delta') {
               const p = event.properties
               if (p.sessionID !== currentSessionId) continue
-              if (p.field !== 'text') continue
-              if (messageRoleById.get(p.messageID) !== 'assistant') continue
-              if (partTypeById.get(p.partID) !== 'text') continue
+              const isAssistantTextDelta =
+                p.field === 'text' &&
+                messageRoleById.get(p.messageID) === 'assistant' &&
+                partTypeById.get(p.partID) === 'text'
+              if (!isAssistantTextDelta) {
+                // Deltas de razonamiento/tool o de otra sesión (T60): mientras
+                // seguimos "exploring" siguen siendo señal de actividad, sin
+                // que nada de esto llegue al parser.
+                pingExploring()
+                continue
+              }
+              if (phase === 'exploring') phase = 'writing'
               sawAnyDelta = true
               parser.push(p.delta)
               if (onProgress && throttle.shouldRun()) {
-                onProgress(parser.snapshot(), { done: false })
+                onProgress(parser.snapshot(), { done: false, phase })
               }
               continue
             }
@@ -347,9 +369,10 @@ export class OpenCodeAiService implements AiService {
               return
             }
 
-            // Cualquier otro evento (tool-use vía `message.part.updated` con
-            // `type:'tool'`, permisos, diffs, housekeeping del server): fuera
-            // de alcance de T56 — la fase "explorando" de UI es T60.
+            // Cualquier otro evento (permisos, diffs, housekeeping del
+            // server): mientras seguimos "exploring" (T60), igual es señal
+            // de que el server sigue con actividad.
+            pingExploring()
           }
           rejectSession(new Error('OpenCode cerró la conexión de eventos antes de terminar el análisis.'))
         } catch (error) {

@@ -231,5 +231,9 @@ export function getAiSettingsInfo(): AiSettingsInfo {
     perProviderModel: persisted?.models ?? {},
     catalog: AI_PROVIDER_CATALOG,
     selectedOptions: { [provider]: options },
+    // T60: SOLO refleja el flag de GitHub mock (universo "shopwave"), nunca
+    // el estado de la IA — ver el comentario de `mockGithub` en
+    // `../../shared/types.ts`.
+    mockGithub: process.env.MINERVA_MOCK === '1',
   }
 }

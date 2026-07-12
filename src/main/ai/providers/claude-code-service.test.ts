@@ -353,6 +353,33 @@ describe('ClaudeCodeAiService.analyzePullRequest', () => {
     expect(progressCalls.slice(0, -1).every(([, meta]) => meta.done === false)).toBe(true)
   })
 
+  it('emite onProgress con phase:"exploring" ante actividad de tool-use ANTES del primer delta de texto (T60)', async () => {
+    fakeQuery([
+      // Evento crudo del stream que NO es un `text_delta` (mismo tipo que
+      // llega durante una vuelta de `Read`/`Grep`/`Glob`, ver el comentario
+      // del módulo): actividad de tool-use sin texto todavía.
+      thinkingDeltaMessage('explorando el snapshot del PR...'),
+      textDeltaMessage('@@@SECTION kind=summary\nok\n'),
+    ])
+
+    const progressCalls: Array<[DraftDidacticSection[], { done: boolean; phase?: 'exploring' | 'writing' }]> = []
+    const service = new ClaudeCodeAiService(makeGithubService())
+    const result = await service.analyzePullRequest(
+      { repo, number: 482 },
+      { onProgress: (sections, meta) => progressCalls.push([sections, meta]) },
+    )
+
+    // La PRIMERA llamada a onProgress (el throttle SIEMPRE deja pasar la
+    // primera) es la actividad de tool-use, ANTES de que llegue ningún delta
+    // de texto: fase "exploring" con secciones todavía vacías.
+    const [firstSections, firstMeta] = progressCalls[0]
+    expect(firstMeta).toEqual({ done: false, phase: 'exploring' })
+    expect(firstSections).toEqual([])
+
+    // El resultado final sí incluye el contenido del delta posterior.
+    expect(result.sections).toEqual([{ kind: 'summary', markdown: 'ok' }])
+  })
+
   it('lanza un mensaje accionable de login cuando el assistant reporta authentication_failed', async () => {
     fakeQuery([
       {

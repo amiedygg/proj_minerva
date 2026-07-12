@@ -2080,7 +2080,7 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   con settings.json viejo (provider openrouter persistido) migra sin crash y Settings
   muestra OpenCode activo.
 
-- [ ] **T60. UI: card "sin CLIs" con enlaces oficiales + CliLoginGuide x3 + fase "explorando"**
+- [~] **T60. UI: card "sin CLIs" con enlaces oficiales + CliLoginGuide x3 + fase "explorando"**
   Contexto: decisión de Edilson — sin ningún CLI instalado, guiar con enlaces
   oficiales. Depende de T57 (y de T59 para el copy final sin OpenRouter).
   Entregables:

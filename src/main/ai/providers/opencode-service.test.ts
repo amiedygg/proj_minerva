@@ -426,6 +426,37 @@ describe('OpenCodeAiService.analyzePullRequest', () => {
     expect(progressCalls.slice(0, -1).every(([, meta]) => meta.done === false)).toBe(true)
   })
 
+  it('emite onProgress con phase:"exploring" ante actividad de la sesión ANTES del primer delta de texto (T60)', async () => {
+    setupFakeClient({
+      events: [
+        // `message.updated` es puro bookkeeping (hoy solo resetea el timer
+        // de inactividad) — con T60 es también la señal de que la sesión
+        // sigue con actividad mientras no llegó ningún delta de texto.
+        messageUpdated('msg-asst', 'assistant'),
+        partUpdated('prt-text', 'msg-asst', 'text'),
+        partDelta('prt-text', 'msg-asst', '@@@SECTION kind=summary\nok\n'),
+        sessionIdle(),
+      ],
+    })
+
+    const progressCalls: Array<[DraftDidacticSection[], { done: boolean; phase?: 'exploring' | 'writing' }]> = []
+    const service = new OpenCodeAiService(makeGithubService())
+    const result = await service.analyzePullRequest(
+      { repo, number: 482 },
+      { onProgress: (sections, meta) => progressCalls.push([sections, meta]) },
+    )
+
+    // La PRIMERA llamada a onProgress (el throttle SIEMPRE deja pasar la
+    // primera) es el `message.updated` de bookkeeping, ANTES de que llegue
+    // ningún delta de texto: fase "exploring" con secciones todavía vacías.
+    const [firstSections, firstMeta] = progressCalls[0]
+    expect(firstMeta).toEqual({ done: false, phase: 'exploring' })
+    expect(firstSections).toEqual([])
+
+    // El resultado final sí incluye el contenido del delta posterior.
+    expect(result.sections).toEqual([{ kind: 'summary', markdown: 'ok' }])
+  })
+
   it('reconstruye una sección aunque el delta llegue partido en varios chunks', async () => {
     setupFakeClient({
       events: [

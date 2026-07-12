@@ -212,6 +212,14 @@ export type AiModelSource = 'settings' | 'env' | 'default'
  * proveedor+modelo ACTIVO — indexado por proveedor (mínimo: la entrada del
  * `provider` de arriba) para que T37 pinte el selector de opciones sin tener
  * que resolver nada del lado del renderer.
+ *
+ * `mockGithub` (T60): `true` si `MINERVA_MOCK=1` (`getAiSettingsInfo`,
+ * `main/ai/env.ts`) — SOLO afecta la capa GitHub mock (universo "shopwave"),
+ * nunca a la IA (ver `CLAUDE.md`), pero el renderer lo necesita para decidir
+ * si mostrar la card "Necesitás al menos un CLI de IA"
+ * (`NoCliProvidersCard`): con GitHub mock la demo funciona sin ningún CLI
+ * instalado (vía `MockAiService`), así que la card NO debe aparecer aunque
+ * los tres proveedores reales reporten `unavailable`.
  */
 export interface AiSettingsInfo {
   provider: AiProviderId
@@ -220,6 +228,7 @@ export interface AiSettingsInfo {
   perProviderModel: Partial<Record<AiProviderId, string>>
   catalog: Record<AiProviderId, AiProviderCatalogEntry>
   selectedOptions?: Partial<Record<AiProviderId, Record<string, string>>>
+  mockGithub: boolean
 }
 
 /**

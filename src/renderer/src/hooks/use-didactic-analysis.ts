@@ -16,6 +16,16 @@ interface UseDidacticAnalysisResult {
    * preferir `analysis` sobre `streamingSections` si ambos están presentes.
    */
   streamingSections: DraftDidacticSection[] | null
+  /**
+   * Última fase (`AnalysisProgressEvent.phase`, T60) recibida DURANTE un
+   * streaming en curso — `'exploring'`/`'writing'` para los tres proveedores
+   * agénticos, `null` para el mock (nunca la manda) o mientras no llegó
+   * ningún chunk todavía. Quien consume este hook la usa junto con
+   * `streamingSections` para distinguir "explorando el repo, sin secciones
+   * todavía" (`phase === 'exploring'` con `streamingSections` vacío) de
+   * "generando contenido" (ver `DidacticAnalysisArea`).
+   */
+  phase: 'exploring' | 'writing' | null
   /** `true` mientras se consulta `ai:getAnalysisState` al montar (ver el efecto de "attach" más abajo). */
   checkingCache: boolean
   loading: boolean
@@ -101,6 +111,7 @@ function toErrorMessage(error: unknown): string {
 export function useDidacticAnalysis(target: DidacticAnalysisTarget): UseDidacticAnalysisResult {
   const [analysis, setAnalysis] = useState<DidacticAnalysis | null>(null)
   const [streamingSections, setStreamingSections] = useState<DraftDidacticSection[] | null>(null)
+  const [phase, setPhase] = useState<'exploring' | 'writing' | null>(null)
   const [checkingCache, setCheckingCache] = useState(true)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -145,6 +156,7 @@ export function useDidacticAnalysis(target: DidacticAnalysisTarget): UseDidactic
         setAnalysis(null)
         setError(null)
         setStreamingSections(event.sections)
+        setPhase(event.phase ?? null)
         return
       }
 
@@ -215,6 +227,7 @@ export function useDidacticAnalysis(target: DidacticAnalysisTarget): UseDidactic
     setLoading(true)
     setError(null)
     setStreamingSections(null)
+    setPhase(null)
     // Limpia también el resultado viejo: la precedencia de render es
     // `analysis > streamingSections`, así que sin esto un re-análisis
     // streamearía invisible detrás del contenido anterior y el swap final
@@ -232,6 +245,7 @@ export function useDidacticAnalysis(target: DidacticAnalysisTarget): UseDidactic
         return
       }
       setStreamingSections(event.sections)
+      setPhase(event.phase ?? null)
     })
 
     void (async () => {
@@ -272,5 +286,5 @@ export function useDidacticAnalysis(target: DidacticAnalysisTarget): UseDidactic
     // eslint-disable-next-line react-hooks/exhaustive-deps -- se depende de campos primitivos de `target`, no de su identidad de objeto.
   }, [target.repo.owner, target.repo.name, target.number, analyze])
 
-  return { analysis, streamingSections, checkingCache, loading, error, analyze, reanalyze }
+  return { analysis, streamingSections, phase, checkingCache, loading, error, analyze, reanalyze }
 }

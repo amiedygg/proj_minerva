@@ -133,7 +133,16 @@ export async function registerIpcHandlers(): Promise<void> {
             // enganchada al streaming no debe ver nunca un "terminó" que
             // todavía no se puede leer de `ai:getCachedAnalysis`).
             if (meta.done) return
-            broadcastProgress({ repo: req.repo, number: req.number, sections, done: false })
+            // `meta.phase` (T60): "exploring"/"writing" para proveedores
+            // agénticos, `undefined` para el mock — se propaga tal cual, sin
+            // interpretarlo acá.
+            broadcastProgress({
+              repo: req.repo,
+              number: req.number,
+              sections,
+              done: false,
+              phase: meta.phase,
+            })
           },
         })
 

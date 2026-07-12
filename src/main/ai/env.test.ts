@@ -304,3 +304,30 @@ describe('getAiSettingsInfo (T34, selectedOptions)', () => {
     expect(getAiSettingsInfo().selectedOptions).toEqual({ opencode: {} })
   })
 })
+
+describe('getAiSettingsInfo (T60, mockGithub)', () => {
+  beforeEach(() => {
+    vi.mocked(settingsStore.getPersistedSettings).mockReturnValue(null)
+    vi.mocked(settingsStore.getPersistedModelOptions).mockReturnValue({})
+  })
+
+  afterEach(() => {
+    delete process.env.MINERVA_MOCK
+    vi.clearAllMocks()
+  })
+
+  it('mockGithub es true SOLO cuando MINERVA_MOCK="1" (nunca afecta la IA)', () => {
+    process.env.MINERVA_MOCK = '1'
+    expect(getAiSettingsInfo().mockGithub).toBe(true)
+  })
+
+  it('mockGithub es false sin MINERVA_MOCK', () => {
+    delete process.env.MINERVA_MOCK
+    expect(getAiSettingsInfo().mockGithub).toBe(false)
+  })
+
+  it('mockGithub es false con cualquier otro valor de MINERVA_MOCK', () => {
+    process.env.MINERVA_MOCK = 'true'
+    expect(getAiSettingsInfo().mockGithub).toBe(false)
+  })
+})

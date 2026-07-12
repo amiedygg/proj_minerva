@@ -226,6 +226,17 @@ export class ClaudeCodeAiService implements AiService {
     const throttle = createThrottle(PROGRESS_THROTTLE_MS)
     const onProgress = options?.onProgress
     let sawAnyDelta = false
+    // Fase del streaming (F11/T60, ver `AnalyzeProgressMeta` en `../service.ts`):
+    // arranca "exploring" (el agente todavía no escribió texto, solo puede
+    // estar usando `Read`/`Grep`/`Glob`) y pasa a "writing" en el PRIMER
+    // `text_delta` aceptado, sin volver atrás.
+    let phase: 'exploring' | 'writing' = 'exploring'
+    /** Progreso de actividad SIN delta de texto (tool-use) mientras seguimos "exploring": throttleado, nunca cambia `sections`. */
+    const pingExploring = (): void => {
+      if (phase === 'exploring' && onProgress && throttle.shouldRun()) {
+        onProgress(parser.snapshot(), { done: false, phase })
+      }
+    }
 
     timeouts.resetInactivityTimer()
 
@@ -295,11 +306,18 @@ export class ClaudeCodeAiService implements AiService {
         if (message.type === 'stream_event') {
           const event = message.event
           if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+            if (phase === 'exploring') phase = 'writing'
             sawAnyDelta = true
             parser.push(event.delta.text)
             if (onProgress && throttle.shouldRun()) {
-              onProgress(parser.snapshot(), { done: false })
+              onProgress(parser.snapshot(), { done: false, phase })
             }
+          } else {
+            // Cualquier otro evento crudo del stream (tool_use en
+            // construcción, thinking_delta, etc., T60): mientras seguimos
+            // "exploring" es la señal de actividad de herramientas que la UI
+            // pinta como "Explorando el repositorio…".
+            pingExploring()
           }
           continue
         }
@@ -308,6 +326,10 @@ export class ClaudeCodeAiService implements AiService {
           if (message.error) {
             throw new Error(mapAssistantError(message.error))
           }
+          // Turno de asistente completo sin `stream_event` de texto todavía
+          // (p. ej. una vuelta que solo usó `Read`/`Grep`/`Glob`, T60): misma
+          // señal de actividad de tool-use que arriba.
+          pingExploring()
           continue
         }
 

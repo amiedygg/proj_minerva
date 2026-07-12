@@ -26,7 +26,10 @@ function isAnalysisProgressPayload(value: unknown): value is AnalysisProgressEve
     typeof v.number === 'number' &&
     Array.isArray(v.sections) &&
     typeof v.done === 'boolean' &&
-    (v.error === undefined || typeof v.error === 'string')
+    (v.error === undefined || typeof v.error === 'string') &&
+    // `phase` (T60): campo ADITIVO opcional, mismo criterio que `error` —
+    // ausente (mock/evento terminal) o uno de los dos valores válidos.
+    (v.phase === undefined || v.phase === 'exploring' || v.phase === 'writing')
   )
 }
 

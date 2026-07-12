@@ -39,6 +39,16 @@ import type { DraftDidacticSection } from '../../shared/events'
 export interface AnalyzeProgressMeta {
   /** `true` en la última llamada a `onProgress`: el análisis ya terminó (con éxito). */
   done: boolean
+  /**
+   * Fase del streaming AGÉNTICO (F11/T60): mismo campo/significado que
+   * `AnalysisProgressEvent.phase` (`../../shared/events.ts`, ver ahí el
+   * comentario completo) — los TRES proveedores agénticos
+   * (`./providers/{claude-code,codex,opencode}-service.ts`) lo pasan en cada
+   * llamada intermedia; la llamada FINAL (`done: true`) lo omite a propósito
+   * (decisión T60: `sections` ya es la fuente de verdad en ese punto, no
+   * hace falta distinguir fase). Ausente en el `MockAiService`.
+   */
+  phase?: 'exploring' | 'writing'
 }
 
 export type AnalyzeProgressCallback = (

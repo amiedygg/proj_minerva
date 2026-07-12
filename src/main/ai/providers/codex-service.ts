@@ -191,6 +191,11 @@ export class CodexAiService implements AiService {
     const throttle = createThrottle(PROGRESS_THROTTLE_MS)
     const onProgress = options?.onProgress
     let sawAnyDelta = false
+    // Fase del streaming (F11/T60, ver `AnalyzeProgressMeta` en `../service.ts`):
+    // arranca "exploring" (el thread todavía no emitió ningún delta de
+    // texto, solo pudo haber items de tool-use) y pasa a "writing" en el
+    // PRIMER `item/agentMessage/delta` aceptado, sin volver atrás.
+    let phase: 'exploring' | 'writing' = 'exploring'
 
     let client: CodexAppServerClient | null = null
     controller.signal.addEventListener('abort', () => client?.kill())
@@ -265,12 +270,27 @@ export class CodexAiService implements AiService {
 
         const delta = extractAgentDelta(notification)
         if (delta !== null) {
+          if (phase === 'exploring') phase = 'writing'
           sawAnyDelta = true
           parser.push(delta)
           if (onProgress && throttle.shouldRun()) {
-            onProgress(parser.snapshot(), { done: false })
+            onProgress(parser.snapshot(), { done: false, phase })
           }
           return
+        }
+
+        // Notificaciones `item/*` que NO son delta de texto (T60: lectura,
+        // grep, otros ítems agénticos explorando el snapshot): mientras
+        // seguimos "exploring", es la señal de actividad que la UI pinta
+        // como "Explorando el repositorio…" — throttleada, nunca cambia
+        // `sections`.
+        if (
+          phase === 'exploring' &&
+          notification.method.startsWith('item/') &&
+          onProgress &&
+          throttle.shouldRun()
+        ) {
+          onProgress(parser.snapshot(), { done: false, phase })
         }
 
         const failure = turnFailureMessage(notification)
