@@ -166,6 +166,28 @@ function partUpdated(partId: string, messageId: string, type: string): ScriptedE
   }
 }
 
+/**
+ * Parte `tool` COMPLETA (F13): la forma real que emite el server para una
+ * tool call (`callID`/`tool`/`state`), a diferencia del `partUpdated`
+ * minimalista de arriba (que ejercita el camino defensivo: sin esos campos,
+ * el mini-log la ignora).
+ */
+function toolPartUpdated(
+  partId: string,
+  callId: string,
+  tool: string,
+  state: Record<string, unknown>,
+  sessionId = SESSION_ID,
+): ScriptedEvent {
+  return {
+    type: 'message.part.updated',
+    properties: {
+      sessionID: sessionId,
+      part: { id: partId, messageID: 'msg-asst', type: 'tool', callID: callId, tool, state },
+    },
+  }
+}
+
 function partDelta(partId: string, messageId: string, delta: string, sessionId = SESSION_ID): ScriptedEvent {
   return {
     type: 'message.part.delta',
@@ -448,13 +470,176 @@ describe('OpenCodeAiService.analyzePullRequest', () => {
 
     // La PRIMERA llamada a onProgress (el throttle SIEMPRE deja pasar la
     // primera) es el `message.updated` de bookkeeping, ANTES de que llegue
-    // ningún delta de texto: fase "exploring" con secciones todavía vacías.
+    // ningún delta de texto: fase "exploring" con secciones todavía vacías
+    // (y el mini-log F13 también vacío: no hubo tool calls todavía).
     const [firstSections, firstMeta] = progressCalls[0]
-    expect(firstMeta).toEqual({ done: false, phase: 'exploring' })
+    expect(firstMeta).toEqual({ done: false, phase: 'exploring', activity: [] })
     expect(firstSections).toEqual([])
 
     // El resultado final sí incluye el contenido del delta posterior.
     expect(result.sections).toEqual([{ kind: 'summary', markdown: 'ok' }])
+  })
+
+  it('mini-log (F13): una tool part colapsa running→completed en la misma fila, con la ruta relativizada', async () => {
+    setupFakeClient({
+      events: [
+        messageUpdated('msg-asst', 'assistant'),
+        toolPartUpdated('prt-tool', 'call-1', 'read', {
+          status: 'running',
+          input: {
+            filePath: '/home/test-user/.minerva/snapshots/shopwave-api-a1b2c3d/src/routes/carts.ts',
+          },
+          time: { start: 1 },
+        }),
+        toolPartUpdated('prt-tool', 'call-1', 'read', {
+          status: 'completed',
+          input: {
+            filePath: '/home/test-user/.minerva/snapshots/shopwave-api-a1b2c3d/src/routes/carts.ts',
+          },
+          output: 'contenido',
+          title: 'Read carts.ts',
+          time: { start: 1, end: 2 },
+        }),
+        partUpdated('prt-text', 'msg-asst', 'text'),
+        partDelta('prt-text', 'msg-asst', '@@@SECTION kind=summary\nok\n'),
+        sessionIdle(),
+      ],
+    })
+
+    const progressCalls: Array<
+      [
+        DraftDidacticSection[],
+        { done: boolean; activity?: Array<{ id: string; label: string; status: string }> },
+      ]
+    > = []
+    const service = new OpenCodeAiService(makeGithubService())
+    await service.analyzePullRequest(
+      { repo, number: 482 },
+      { onProgress: (sections, meta) => progressCalls.push([sections, meta]) },
+    )
+
+    // Edge running y edge completed (ambos SIN throttle): misma fila (id =
+    // callID), con la ruta del input relativizada contra el snapshot.
+    const runningCall = progressCalls.find(([, meta]) => meta.activity?.[0]?.status === 'running')
+    expect(runningCall?.[1].activity).toEqual([
+      { id: 'call-1', kind: 'read', label: 'Leyendo src/routes/carts.ts', status: 'running' },
+    ])
+    const doneCall = progressCalls.find(([, meta]) => meta.activity?.[0]?.status === 'done')
+    expect(doneCall?.[1].activity).toEqual([
+      { id: 'call-1', kind: 'read', label: 'Leyó src/routes/carts.ts', status: 'done' },
+    ])
+    const [, lastMeta] = progressCalls[progressCalls.length - 1]
+    expect(lastMeta.done).toBe(true)
+    expect(lastMeta.activity).toBeUndefined()
+  })
+
+  it('mini-log (F13): un ToolStateError marca la fila como error', async () => {
+    setupFakeClient({
+      events: [
+        messageUpdated('msg-asst', 'assistant'),
+        toolPartUpdated('prt-tool', 'call-1', 'grep', {
+          status: 'error',
+          input: { pattern: 'router' },
+          error: 'permission denied',
+          time: { start: 1, end: 2 },
+        }),
+        partUpdated('prt-text', 'msg-asst', 'text'),
+        partDelta('prt-text', 'msg-asst', '@@@SECTION kind=summary\nok\n'),
+        sessionIdle(),
+      ],
+    })
+
+    const progressCalls: Array<
+      [DraftDidacticSection[], { done: boolean; activity?: Array<{ label: string; status: string }> }]
+    > = []
+    const service = new OpenCodeAiService(makeGithubService())
+    await service.analyzePullRequest(
+      { repo, number: 482 },
+      { onProgress: (sections, meta) => progressCalls.push([sections, meta]) },
+    )
+
+    // `fail` sobre una fila que nunca pasó por begin es no-op (colapso por
+    // identidad exige fila viva) — el server real emite pending/running antes
+    // de error, pero si solo llegara el error, no debe inventarse una fila.
+    // Acá el estado error llega DIRECTO: se verifica que no revienta y que
+    // ninguna fila queda en "running" fantasma.
+    const withActivity = progressCalls.filter(([, meta]) => meta.activity?.length)
+    for (const [, meta] of withActivity) {
+      expect(meta.activity?.every((item) => item.status !== 'running')).toBe(true)
+    }
+  })
+
+  it('mini-log (F13): tool parts y reasoning de OTRA sesión no contaminan el feed', async () => {
+    setupFakeClient({
+      events: [
+        messageUpdated('msg-asst', 'assistant'),
+        // Tool call de una sesión ajena en el server compartido.
+        toolPartUpdated(
+          'prt-ajena',
+          'call-ajena',
+          'read',
+          { status: 'running', input: { filePath: '/otro/repo/secreto.ts' }, time: { start: 1 } },
+          'ses_other',
+        ),
+        partUpdated('prt-text', 'msg-asst', 'text'),
+        partDelta('prt-text', 'msg-asst', '@@@SECTION kind=summary\nok\n'),
+        sessionIdle(),
+      ],
+    })
+
+    const progressCalls: Array<
+      [DraftDidacticSection[], { done: boolean; activity?: Array<{ id: string }> }]
+    > = []
+    const service = new OpenCodeAiService(makeGithubService())
+    await service.analyzePullRequest(
+      { repo, number: 482 },
+      { onProgress: (sections, meta) => progressCalls.push([sections, meta]) },
+    )
+
+    for (const [, meta] of progressCalls) {
+      expect(meta.activity?.some((item) => item.id === 'call-ajena')).not.toBe(true)
+    }
+  })
+
+  it('mini-log (F13): una parte reasoning es una fila "Pensando…" genérica, sin texto del razonamiento', async () => {
+    setupFakeClient({
+      events: [
+        messageUpdated('msg-asst', 'assistant'),
+        {
+          type: 'message.part.updated',
+          properties: {
+            sessionID: SESSION_ID,
+            part: {
+              id: 'prt-reason',
+              messageID: 'msg-asst',
+              type: 'reasoning',
+              text: 'pensamiento secreto que NO debe viajar',
+              time: { start: 1 },
+            },
+          },
+        },
+        partDelta('prt-reason', 'msg-asst', 'más pensamiento secreto'),
+        partUpdated('prt-text', 'msg-asst', 'text'),
+        partDelta('prt-text', 'msg-asst', '@@@SECTION kind=summary\nok\n'),
+        sessionIdle(),
+      ],
+    })
+
+    const progressCalls: Array<
+      [DraftDidacticSection[], { done: boolean; activity?: Array<{ label: string }> }]
+    > = []
+    const service = new OpenCodeAiService(makeGithubService())
+    await service.analyzePullRequest(
+      { repo, number: 482 },
+      { onProgress: (sections, meta) => progressCalls.push([sections, meta]) },
+    )
+
+    const labels = progressCalls.flatMap(([, meta]) => meta.activity?.map((i) => i.label) ?? [])
+    expect(labels.length).toBeGreaterThan(0)
+    for (const label of labels) {
+      expect(label).toMatch(/^Pens/)
+      expect(label).not.toContain('secreto')
+    }
   })
 
   it('reconstruye una sección aunque el delta llegue partido en varios chunks', async () => {

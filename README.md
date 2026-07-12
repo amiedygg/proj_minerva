@@ -184,6 +184,7 @@ npm run build
 - [x] Análisis agéntico v0.4.0: snapshot local del commit del PR + exploración read-only (los hallazgos cruzan diff y árbol real)
 - [x] Proveedor OpenCode v0.4.0 (reemplaza a OpenRouter directo; sus modelos van DENTRO de OpenCode) + card guía si no hay CLIs
 - [x] Settings v0.4.1: rediseño — strip "En uso" (CLI/modelo/razonamiento activos), tabs por proveedor (ver ≠ activar), cards de modelo de un click y chip resumen en la TitleBar
+- [x] Mini-log de actividad del harness v0.4.2: mientras la IA analiza, el panel muestra en vivo qué está haciendo el agente ("Leyó src/api/routes.ts", "Buscó \"router\"", "Pensando…") — efímero, sutil, en los tres proveedores + mock
 - [ ] Comentar en un PR real de prueba (verificación con cuenta real)
 
 > Estado detallado, bitácora de gotchas y control de tareas: `.agents/TASKS.md`.

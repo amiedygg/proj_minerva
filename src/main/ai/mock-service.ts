@@ -19,6 +19,14 @@
  * Reutiliza `prFixtures` de `../github/fixtures` (mismo universo mock
  * "shopwave") para poder armar un resumen genérico con datos reales del PR
  * (título, contadores, labels) cuando no hay sección enriquecida para él.
+ *
+ * F13: antes de los chunks de texto, el mock emite un PRELUDIO GUIONADO de
+ * actividad del harness (fase 'exploring' + mini-log construido con el
+ * `createActivityTracker` REAL — mismo camino de código que los proveedores
+ * agénticos), y los chunks de texto salen con fase 'writing'. Esto cambia el
+ * contrato T60 ("el mock no emite `phase`"): desde F13 SÍ la emite, porque
+ * es LA vía para que las suites e2e con `MINERVA_MOCK_AI=1` ejerciten el
+ * mini-log y el skeleton "Explorando el repositorio…" de forma determinista.
  */
 import type { IpcRequest } from '../../shared/ipc'
 import type { DidacticSection, GeneratedAnalysis, RepoRef } from '../../shared/types'
@@ -26,6 +34,7 @@ import { prFixtures } from '../github/fixtures'
 import { genericSummarySection, richDidacticSections } from './fixtures'
 import type { AiService, AnalyzePullRequestOptions } from './service'
 import { StreamSectionParser, stringifySections } from './stream-parser'
+import { createActivityTracker, type ActivityTracker } from './activity-tracker'
 
 /** Cantidad de trozos en los que se divide el texto serializado de una fixture. */
 const STREAM_CHUNKS = 6
@@ -52,6 +61,44 @@ function chunkText(text: string, chunks: number): string[] {
 }
 
 /**
+ * Preludio guionado de actividad del harness (F13): simula la fase
+ * 'exploring' de un proveedor agéntico con una secuencia fija de tool calls
+ * ficticias, pasada por el `createActivityTracker` REAL — cada transición
+ * emite `onProgress` vía `onEdge`, exactamente como en los proveedores. Los
+ * delays entre pasos hacen visible el "running → done" de cada fila, y la
+ * secuencia ejercita los tres verbos + "Pensando…" para que las suites e2e
+ * puedan assertear labels concretos.
+ */
+async function streamActivityPrelude(
+  onProgress: NonNullable<AnalyzePullRequestOptions['onProgress']>,
+  parser: StreamSectionParser,
+): Promise<ActivityTracker> {
+  const activity = createActivityTracker({
+    onEdge: () => {
+      onProgress(parser.snapshot(), {
+        done: false,
+        phase: 'exploring',
+        activity: activity.buffer(),
+      })
+    },
+  })
+
+  activity.begin('mock-list', 'list')
+  await delay(STREAM_CHUNK_DELAY_MS)
+  activity.complete('mock-list')
+  activity.begin('mock-read', 'read', 'src/api/routes.ts')
+  await delay(STREAM_CHUNK_DELAY_MS)
+  activity.complete('mock-read', 'src/api/routes.ts')
+  activity.begin('mock-grep', 'search', 'router')
+  await delay(STREAM_CHUNK_DELAY_MS)
+  activity.complete('mock-grep', 'router')
+  activity.thinking('mock-thinking')
+  await delay(STREAM_CHUNK_DELAY_MS)
+
+  return activity
+}
+
+/**
  * Simula streaming real sobre una fixture ya armada: la serializa, la
  * trocea y la vuelve a parsear con delays, publicando snapshots por
  * `onProgress`. El resultado final sale de `StreamSectionParser.finalize()`
@@ -70,13 +117,21 @@ async function streamFixture(
     return parser.finalize()
   }
 
+  // Fase 'exploring' guionada (F13) antes del primer chunk de texto — mismo
+  // orden de fases que un proveedor agéntico real.
+  const activity = await streamActivityPrelude(onProgress, parser)
+  activity.settleThinking()
+
   for (const chunk of chunkText(text, STREAM_CHUNKS)) {
     parser.push(chunk)
-    onProgress(parser.snapshot(), { done: false })
+    onProgress(parser.snapshot(), { done: false, phase: 'writing', activity: activity.buffer() })
     await delay(STREAM_CHUNK_DELAY_MS)
   }
 
   const final = parser.finalize()
+  // Terminal SIN `phase` ni `activity` (misma convención que los proveedores
+  // reales): a esta altura `sections` es la fuente de verdad y el mini-log
+  // es efímero por diseño.
   onProgress(final, { done: true })
   return final
 }

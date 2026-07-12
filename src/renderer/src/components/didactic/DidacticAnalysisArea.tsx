@@ -18,6 +18,7 @@ import { Markdown } from '../ui/Markdown'
 import { MermaidDiagram } from './MermaidDiagram'
 import { CodeSnippet } from './CodeSnippet'
 import { DidacticPlaceholder } from './DidacticPlaceholder'
+import { HarnessActivityLog } from './HarnessActivityLog'
 import { NoCliProvidersCard } from './NoCliProvidersCard'
 import { ActiveModelHint } from './ActiveModelHint'
 import { ExpandableResource } from './ExpandableResource'
@@ -197,8 +198,17 @@ export function DidacticAnalysisArea({
   number,
   currentHeadSha,
 }: DidacticAnalysisAreaProps): React.JSX.Element {
-  const { analysis, streamingSections, phase, checkingCache, loading, error, analyze, reanalyze } =
-    useDidacticAnalysis({ repo, number })
+  const {
+    analysis,
+    streamingSections,
+    phase,
+    activity,
+    checkingCache,
+    loading,
+    error,
+    analyze,
+    reanalyze,
+  } = useDidacticAnalysis({ repo, number })
   const [viewerResource, setViewerResource] = useState<ViewerResource | null>(null)
   const providerStatus = useProviderStatus()
   const settings = useSettings()
@@ -251,6 +261,16 @@ export function DidacticAnalysisArea({
   } else if (hasStreamedContent && streamingSections) {
     body = (
       <>
+        {/* Mini-log de actividad (F13) DURANTE la escritura: franja delgada
+            encima de las secciones mientras el análisis sigue en vuelo — el
+            hook limpia `activity` con el evento terminal, así que su sola
+            presencia significa "todavía no terminó". Si el agente vuelve a
+            usar herramientas a mitad de la redacción, se ve acá. */}
+        {activity && activity.length > 0 && (
+          <div className="rounded-md border border-border/60 bg-border/10 px-2.5 py-1.5">
+            <HarnessActivityLog items={activity} />
+          </div>
+        )}
         {streamingSections.map((section, i) => renderDraftSection(section, i, setViewerResource))}
       </>
     )
@@ -265,6 +285,9 @@ export function DidacticAnalysisArea({
               ? 'Explorando el repositorio…'
               : 'Analizando PR con IA…'}
         </div>
+        {/* Mini-log de actividad del harness (F13): qué está haciendo el
+            agente sobre el snapshot mientras todavía no hay secciones. */}
+        {activity && <HarnessActivityLog items={activity} />}
         <div className="h-20 animate-pulse rounded-md border border-border bg-border/20" />
         <div className="h-32 animate-pulse rounded-md border border-border bg-border/20" />
       </div>

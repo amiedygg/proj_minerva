@@ -148,6 +148,47 @@ function thinkingDeltaMessage(text: string): FakeSdkMessage {
   }
 }
 
+/** Arranque de un bloque `tool_use` (F13): trae el nombre de la tool y el id del bloque; los args llegan después por `input_json_delta`. */
+function toolUseStartMessage(index: number, id: string, name: string): FakeSdkMessage {
+  return {
+    type: 'stream_event',
+    event: {
+      type: 'content_block_start',
+      index,
+      content_block: { type: 'tool_use', id, name, input: {} },
+    },
+    parent_tool_use_id: null,
+    uuid: 'u-tool-start',
+    session_id: 's1',
+  }
+}
+
+/** Fragmento del JSON de args de la tool en curso (F13): se acumula por `index`. */
+function inputJsonDeltaMessage(index: number, partialJson: string): FakeSdkMessage {
+  return {
+    type: 'stream_event',
+    event: {
+      type: 'content_block_delta',
+      index,
+      delta: { type: 'input_json_delta', partial_json: partialJson },
+    },
+    parent_tool_use_id: null,
+    uuid: 'u-json',
+    session_id: 's1',
+  }
+}
+
+/** Cierre de un bloque de contenido (F13): para un `tool_use`, el momento de parsear los args acumulados. */
+function contentBlockStopMessage(index: number): FakeSdkMessage {
+  return {
+    type: 'stream_event',
+    event: { type: 'content_block_stop', index },
+    parent_tool_use_id: null,
+    uuid: 'u-stop',
+    session_id: 's1',
+  }
+}
+
 function systemInitMessage(): FakeSdkMessage {
   return { type: 'system', subtype: 'init', session_id: 's1', uuid: 'u-init' }
 }
@@ -369,15 +410,91 @@ describe('ClaudeCodeAiService.analyzePullRequest', () => {
       { onProgress: (sections, meta) => progressCalls.push([sections, meta]) },
     )
 
-    // La PRIMERA llamada a onProgress (el throttle SIEMPRE deja pasar la
-    // primera) es la actividad de tool-use, ANTES de que llegue ningún delta
-    // de texto: fase "exploring" con secciones todavía vacías.
+    // La PRIMERA llamada a onProgress es el EDGE del mini-log (F13): el
+    // thinking_delta abre una fila "Pensando…" y eso emite SIN throttle,
+    // ANTES de que llegue ningún delta de texto: fase "exploring" con
+    // secciones todavía vacías.
     const [firstSections, firstMeta] = progressCalls[0]
-    expect(firstMeta).toEqual({ done: false, phase: 'exploring' })
+    expect(firstMeta).toEqual({
+      done: false,
+      phase: 'exploring',
+      activity: [{ id: 'think-0', kind: 'thinking', label: 'Pensando…', status: 'running' }],
+    })
     expect(firstSections).toEqual([])
 
     // El resultado final sí incluye el contenido del delta posterior.
     expect(result.sections).toEqual([{ kind: 'summary', markdown: 'ok' }])
+  })
+
+  it('mini-log (F13): una tool call colapsa running→done en la misma fila, con la ruta relativizada al snapshot', async () => {
+    fakeQuery([
+      toolUseStartMessage(0, 'toolu_1', 'Read'),
+      // Args partidos en dos deltas, con la ruta ABSOLUTA dentro del snapshot
+      // (la que manda el agente): el label final debe mostrarla relativa.
+      inputJsonDeltaMessage(0, '{"file_path": "/home/test-user/.minerva/snapsho'),
+      inputJsonDeltaMessage(0, 'ts/shopwave-api-a1b2c3d/src/routes/carts.ts"}'),
+      contentBlockStopMessage(0),
+      textDeltaMessage('@@@SECTION kind=summary\nok\n'),
+    ])
+
+    const progressCalls: Array<
+      [
+        DraftDidacticSection[],
+        { done: boolean; activity?: Array<{ id: string; label: string; status: string }> },
+      ]
+    > = []
+    const service = new ClaudeCodeAiService(makeGithubService())
+    await service.analyzePullRequest(
+      { repo, number: 482 },
+      { onProgress: (sections, meta) => progressCalls.push([sections, meta]) },
+    )
+
+    // Edge 1 (begin, SIN throttle): fila running genérica — el nombre de la
+    // tool llega en el start pero los args todavía no.
+    expect(progressCalls[0][1].activity).toEqual([
+      { id: 'toolu_1', kind: 'read', label: 'Leyendo un archivo…', status: 'running' },
+    ])
+    // Edge del complete (también SIN throttle; entre medio pueden colarse
+    // pings throttled de los input_json_delta): MISMA fila (mismo id,
+    // colapso por identidad), ahora done y con la ruta extraída del JSON
+    // acumulado, relativa al snapshot.
+    const doneCall = progressCalls.find(([, meta]) => meta.activity?.[0]?.status === 'done')
+    expect(doneCall?.[1].activity).toEqual([
+      { id: 'toolu_1', kind: 'read', label: 'Leyó src/routes/carts.ts', status: 'done' },
+    ])
+    // El terminal NO trae actividad (efímera por diseño).
+    const [, lastMeta] = progressCalls[progressCalls.length - 1]
+    expect(lastMeta.done).toBe(true)
+    expect(lastMeta.activity).toBeUndefined()
+  })
+
+  it('mini-log (F13): thinking_deltas repetidos son UNA fila "Pensando…" que cierra con el primer texto', async () => {
+    fakeQuery([
+      thinkingDeltaMessage('primer pensamiento'),
+      thinkingDeltaMessage('más pensamiento'),
+      thinkingDeltaMessage('y más'),
+      textDeltaMessage('@@@SECTION kind=summary\nok\n'),
+    ])
+
+    const progressCalls: Array<
+      [DraftDidacticSection[], { done: boolean; activity?: Array<{ label: string; status: string }> }]
+    > = []
+    const service = new ClaudeCodeAiService(makeGithubService())
+    await service.analyzePullRequest(
+      { repo, number: 482 },
+      { onProgress: (sections, meta) => progressCalls.push([sections, meta]) },
+    )
+
+    // Solo UN edge por bloque de thinking (deltas repetidos = no-op), y el
+    // label es SIEMPRE el genérico — el texto del razonamiento jamás viaja.
+    const activityCalls = progressCalls.filter(([, meta]) => !meta.done && meta.activity?.length)
+    expect(activityCalls[0][1].activity).toEqual([
+      { id: 'think-0', kind: 'thinking', label: 'Pensando…', status: 'running' },
+    ])
+    // Con el primer delta de texto la fila cierra a "Pensó" y viaja con esa
+    // misma emisión (throttled), sin edge extra.
+    const writingCall = progressCalls.find(([, meta]) => !meta.done && meta.activity?.[0]?.status === 'done')
+    expect(writingCall?.[1].activity?.[0].label).toBe('Pensó')
   })
 
   it('lanza un mensaje accionable de login cuando el assistant reporta authentication_failed', async () => {

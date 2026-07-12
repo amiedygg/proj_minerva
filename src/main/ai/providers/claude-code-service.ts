@@ -48,9 +48,12 @@
  *    streaming real, no un único objeto al final). Con
  *    `includePartialMessages: true` el SDK emite `SDKPartialAssistantMessage`
  *    (`type: 'stream_event'`) por cada evento crudo de la Messages API
- *    (`BetaRawMessageStreamEvent`) — de ahí se extraen SOLO los
- *    `content_block_delta` cuyo `delta.type === 'text_delta'` (se ignoran
- *    `thinking_delta`/`input_json_delta` de tool-use/etc.). Con tools
+ *    (`BetaRawMessageStreamEvent`) — al parser de secciones entran SOLO los
+ *    `content_block_delta` cuyo `delta.type === 'text_delta'`; desde F13 los
+ *    eventos de tool-use (`content_block_start` de un bloque `tool_use` +
+ *    `input_json_delta` acumulado hasta el `content_block_stop`) y los
+ *    `thinking_delta` alimentan ADEMÁS el mini-log de actividad
+ *    (`../activity-tracker.ts`) — nunca el parser. Con tools
  *    habilitadas llegan mensajes `assistant`/`stream_event` intermedios por
  *    cada vuelta de tool-use (turnos que solo invocan `Read`/`Grep`/`Glob`
  *    sin emitir texto) — el `for await` ya resetea el timer de inactividad
@@ -98,6 +101,8 @@ import { ANALYZE_PR_SYSTEM_PROMPT } from '../prompts/analyze-pr'
 import { buildAgenticUserMessage, prId } from '../analysis-prompt'
 import { StreamSectionParser } from '../stream-parser'
 import { createThrottle } from '../throttle'
+import { createActivityTracker } from '../activity-tracker'
+import type { AnalysisActivityKind } from '../../../shared/events'
 import { resolveCliPath } from './resolve-cli'
 import { buildSanitizedSpawnEnv } from './spawn-env'
 import { ensureSnapshot } from '../../github/snapshot-store'
@@ -113,6 +118,35 @@ const READ_ONLY_TOOLS = ['Read', 'Grep', 'Glob']
 
 /** Cuántas vueltas de tool-use + generación se permiten como máximo antes de que el SDK corte con `result.subtype: 'error_max_turns'` (F11/T58: exploración del snapshot con herramientas, no una sola generación). */
 const AGENTIC_MAX_TURNS = 30
+
+/**
+ * Verbo canónico del mini-log (F13) por nombre de tool del Agent SDK. `Glob`
+ * es `list` porque en este SDK cubre el listado de estructura (no hay una
+ * tool de listado aparte, ver `READ_ONLY_TOOLS`). Tools fuera de esta tabla
+ * (no debería haber: `tools` está acotado) caen al genérico `tool`.
+ */
+const CLAUDE_TOOL_KIND: Record<string, AnalysisActivityKind> = {
+  Read: 'read',
+  Grep: 'search',
+  Glob: 'list',
+}
+
+/**
+ * Cap del JSON de args de una tool acumulado vía `input_json_delta` (F13):
+ * el input viene del agente explorando el snapshot HOSTIL, así que se acota
+ * la acumulación — si se pasa, el parse falla y el label cae al genérico
+ * ("Leyó un archivo"), que es exactamente el fallback aceptable.
+ */
+const MAX_TOOL_INPUT_JSON = 4096
+
+/** Extrae el detalle "humano" (ruta o patrón) de los args parseados de una tool read-only del SDK. */
+function extractClaudeToolDetail(name: string, input: unknown): string | undefined {
+  if (typeof input !== 'object' || input === null) return undefined
+  const v = input as Record<string, unknown>
+  const candidate =
+    name === 'Read' ? v.file_path : name === 'Grep' ? v.pattern : (v.pattern ?? v.path)
+  return typeof candidate === 'string' ? candidate : undefined
+}
 
 /** Mensaje accionable cuando `resolveCliPath('claude')` no encuentra el binario en ninguna ubicación conocida. */
 const CLAUDE_CLI_NOT_FOUND_MESSAGE =
@@ -231,10 +265,25 @@ export class ClaudeCodeAiService implements AiService {
     // estar usando `Read`/`Grep`/`Glob`) y pasa a "writing" en el PRIMER
     // `text_delta` aceptado, sin volver atrás.
     let phase: 'exploring' | 'writing' = 'exploring'
+    // Mini-log de actividad del harness (F13, `../activity-tracker.ts`): las
+    // transiciones (begin/complete/primer thinking) emiten onProgress SIN
+    // throttle — son pocas por análisis y un edge tragado por el throttle
+    // (leading-edge, sin trailing flush) quedaría invisible durante un
+    // silencio largo del modelo.
+    const activity = createActivityTracker({
+      basePath: snapshotDir,
+      onEdge: () => {
+        if (onProgress) {
+          onProgress(parser.snapshot(), { done: false, phase, activity: activity.buffer() })
+        }
+      },
+    })
+    /** Bloques `tool_use` en construcción, por `index` del stream (los deltas se correlacionan por index, no por id de bloque). */
+    const toolBlocks = new Map<number, { id: string; name: string; json: string }>()
     /** Progreso de actividad SIN delta de texto (tool-use) mientras seguimos "exploring": throttleado, nunca cambia `sections`. */
     const pingExploring = (): void => {
       if (phase === 'exploring' && onProgress && throttle.shouldRun()) {
-        onProgress(parser.snapshot(), { done: false, phase })
+        onProgress(parser.snapshot(), { done: false, phase, activity: activity.buffer() })
       }
     }
 
@@ -305,20 +354,65 @@ export class ClaudeCodeAiService implements AiService {
 
         if (message.type === 'stream_event') {
           const event = message.event
-          if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-            if (phase === 'exploring') phase = 'writing'
-            sawAnyDelta = true
-            parser.push(event.delta.text)
-            if (onProgress && throttle.shouldRun()) {
-              onProgress(parser.snapshot(), { done: false, phase })
-            }
-          } else {
-            // Cualquier otro evento crudo del stream (tool_use en
-            // construcción, thinking_delta, etc., T60): mientras seguimos
-            // "exploring" es la señal de actividad de herramientas que la UI
-            // pinta como "Explorando el repositorio…".
-            pingExploring()
+
+          // Mini-log (F13): un bloque `tool_use` nuevo arranca una fila
+          // "running" de inmediato (el nombre de la tool ya viene en el
+          // start); sus args llegan después, por `input_json_delta`.
+          if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
+            const name = event.content_block.name
+            const kind = CLAUDE_TOOL_KIND[name] ?? 'tool'
+            toolBlocks.set(event.index, { id: event.content_block.id, name, json: '' })
+            activity.begin(event.content_block.id, kind, kind === 'tool' ? name : undefined)
+            continue
           }
+
+          if (event.type === 'content_block_delta') {
+            if (event.delta.type === 'text_delta') {
+              if (phase === 'exploring') phase = 'writing'
+              if (!sawAnyDelta) activity.settleThinking()
+              sawAnyDelta = true
+              parser.push(event.delta.text)
+              if (onProgress && throttle.shouldRun()) {
+                onProgress(parser.snapshot(), { done: false, phase, activity: activity.buffer() })
+              }
+            } else if (event.delta.type === 'input_json_delta') {
+              // Args de la tool en curso: se acumulan (con cap, ver
+              // MAX_TOOL_INPUT_JSON) para extraer la ruta/patrón al cierre
+              // del bloque. No es transición: no emite nada por sí mismo.
+              const block = toolBlocks.get(event.index)
+              if (block && block.json.length < MAX_TOOL_INPUT_JSON) {
+                block.json += event.delta.partial_json
+              }
+              pingExploring()
+            } else if (event.delta.type === 'thinking_delta') {
+              // Razonamiento → "Pensando…" genérico (F13): el texto del
+              // thinking NUNCA se lee (prompt injection desde el snapshot).
+              activity.thinking('think-' + event.index)
+            } else {
+              pingExploring()
+            }
+            continue
+          }
+
+          if (event.type === 'content_block_stop') {
+            const block = toolBlocks.get(event.index)
+            if (block) {
+              toolBlocks.delete(event.index)
+              let detail: string | undefined
+              try {
+                detail = extractClaudeToolDetail(block.name, JSON.parse(block.json))
+              } catch {
+                detail = undefined
+              }
+              activity.complete(block.id, detail)
+            }
+            continue
+          }
+
+          // Cualquier otro evento crudo del stream (message_start/stop,
+          // etc., T60): mientras seguimos "exploring" es la señal de
+          // actividad que la UI pinta como "Explorando el repositorio…".
+          pingExploring()
           continue
         }
 

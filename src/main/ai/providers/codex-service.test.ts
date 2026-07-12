@@ -354,16 +354,87 @@ describe('CodexAiService.analyzePullRequest', () => {
       { onProgress: (sections, meta) => progressCalls.push([sections, meta]) },
     )
 
-    // La PRIMERA llamada a onProgress (el throttle SIEMPRE deja pasar la
-    // primera) es la notificación `item/started` — actividad de tool-use
-    // ANTES de que llegue ningún delta de texto: fase "exploring" con
-    // secciones todavía vacías.
+    // La PRIMERA llamada a onProgress es el EDGE del mini-log (F13): el
+    // `item/started` abre una fila running y eso emite SIN throttle, ANTES
+    // de que llegue ningún delta de texto: fase "exploring" con secciones
+    // todavía vacías. El label es el genérico ("Leyendo un archivo…"):
+    // los items verificados solo traen { id, type }, sin ruta.
     const [firstSections, firstMeta] = progressCalls[0]
-    expect(firstMeta).toEqual({ done: false, phase: 'exploring' })
+    expect(firstMeta).toEqual({
+      done: false,
+      phase: 'exploring',
+      activity: [{ id: 'x', kind: 'read', label: 'Leyendo un archivo…', status: 'running' }],
+    })
     expect(firstSections).toEqual([])
 
     // El resultado final sí incluye el contenido del delta posterior.
     expect(result.sections).toEqual([{ kind: 'summary', markdown: 'ok' }])
+  })
+
+  it('mini-log (F13): item/started + item/completed colapsan en una fila running→done; el terminal no trae actividad', async () => {
+    setupFakeClient({
+      requestResults: happyPathResults(),
+      notifications: [
+        { method: 'item/started', params: { item: { id: 'x', type: 'fileRead' } } },
+        { method: 'item/completed', params: { item: { id: 'x', type: 'fileRead' } } },
+        itemDelta('@@@SECTION kind=summary\nok\n'),
+      ],
+    })
+
+    const progressCalls: Array<
+      [
+        DraftDidacticSection[],
+        { done: boolean; activity?: Array<{ id: string; label: string; status: string }> },
+      ]
+    > = []
+    const service = new CodexAiService(makeGithubService())
+    await service.analyzePullRequest(
+      { repo, number: 482 },
+      { onProgress: (sections, meta) => progressCalls.push([sections, meta]) },
+    )
+
+    // Edge 1 (begin) y edge 2 (complete), ambos SIN throttle aunque lleguen
+    // pegados: MISMA fila (mismo id, colapso por identidad).
+    expect(progressCalls[0][1].activity).toEqual([
+      { id: 'x', kind: 'read', label: 'Leyendo un archivo…', status: 'running' },
+    ])
+    const doneCall = progressCalls.find(([, meta]) => meta.activity?.[0]?.status === 'done')
+    expect(doneCall?.[1].activity).toEqual([
+      { id: 'x', kind: 'read', label: 'Leyó un archivo', status: 'done' },
+    ])
+    const [, lastMeta] = progressCalls[progressCalls.length - 1]
+    expect(lastMeta.done).toBe(true)
+    expect(lastMeta.activity).toBeUndefined()
+  })
+
+  it('mini-log (F13): item/reasoning/textDelta repetidos son UNA fila "Pensando…" y los items agentMessage se saltan', async () => {
+    setupFakeClient({
+      requestResults: happyPathResults(),
+      notifications: [
+        { method: 'item/reasoning/textDelta', params: { delta: 'pensando en secreto...' } },
+        { method: 'item/reasoning/textDelta', params: { delta: 'más pensamiento' } },
+        { method: 'item/started', params: { item: { id: 'msg-1', type: 'agentMessage' } } },
+        itemDelta('@@@SECTION kind=summary\nok\n'),
+      ],
+    })
+
+    const progressCalls: Array<
+      [DraftDidacticSection[], { done: boolean; activity?: Array<{ label: string; status: string }> }]
+    > = []
+    const service = new CodexAiService(makeGithubService())
+    await service.analyzePullRequest(
+      { repo, number: 482 },
+      { onProgress: (sections, meta) => progressCalls.push([sections, meta]) },
+    )
+
+    // Una sola fila "Pensando…" (deltas repetidos = no-op, el texto del
+    // razonamiento jamás viaja) y NINGUNA fila por el item agentMessage.
+    const withActivity = progressCalls.filter(([, meta]) => !meta.done && meta.activity?.length)
+    expect(withActivity.length).toBeGreaterThan(0)
+    for (const [, meta] of withActivity) {
+      expect(meta.activity).toHaveLength(1)
+      expect(meta.activity?.[0].label).toMatch(/^Pens/)
+    }
   })
 
   it('ignora notificaciones de razonamiento y las que no son agentMessage delta', async () => {
