@@ -192,14 +192,18 @@ describe('resolveCliPath', () => {
     expect(accessSyncMock.mock.calls.length).toBe(callsAfterFirst)
   })
 
-  it('cachea también el resultado null (no encontrado)', () => {
+  it('NO cachea el null: si el binario se instala después, la siguiente llamada lo encuentra sin reiniciar la app', () => {
+    // Regresión F14.1: el `null` cacheado de por vida dejaba "Volver a
+    // comprobar" atascado en "no está en tu PATH" hasta reiniciar Minerva.
     accessSyncMock.mockImplementation(enoent)
+    expect(resolveCliPath('codex')).toBeNull()
 
-    resolveCliPath('codex')
-    const callsAfterFirst = accessSyncMock.mock.calls.length
-    resolveCliPath('codex')
+    accessSyncMock.mockImplementation((path: string) => {
+      if (path === join('/usr/bin', 'codex')) return ok()
+      return enoent()
+    })
 
-    expect(accessSyncMock.mock.calls.length).toBe(callsAfterFirst)
+    expect(resolveCliPath('codex')).toBe(join('/usr/bin', 'codex'))
   })
 
   it('resuelve claude/codex de forma independiente (cache por binario)', () => {
@@ -212,18 +216,42 @@ describe('resolveCliPath', () => {
     expect(resolveCliPath('codex')).toBe(join('/usr/bin', 'codex'))
   })
 
-  it('clearCliPathCache() fuerza a volver a buscar en disco', () => {
-    accessSyncMock.mockImplementation(enoent)
-    expect(resolveCliPath('claude')).toBeNull()
-
+  it('clearCliPathCache() fuerza a re-resolver una ruta positiva que quedó vieja', () => {
     accessSyncMock.mockImplementation((path: string) => {
       if (path === join('/usr/bin', 'claude')) return ok()
       return enoent()
     })
-    // Sin limpiar la cache, sigue devolviendo el null cacheado.
-    expect(resolveCliPath('claude')).toBeNull()
+    expect(resolveCliPath('claude')).toBe(join('/usr/bin', 'claude'))
+
+    // El binario "se movió" (p. ej. reinstalación en otra ubicación).
+    accessSyncMock.mockImplementation((path: string) => {
+      if (path === join('/usr/local/bin', 'claude')) return ok()
+      return enoent()
+    })
+    // Sin limpiar, sigue sirviendo la ruta vieja cacheada.
+    expect(resolveCliPath('claude')).toBe(join('/usr/bin', 'claude'))
 
     clearCliPathCache()
-    expect(resolveCliPath('claude')).toBe(join('/usr/bin', 'claude'))
+    expect(resolveCliPath('claude')).toBe(join('/usr/local/bin', 'claude'))
+  })
+
+  it('clearCliPathCache(binary) invalida SOLO ese binario y deja el resto cacheado', () => {
+    accessSyncMock.mockImplementation((path: string) => {
+      if (path === join('/usr/bin', 'claude') || path === join('/usr/bin', 'codex')) return ok()
+      return enoent()
+    })
+    resolveCliPath('claude')
+    resolveCliPath('codex')
+    const callsAfterResolve = accessSyncMock.mock.calls.length
+
+    clearCliPathCache('claude')
+
+    // codex sigue cacheado: no vuelve a tocar el filesystem.
+    resolveCliPath('codex')
+    expect(accessSyncMock.mock.calls.length).toBe(callsAfterResolve)
+
+    // claude sí re-escanea.
+    resolveCliPath('claude')
+    expect(accessSyncMock.mock.calls.length).toBeGreaterThan(callsAfterResolve)
   })
 })

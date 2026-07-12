@@ -16,11 +16,15 @@
  * (eso es T28 para Claude Code vía `@anthropic-ai/claude-agent-sdk`
  * -`query().initializationResult().account`- y T29 para Codex vía la RPC
  * `account/read` de `codex app-server`) así que acá solo se infiere de la
- * existencia de un archivo de credenciales conocido:
+ * existencia de un depósito de credenciales conocido:
  * - Claude Code: `~/.claude/.credentials.json` (guarda `claudeAiOauth` con
  *   `subscriptionType`, que se expone como `account.plan`; no hay email en
- *   ese archivo). Si el CLI usa el keychain del SO en vez de este archivo
- *   (algunas plataformas), esta detección no lo ve y cae a `'installed'`.
+ *   ese archivo). En macOS el CLI NO usa ese archivo: guarda la sesión en el
+ *   Keychain del sistema (ítem `Claude Code-credentials`) — sin el fallback
+ *   de `hasClaudeKeychainCredentials()` una Mac autenticada caía SIEMPRE a
+ *   `'installed'` ("no detectamos sesión", F14.1). El fallback solo consulta
+ *   la EXISTENCIA del ítem (`security find-generic-password` sin `-w`: exit
+ *   code, jamás el secreto).
  * - Codex: `~/.codex/auth.json` (se verifica solo su existencia; el formato
  *   no es estable/documentado así que no se parsea contenido).
  *
@@ -37,7 +41,7 @@
  * DEJA sin implementar por ahora: este probe corre en un hot path barato (se
  * llama on-demand desde la pantalla de Settings, con un TTL de cache de solo
  * `PROBE_CACHE_TTL_MS`) donde hoy un `execFile('claude', ['--version'])` con
- * timeout de 1.5s alcanza; reemplazarlo por un spawn completo del Agent SDK
+ * timeout corto alcanza; reemplazarlo por un spawn completo del Agent SDK
  * (que a su vez lanza su propio binario node/nativo y hace un handshake
  * JSON por stdio) es notablemente más pesado y agrega una superficie de
  * fallo nueva (parsing de `initializationResult`, limpieza del proceso
@@ -72,16 +76,23 @@
 import { createOpencodeClient } from '@opencode-ai/sdk'
 import { execFile } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, platform } from 'node:os'
 import { join } from 'node:path'
 import type { AiProviderId } from '../../../shared/ai-providers'
 import type { AiAccountInfo, AiProviderStatus } from '../../../shared/types'
 import { checkOpencodeVersion, getOpencodeServer } from './opencode-runtime'
 import { AI_PROVIDER_REGISTRY } from './registry'
-import { resolveCliPath } from './resolve-cli'
+import { clearCliPathCache, resolveCliPath } from './resolve-cli'
 
-/** Tiempo máximo que se espera a `<binario> --version` antes de degradar a "no disponible". */
-const PROBE_TIMEOUT_MS = 1500
+/**
+ * Tiempo máximo que se espera a `<binario> --version` antes de degradar a
+ * "no disponible". 4s y no menos: en macOS el PRIMER exec de un binario
+ * recién escrito (el auto-update de `claude` crea uno nuevo en cada versión)
+ * paga el escaneo de Gatekeeper/XProtect, que puede superar con holgura los
+ * 1.5s que se usaban antes (F14.1) — y el probe era quién pagaba ese primer
+ * exec, reportando "no disponible" con el CLI perfectamente instalado.
+ */
+const PROBE_TIMEOUT_MS = 4000
 /** TTL de la cache: evita spawnear un proceso por cada llamada IPC seguida. */
 const PROBE_CACHE_TTL_MS = 5000
 
@@ -101,21 +112,49 @@ function isBinaryAvailable(path: string): Promise<boolean> {
   })
 }
 
-function readClaudeAccount(): AiAccountInfo | null {
+/** Nombre del ítem del Keychain de macOS donde `claude login` guarda la sesión OAuth. */
+const CLAUDE_KEYCHAIN_SERVICE = 'Claude Code-credentials'
+
+/**
+ * `true` si el Keychain de macOS tiene el ítem de sesión de Claude Code.
+ * SOLO existencia: sin `-w` el secreto nunca llega a stdout, y la salida se
+ * descarta entera — lo único que se mira es el exit code (0 = existe).
+ * Cualquier falla (no-darwin, `security` ausente, timeout, keychain
+ * bloqueado) degrada a `false`, igual que el resto del probe.
+ */
+function hasClaudeKeychainCredentials(): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      execFile(
+        'security',
+        ['find-generic-password', '-s', CLAUDE_KEYCHAIN_SERVICE],
+        { timeout: PROBE_TIMEOUT_MS },
+        (error) => resolve(!error),
+      )
+    } catch {
+      resolve(false)
+    }
+  })
+}
+
+async function readClaudeAccount(): Promise<AiAccountInfo | null> {
   try {
     const path = join(homedir(), '.claude', '.credentials.json')
-    if (!existsSync(path)) return null
-
-    const raw = readFileSync(path, 'utf-8')
-    const parsed = JSON.parse(raw) as { claudeAiOauth?: { subscriptionType?: string } }
-    if (!parsed.claudeAiOauth) return null
-
-    return { plan: parsed.claudeAiOauth.subscriptionType }
+    if (existsSync(path)) {
+      const raw = readFileSync(path, 'utf-8')
+      const parsed = JSON.parse(raw) as { claudeAiOauth?: { subscriptionType?: string } }
+      if (parsed.claudeAiOauth) return { plan: parsed.claudeAiOauth.subscriptionType }
+    }
   } catch {
-    // Archivo ausente, no-JSON, o forma inesperada: no es un error fatal del
-    // probe, simplemente no hay indicio de sesión que reportar.
-    return null
+    // Archivo no-JSON o forma inesperada: no es fatal — todavía puede haber
+    // sesión en el Keychain (abajo).
   }
+
+  // macOS: el CLI guarda la sesión en el Keychain, no en el archivo (ver el
+  // comentario del módulo). Sin plan/email que exhibir: solo "hay sesión".
+  if (platform() === 'darwin' && (await hasClaudeKeychainCredentials())) return {}
+
+  return null
 }
 
 function readCodexAccount(): AiAccountInfo | null {
@@ -131,18 +170,18 @@ function readCodexAccount(): AiAccountInfo | null {
   }
 }
 
-function readAccountFor(provider: AiProviderId): AiAccountInfo | null {
+function readAccountFor(provider: AiProviderId): Promise<AiAccountInfo | null> {
   switch (provider) {
     case 'claude-code':
       return readClaudeAccount()
     case 'codex':
-      return readCodexAccount()
+      return Promise.resolve(readCodexAccount())
     case 'opencode':
       // OpenCode SÍ es un CLI pero su probe (`probeOpencode`) nunca llega a
       // `readAccountFor` — no hay archivo de credenciales que leer, el
       // criterio es el server local (ver el comentario del módulo). Este
       // caso queda solo por exhaustividad.
-      return null
+      return Promise.resolve(null)
   }
 }
 
@@ -160,10 +199,10 @@ function describeConnectedUpstreams(connected: readonly string[]): string {
 /** Probe específico de OpenCode (T57) — ver el comentario grande del módulo. */
 async function probeOpencode(): Promise<AiProviderStatus> {
   const resolvedPath = resolveCliPath('opencode')
-  if (resolvedPath === null) return { status: 'unavailable' }
+  if (resolvedPath === null) return { status: 'unavailable', reason: 'not-found' }
 
   const version = await checkOpencodeVersion()
-  if (!version.ok) return { status: 'unavailable' }
+  if (!version.ok) return { status: 'unavailable', reason: 'probe-failed', resolvedPath }
 
   try {
     const server = await getOpencodeServer()
@@ -191,12 +230,18 @@ async function probeCli(provider: AiProviderId): Promise<AiProviderStatus> {
   if (provider === 'opencode') return probeOpencode()
 
   const resolvedPath = resolveCliPath(entry.binary)
-  if (resolvedPath === null) return { status: 'unavailable' }
+  if (resolvedPath === null) return { status: 'unavailable', reason: 'not-found' }
 
   const available = await isBinaryAvailable(resolvedPath)
-  if (!available) return { status: 'unavailable' }
+  if (!available) {
+    // La ruta positiva cacheada pudo quedar vieja (el auto-update del CLI
+    // reemplaza el binario): se invalida para que el próximo intento
+    // re-resuelva contra el disco en vez de reprobar la misma ruta muerta.
+    clearCliPathCache(entry.binary)
+    return { status: 'unavailable', reason: 'probe-failed', resolvedPath }
+  }
 
-  const account = readAccountFor(provider)
+  const account = await readAccountFor(provider)
   if (account) return { status: 'authenticated', account }
 
   return { status: 'installed' }

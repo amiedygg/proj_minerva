@@ -301,17 +301,26 @@ export interface AiSettingsInfo {
  * los tres proveedores son `cli` desde T59 — hasta entonces OpenRouter
  * resolvía `unavailable`/`authenticated` de forma síncrona según hubiera o
  * no `OPENROUTER_API_KEY` configurada):
- * - `unavailable`: el CLI (`claude`/`codex`/`opencode`) no se encontró en
- *   PATH (o cuya detección expiró por timeout — ver
- *   `main/ai/providers/cli-probe.ts`).
+ * - `unavailable`: el CLI (`claude`/`codex`/`opencode`) no está usable. Desde
+ *   F14.1 trae `reason` para distinguir las DOS causas que antes se
+ *   mezclaban (y que la UI reportaba igual, como "no está en tu PATH" —
+ *   mensaje engañoso cuando el binario SÍ estaba pero el probe falló):
+ *   - `'not-found'`: no se encontró en PATH ni en las ubicaciones comunes.
+ *   - `'probe-failed'`: se encontró (ver `resolvedPath`) pero la
+ *     comprobación (`--version` con timeout, o la versión mínima en
+ *     OpenCode) falló — ver `main/ai/providers/cli-probe.ts`.
  * - `installed`: el CLI existe y responde, pero no se pudo confirmar sesión
  *   iniciada (best-effort en T27; T28/T29/T57 lo reemplazan por el handshake
  *   real del SDK/RPC de cada proveedor).
  * - `authenticated`: un CLI con indicios de sesión iniciada.
  *
  * `account` NUNCA lleva tokens/keys — a lo sumo un email/plan de exhibición.
+ * `resolvedPath` es la ruta del binario del usuario (no un secreto): existe
+ * para que el mensaje de `probe-failed` sea accionable.
  */
 export type AiProviderStatusValue = 'unavailable' | 'installed' | 'authenticated'
+
+export type AiProviderUnavailableReason = 'not-found' | 'probe-failed'
 
 export interface AiAccountInfo {
   email?: string
@@ -320,5 +329,9 @@ export interface AiAccountInfo {
 
 export interface AiProviderStatus {
   status: AiProviderStatusValue
+  /** Solo con `status: 'unavailable'`: por qué (ver el comentario de arriba). */
+  reason?: AiProviderUnavailableReason
+  /** Solo con `reason: 'probe-failed'`: dónde se encontró el binario que no respondió. */
+  resolvedPath?: string
   account?: AiAccountInfo
 }

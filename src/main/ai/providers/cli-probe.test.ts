@@ -19,7 +19,11 @@ vi.mock('node:fs', () => ({
   readFileSync: (...args: unknown[]) => readFileSyncMock(...args),
 }))
 
-vi.mock('node:os', () => ({ homedir: () => '/home/test-user' }))
+let platformValue: NodeJS.Platform = 'linux'
+vi.mock('node:os', () => ({
+  homedir: () => '/home/test-user',
+  platform: () => platformValue,
+}))
 
 /**
  * `resolveCliPath` (T31) se mockea para poder simular "instalado en una ruta
@@ -27,10 +31,14 @@ vi.mock('node:os', () => ({ homedir: () => '/home/test-user' }))
  * la máquina que corre los tests; por defecto resuelve a una ruta fake por
  * binario, para que el resto de los casos (que ejercitan `execFile`/lectura
  * de credenciales, no la resolución en sí) sigan funcionando igual.
+ * `clearCliPathCache` (F14.1) se mockea para verificar que el probe invalida
+ * la ruta cacheada cuando el binario resuelto deja de responder.
  */
 const resolveCliPathMock = vi.fn()
+const clearCliPathCacheMock = vi.fn()
 vi.mock('./resolve-cli', () => ({
   resolveCliPath: (...args: unknown[]) => resolveCliPathMock(...args),
+  clearCliPathCache: (...args: unknown[]) => clearCliPathCacheMock(...args),
 }))
 
 /**
@@ -66,6 +74,19 @@ function mockExecFileResult(error: Error | null): void {
   )
 }
 
+/**
+ * Como `mockExecFileResult`, pero distinguiendo el spawn de `security`
+ * (chequeo del Keychain de macOS, F14.1) del `--version` del CLI:
+ * `keychainError = null` simula que el ítem existe (exit 0).
+ */
+function mockExecFileWithKeychain(versionError: Error | null, keychainError: Error | null): void {
+  execFileMock.mockImplementation(
+    (binary: string, _args: string[], _opts: unknown, cb: ExecFileCallback) => {
+      cb(binary === 'security' ? keychainError : versionError)
+    },
+  )
+}
+
 function enoent(): Error {
   return Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' })
 }
@@ -73,10 +94,12 @@ function enoent(): Error {
 describe('getCliProviderStatus', () => {
   beforeEach(() => {
     clearCliProbeCache()
+    platformValue = 'linux'
     execFileMock.mockReset()
     existsSyncMock.mockReset()
     readFileSyncMock.mockReset()
     resolveCliPathMock.mockReset()
+    clearCliPathCacheMock.mockReset()
     resolveCliPathMock.mockImplementation((binary: string) => '/usr/local/bin/' + binary)
     checkOpencodeVersionMock.mockReset()
     getOpencodeServerMock.mockReset()
@@ -84,23 +107,37 @@ describe('getCliProviderStatus', () => {
     createOpencodeClientMock.mockClear()
   })
 
-  it('unavailable sin siquiera intentar spawnear cuando resolveCliPath no encuentra el binario en ninguna ubicación conocida', async () => {
+  it('unavailable con reason not-found (sin siquiera spawnear) cuando resolveCliPath no encuentra el binario', async () => {
     resolveCliPathMock.mockReturnValue(null)
 
-    await expect(getCliProviderStatus('claude-code')).resolves.toEqual({ status: 'unavailable' })
+    await expect(getCliProviderStatus('claude-code')).resolves.toEqual({
+      status: 'unavailable',
+      reason: 'not-found',
+    })
     expect(execFileMock).not.toHaveBeenCalled()
   })
 
-  it('unavailable cuando el binario resuelto no responde (ENOENT igual, p. ej. permiso revocado tras resolver)', async () => {
+  it('unavailable con reason probe-failed (+resolvedPath) cuando el binario resuelto no responde, e invalida la ruta cacheada', async () => {
     mockExecFileResult(enoent())
 
-    await expect(getCliProviderStatus('claude-code')).resolves.toEqual({ status: 'unavailable' })
+    await expect(getCliProviderStatus('claude-code')).resolves.toEqual({
+      status: 'unavailable',
+      reason: 'probe-failed',
+      resolvedPath: '/usr/local/bin/claude',
+    })
+    // La ruta pudo quedar vieja (auto-update del CLI): el próximo intento
+    // debe re-resolver contra el disco.
+    expect(clearCliPathCacheMock).toHaveBeenCalledWith('claude')
   })
 
-  it('unavailable cuando el spawn falla por cualquier otra razón (p. ej. timeout)', async () => {
+  it('unavailable con reason probe-failed cuando el spawn falla por cualquier otra razón (p. ej. timeout)', async () => {
     mockExecFileResult(new Error('killed by timeout'))
 
-    await expect(getCliProviderStatus('codex')).resolves.toEqual({ status: 'unavailable' })
+    await expect(getCliProviderStatus('codex')).resolves.toEqual({
+      status: 'unavailable',
+      reason: 'probe-failed',
+      resolvedPath: '/usr/local/bin/codex',
+    })
   })
 
   it('ejecuta --version contra la ruta ABSOLUTA resuelta, no el nombre pelado del binario', async () => {
@@ -145,6 +182,52 @@ describe('getCliProviderStatus', () => {
     await expect(getCliProviderStatus('claude-code')).resolves.toEqual({ status: 'installed' })
   })
 
+  describe('claude-code en macOS (F14.1): fallback al Keychain cuando no hay .credentials.json', () => {
+    it('authenticated (sin plan/email) si el ítem del Keychain existe', async () => {
+      platformValue = 'darwin'
+      existsSyncMock.mockReturnValue(false)
+      mockExecFileWithKeychain(null, null)
+
+      await expect(getCliProviderStatus('claude-code')).resolves.toEqual({
+        status: 'authenticated',
+        account: {},
+      })
+      // El chequeo es SOLO existencia: nunca se pide el secreto (`-w`).
+      const securityCall = execFileMock.mock.calls.find((call) => call[0] === 'security')
+      expect(securityCall?.[1]).toEqual(['find-generic-password', '-s', 'Claude Code-credentials'])
+      expect(securityCall?.[1]).not.toContain('-w')
+    })
+
+    it('installed si el Keychain no tiene el ítem (o `security` falla)', async () => {
+      platformValue = 'darwin'
+      existsSyncMock.mockReturnValue(false)
+      mockExecFileWithKeychain(null, new Error('The specified item could not be found'))
+
+      await expect(getCliProviderStatus('claude-code')).resolves.toEqual({ status: 'installed' })
+    })
+
+    it('el archivo de credenciales sigue teniendo prioridad (trae el plan) aunque el Keychain también exista', async () => {
+      platformValue = 'darwin'
+      existsSyncMock.mockReturnValue(true)
+      readFileSyncMock.mockReturnValue(JSON.stringify({ claudeAiOauth: { subscriptionType: 'pro' } }))
+      mockExecFileWithKeychain(null, null)
+
+      await expect(getCliProviderStatus('claude-code')).resolves.toEqual({
+        status: 'authenticated',
+        account: { plan: 'pro' },
+      })
+    })
+
+    it('en plataformas no-darwin jamás se spawnea `security`', async () => {
+      platformValue = 'linux'
+      existsSyncMock.mockReturnValue(false)
+      mockExecFileWithKeychain(null, null)
+
+      await expect(getCliProviderStatus('claude-code')).resolves.toEqual({ status: 'installed' })
+      expect(execFileMock.mock.calls.some((call) => call[0] === 'security')).toBe(false)
+    })
+  })
+
   it('codex: authenticated (sin account detallado) si existe ~/.codex/auth.json', async () => {
     mockExecFileResult(null)
     existsSyncMock.mockReturnValue(true)
@@ -177,20 +260,27 @@ describe('getCliProviderStatus', () => {
   })
 
   describe('opencode (T57): criterio distinto — server local + provider.list, no archivo de credenciales', () => {
-    it('unavailable sin intentar nada más cuando resolveCliPath no encuentra el binario', async () => {
+    it('unavailable (not-found) sin intentar nada más cuando resolveCliPath no encuentra el binario', async () => {
       resolveCliPathMock.mockImplementation((binary: string) =>
         binary === 'opencode' ? null : '/usr/local/bin/' + binary,
       )
 
-      await expect(getCliProviderStatus('opencode')).resolves.toEqual({ status: 'unavailable' })
+      await expect(getCliProviderStatus('opencode')).resolves.toEqual({
+        status: 'unavailable',
+        reason: 'not-found',
+      })
       expect(checkOpencodeVersionMock).not.toHaveBeenCalled()
       expect(getOpencodeServerMock).not.toHaveBeenCalled()
     })
 
-    it('unavailable cuando checkOpencodeVersion reporta una versión por debajo del mínimo (nunca arranca el server)', async () => {
+    it('unavailable (probe-failed) cuando checkOpencodeVersion reporta una versión por debajo del mínimo (nunca arranca el server)', async () => {
       checkOpencodeVersionMock.mockResolvedValue({ ok: false, version: '1.0.0', error: 'muy vieja' })
 
-      await expect(getCliProviderStatus('opencode')).resolves.toEqual({ status: 'unavailable' })
+      await expect(getCliProviderStatus('opencode')).resolves.toEqual({
+        status: 'unavailable',
+        reason: 'probe-failed',
+        resolvedPath: '/usr/local/bin/opencode',
+      })
       expect(getOpencodeServerMock).not.toHaveBeenCalled()
     })
 

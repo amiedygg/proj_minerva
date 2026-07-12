@@ -2723,3 +2723,53 @@ modo, 0 apariciones de token en logs. Versión 0.5.0 + README + CLAUDE.md.
 - **`AuthStatus.mode` requerido fue la decisión correcta**: el typecheck
   encontró solo el initial del app-store como constructor extra — con campo
   opcional, la UI habría tenido ramas gh sin discriminante confiable.
+
+## F14.1 — Fix: detección del CLI/sesión de Claude Code en macOS (2026-07-12)
+
+Reporte real de Edilson en su Mac (claude 2.1.207, instalador nativo,
+Minerva 0.5.0): (a) "claude no está en el PATH" con el CLI instalado y en
+PATH; (b) tras reiniciar Minerva, "no detectamos una sesión iniciada" con
+sesión activa. Diagnóstico + fix en la misma rama del PR de F14.
+
+- [x] **T74. Probe de CLIs honesto y resistente (4 fixes, mismo commit)**
+  - `resolve-cli.ts`: NO cachear el `null` (la cache negativa vitalicia
+    dejaba "no está en tu PATH" atascado hasta reiniciar la app — causa raíz
+    del síntoma (a)); `clearCliPathCache(binary?)` ahora invalida por binario
+    y el probe lo usa cuando una ruta resuelta deja de responder (ventana del
+    auto-update de claude, que reescribe el symlink en cada versión).
+  - `cli-probe.ts`: fallback al Keychain de macOS para la sesión de Claude
+    (`security find-generic-password -s 'Claude Code-credentials'`, SOLO
+    existencia/exit code, jamás `-w`) — en macOS el CLI no escribe
+    `~/.claude/.credentials.json`, así que una Mac autenticada caía SIEMPRE a
+    `installed` (síntoma (b)); `PROBE_TIMEOUT_MS` 1500→4000 ms (primer exec
+    post-auto-update paga Gatekeeper/XProtect).
+  - Contrato (`shared/types.ts`): `AiProviderStatus` gana `reason:
+    'not-found' | 'probe-failed'` + `resolvedPath` para `unavailable` —
+    antes ambas causas se pintaban igual ("no está en tu PATH", mentira
+    cuando el binario SÍ estaba); `CliLoginGuide` muestra copy distinto por
+    causa, con la ruta encontrada en el caso probe-failed.
+  - Verificación (orquestador, en esta máquina Linux): typecheck/lint verdes,
+    654/654 tests (nuevos: null no cacheado + invalidación por binario en
+    resolve-cli; reason/resolvedPath, keychain darwin x4 en cli-probe);
+    `smoke-settings` 13/13 con IA real de OpenCode; forma nueva de
+    `ai:getProviderStatus` verificada e2e vía CDP (3 proveedores
+    `authenticated`, sin reason/resolvedPath fuera de `unavailable`, sin
+    secretos en el payload); captura MIRADA del modal con el guide
+    "Conectado · plan max". Pendiente de confirmar en la Mac real de Edilson
+    (keychain + reinstalación en caliente), que este sandbox no puede simular.
+
+### Bitácora F14.1 — gotchas
+
+- **`smoke-settings` con `MINERVA_MOCK_AI=1` da un FAIL esperado** en el paso
+  de "modelo inválido": el mock de IA acepta cualquier modelo (INESPERADO_OK).
+  CLAUDE.md ya lo decía ("necesita IA real de OpenCode"); la corrida buena es
+  `MINERVA_MOCK=1` a secas con sesión real de opencode.
+- **En macOS `claude login` guarda la sesión en el Keychain** (ítem
+  `Claude Code-credentials`), NO en `~/.claude/.credentials.json` — cualquier
+  heurística de "archivo de credenciales" está ciega en Mac. El chequeo por
+  `security` sin `-w` verifica existencia sin tocar el secreto.
+- **El instalador nativo de claude reescribe `~/.local/bin/claude` en cada
+  auto-update** (symlink → `~/.local/share/claude/versions/<v>`): cualquier
+  cache de rutas resueltas debe poder invalidarse, y el primer exec del
+  binario nuevo puede tardar segundos (Gatekeeper) — timeouts de probe cortos
+  dan falsos "no disponible".
