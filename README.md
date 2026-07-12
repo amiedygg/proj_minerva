@@ -183,6 +183,7 @@ npm run build
 - [x] Lista de PRs v0.3.0: leído/no-leído por PR (dots rojos, contador de comentarios, persistido en userData)
 - [x] Análisis agéntico v0.4.0: snapshot local del commit del PR + exploración read-only (los hallazgos cruzan diff y árbol real)
 - [x] Proveedor OpenCode v0.4.0 (reemplaza a OpenRouter directo; sus modelos van DENTRO de OpenCode) + card guía si no hay CLIs
+- [x] Settings v0.4.1: rediseño — strip "En uso" (CLI/modelo/razonamiento activos), tabs por proveedor (ver ≠ activar), cards de modelo de un click y chip resumen en la TitleBar
 - [ ] Comentar en un PR real de prueba (verificación con cuenta real)
 
 > Estado detallado, bitácora de gotchas y control de tareas: `.agents/TASKS.md`.
