@@ -12,14 +12,16 @@
  *
  * Protocolo (resumen; el ejemplo completo vive en el prompt):
  * - Cada marcador va SOLO en su línea y empieza con `@@@`.
- * - `@@@SECTION kind=<summary|setup|architecture|endpoint|schema>` abre una
- *   sección nueva (cierra la anterior, si había una abierta). Todo texto
+ * - `@@@SECTION kind=<summary|setup|architecture|endpoint|schema|cloud>` abre
+ *   una sección nueva (cierra la anterior, si había una abierta). Todo texto
  *   hasta el próximo marcador es markdown de esa sección.
  * - `@@@MERMAID` / `@@@END_MERMAID` delimitan el Mermaid de la sección
  *   ACTUALMENTE abierta. Mientras el bloque no cerró, su contenido no es
  *   observable desde `snapshot()` bajo ninguna forma: evita que el renderer
  *   intente montar un diagrama a medio escribir (ver `DraftDidacticSection`
- *   en `../../shared/events.ts`).
+ *   en `../../shared/events.ts`). En `architecture`/`schema` hay a lo sumo UN
+ *   bloque; en `cloud` puede haber hasta DOS (big picture + zoom al cambio),
+ *   acumulados en `mermaids[]` en orden de cierre.
  * - `@@@SNIPPET label=... language=...` / `@@@END_SNIPPET` delimitan un
  *   snippet de una sección `endpoint` o `setup`; mismo criterio que el Mermaid.
  *
@@ -29,7 +31,7 @@
  * - Un marcador desconocido (línea que empieza con `@@@` pero no matchea
  *   ningún patrón reconocido): se trata como texto normal de lo que esté
  *   abierto en ese momento (markdown / mermaid / snippet, según corresponda).
- * - `kind` que no es uno de los cinco válidos: la sección se sigue
+ * - `kind` que no es uno de los seis válidos: la sección se sigue
  *   parseando igual (para no desincronizar el resto del stream con el resto
  *   de marcadores) pero se descarta por completo al construir cualquier
  *   snapshot o el resultado final.
@@ -40,7 +42,7 @@ import type { DidacticSection, DidacticSnippet } from '../../shared/types'
 import type { DraftDidacticSection } from '../../shared/events'
 import { mapRawSection, mapSnippet } from './section-mapper'
 
-const KNOWN_KINDS = ['summary', 'setup', 'architecture', 'endpoint', 'schema'] as const
+const KNOWN_KINDS = ['summary', 'setup', 'architecture', 'endpoint', 'schema', 'cloud'] as const
 type KnownKind = (typeof KNOWN_KINDS)[number]
 
 function isKnownKind(kind: string): kind is KnownKind {
@@ -52,6 +54,8 @@ interface SectionAcc {
   markdown: string
   /** Presente solo si ya cerró un bloque `@@@MERMAID`/`@@@END_MERMAID` para esta sección. */
   mermaid?: string
+  /** Solo para `kind: 'cloud'`: cada bloque `@@@MERMAID` ya cerrado, en orden de aparición (hasta 2). */
+  mermaids: string[]
   snippets: DidacticSnippet[]
 }
 
@@ -86,6 +90,14 @@ function toDraft(acc: SectionAcc, streaming: boolean): DraftDidacticSection | nu
       markdown: acc.markdown,
       ...streamingFlag,
       ...(acc.mermaid !== undefined ? { mermaid: acc.mermaid } : {}),
+    }
+  }
+  if (acc.kind === 'cloud') {
+    return {
+      kind: 'cloud',
+      markdown: acc.markdown,
+      mermaids: acc.mermaids,
+      ...streamingFlag,
     }
   }
   // endpoint / setup
@@ -160,6 +172,7 @@ export class StreamSectionParser {
         kind: acc.kind,
         markdown: acc.markdown,
         mermaid: acc.mermaid,
+        mermaids: acc.mermaids,
         snippets: acc.snippets,
       })
       if (mapped) {
@@ -184,7 +197,7 @@ export class StreamSectionParser {
         const kind = SECTION_RE.exec(clean)![1]
         this.discardOpenBlock()
         this.closeCurrentSection()
-        this.current = { kind, markdown: '', snippets: [] }
+        this.current = { kind, markdown: '', snippets: [], mermaids: [] }
         this.mode = 'section'
         return
       }
@@ -202,7 +215,12 @@ export class StreamSectionParser {
           // fixtures (y el DSL típico que produce un modelo) suelen incluir
           // ese salto de línea de cierre, y `mermaid.render()` lo tolera sin
           // problema.
-          this.current.mermaid = this.mermaidBuf
+          if (this.current.kind === 'cloud') {
+            // Hasta DOS bloques por sección, acumulados en orden de cierre.
+            this.current.mermaids.push(this.mermaidBuf)
+          } else {
+            this.current.mermaid = this.mermaidBuf
+          }
         }
         this.mermaidBuf = ''
         this.mode = this.current ? 'section' : 'idle'
@@ -288,6 +306,12 @@ function sectionToText(section: DidacticSection): string {
 
   if (section.kind === 'architecture' || section.kind === 'schema') {
     out += '@@@MERMAID\n' + section.mermaid.trimEnd() + '\n@@@END_MERMAID\n'
+  }
+
+  if (section.kind === 'cloud') {
+    for (const mermaid of section.mermaids) {
+      out += '@@@MERMAID\n' + mermaid.trimEnd() + '\n@@@END_MERMAID\n'
+    }
   }
 
   if (section.kind === 'endpoint' || section.kind === 'setup') {

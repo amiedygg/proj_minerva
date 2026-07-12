@@ -30,6 +30,26 @@ interface MermaidDiagramProps {
  * de abajo abre el layout por defecto (más fila/margen/padding) para que las
  * etiquetas largas de `Rel()` que genera la IA no se encimen entre sí ni con
  * las cajas.
+ *
+ * Icon packs (T77): `registerIconPacks` se llama UNA sola vez junto con
+ * `initialize()`, con dos packs locales para que `architecture-beta` (la
+ * sección `cloud`) pinte logos en vez de cajas genéricas: `logos`
+ * (`@iconify-json/logos`, ya trae AWS/GCP/etc.) y `cf` (`../../assets/
+ * cf-icon-pack.ts`, servicios de Cloudflare que `logos` no cubre). Un icono
+ * desconocido degrada a un placeholder '?' sin romper el render (validado en
+ * el spike previo a esta tarea) — no hace falta manejo de error extra acá.
+ *
+ * Los dos packs se cargan con `import()` DINÁMICO dentro de esta misma
+ * promesa, no con un `import` estático arriba del archivo: este módulo
+ * (`MermaidDiagram.tsx`) es alcanzable de forma estática desde el entry
+ * principal (`DidacticAnalysisArea` lo importa directo, sin `React.lazy`),
+ * así que cualquier `import` de valor arriba del archivo cae en el bundle
+ * principal sin importar que solo se use dentro de este `.then()` — un
+ * `import()` dinámico es el único mecanismo que crea un chunk separado.
+ * `@iconify-json/logos` en particular pesa ~7MB (todo el set de logos); con
+ * import estático `npm run build` infla el entry principal de ~2.5MB a
+ * ~10MB. Con `import()` queda en el mismo chunk lazy que `mermaid` — medido
+ * con `npm run build` (ver reporte de la tarea).
  */
 let mermaidPromise: Promise<Mermaid> | null = null
 
@@ -104,8 +124,16 @@ function normalizeSvg(svgMarkup: string, naturalSize: boolean): string {
 
 function getMermaid(): Promise<Mermaid> {
   if (!mermaidPromise) {
-    mermaidPromise = import('mermaid').then((mod) => {
-      const mermaid = mod.default
+    mermaidPromise = Promise.all([
+      import('mermaid'),
+      import('@iconify-json/logos'),
+      import('../../assets/cf-icon-pack'),
+    ]).then(([mermaidMod, logosMod, cfMod]) => {
+      const mermaid = mermaidMod.default
+      mermaid.registerIconPacks([
+        { name: 'logos', icons: logosMod.icons },
+        { name: 'cf', icons: cfMod.cfIconPack },
+      ])
       mermaid.initialize({
         startOnLoad: false,
         theme: 'neutral',

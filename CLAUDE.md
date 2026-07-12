@@ -79,7 +79,20 @@ Regla de oro: **ninguna tarea pasa a `[x]` sin verificación del orquestador** �
     ventana desacoplada no re-paga el LLM; `ai:invalidateAnalysis` lo limpia.
   - Prompts versionados en `src/main/ai/prompts/` (no strings inline dispersos).
 - **Diagramas:** Mermaid en el renderer (import lazy, `securityLevel: 'strict'`).
-  La IA **produce texto Mermaid** (C4, `erDiagram`) — la IA no dibuja, escribe DSL.
+  La IA **produce texto Mermaid** (C4, `erDiagram`, `architecture-beta`) — la IA no
+  dibuja, escribe DSL.
+- **Sección "Infraestructura cloud" (F15, v0.6.0):** kind `cloud`, condicional —
+  el modelo la emite SOLO si ve IaC de AWS/Cloudflare en el snapshot (Terraform,
+  CDK, SAM/CloudFormation, serverless.yml, wrangler.toml/jsonc, Pulumi; regla
+  anti-alucinación en el prompt). A diferencia de architecture/schema lleva
+  `mermaids: string[]` (hasta DOS diagramas `architecture-beta`: big picture del
+  sistema desplegado + zoom a lo que el PR toca, servicios marcados con sufijo
+  "PR" en el label). Iconos vía `registerIconPacks` con packs 100% LOCALES:
+  `@iconify-json/logos` (aws-*, cloudflare-workers) + mini-pack `cf` vendoreado
+  (`renderer/src/assets/cf-icon-pack.ts`: R2/D1/KV/Durable Objects/Pages/Queues,
+  SVGs de cloudflare-docs CC-BY-4.0) — la CSP `connect-src 'self'` prohíbe el
+  loader remoto de Iconify. El prompt lleva la gramática exacta + whitelist
+  literal de iconos (sintaxis joven: los modelos la mezclan con flowchart).
 - **Ventana didáctica desacoplada:** hash `#didactic/<owner>/<name>/<n>?title=...`
   (`src/shared/didactic-route.ts`); `main.tsx` es **reactivo a `hashchange`**
   (re-navegar con solo el hash distinto es same-document: Chromium NO recarga).
@@ -150,6 +163,16 @@ scripts/            smoke-*.mjs (e2e vía CDP), screenshot-app.sh, debug-*.mjs
 5. Para matar la app desde scripts: `pkill -f "[e]lectron"` (el truco del corchete evita
    que el patrón matchee tu propio shell → exit 144).
 6. `safeStorage` en Hyprland/omarchy: ver sección GitHub arriba (password-store).
+7. Los `[Label]` de `architecture-beta` solo aceptan **letras, números y espacios**:
+   un paréntesis, guion o símbolo rompe el lexer (por eso el marcado de servicios
+   tocados es el sufijo plano "PR", no "(PR)"). Verificado contra mermaid 11.16.
+8. Los icon packs de mermaid se cargan con **`import()` dinámico** dentro del
+   singleton lazy de `MermaidDiagram.tsx` — un import estático de
+   `@iconify-json/logos` (~7 MB) en ese módulo (alcanzable estáticamente desde el
+   entry) infla el bundle principal de 2.5 MB a 10 MB.
+9. El snapshot mock se cachea en disco por `headSha` (`userData/snapshots/`): si
+   cambias `fixtures-snapshot.ts` hay que borrar el dir del snapshot afectado (y
+   reiniciar la app entera: el hot reload de main a veces no re-escribe el árbol).
 
 ## Comandos
 

@@ -60,6 +60,16 @@ export function mapRawSection(raw: unknown): DidacticSection | null {
       if (!isNonEmptyString(raw.mermaid)) return null
       return { kind: 'schema', markdown: raw.markdown, mermaid: raw.mermaid }
 
+    case 'cloud': {
+      // A diferencia de architecture/schema, los diagramas son OPCIONALES:
+      // 0, 1 o 2 bloques son todos válidos — nunca se descarta la sección
+      // solo por falta de mermaid (el markdown solo ya es un resultado útil).
+      const mermaids = Array.isArray(raw.mermaids)
+        ? raw.mermaids.filter((m): m is string => isNonEmptyString(m))
+        : []
+      return { kind: 'cloud', markdown: raw.markdown, mermaids }
+    }
+
     case 'endpoint': {
       if (!Array.isArray(raw.snippets)) return null
       const snippets = raw.snippets

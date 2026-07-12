@@ -2773,3 +2773,203 @@ sesión activa. Diagnóstico + fix en la misma rama del PR de F14.
   cache de rutas resueltas debe poder invalidarse, y el primer exec del
   binario nuevo puede tardar segundos (Gatekeeper) — timeouts de probe cortos
   dan falsos "no disponible".
+
+## F15 — Sección didáctica "Infraestructura cloud" (AWS/Cloudflare) (v0.6.0, 2026-07-12)
+
+> Rama `feature/didactic-cloud-section`. Pedido de Edilson: cuando el repo del PR
+> tenga infra AWS/Cloudflare, una sección nueva explica el BIG PICTURE del sistema
+> desplegado (Lambdas, EventBridge, Workers…) y aterriza DÓNDE incide el PR.
+> Decisiones acordadas: kind nuevo `cloud` (condicional, decide el prompt),
+> Mermaid `architecture-beta` + icon packs LOCALES (`@iconify-json/logos` + mini-pack
+> `cf` vendoreado), DOS diagramas por sección (`mermaids: string[]`): big picture +
+> zoom al cambio. Diseño completo, alternativas descartadas y riesgos en `PLAN.md`.
+
+- [x] **S0. Spike de render architecture-beta + iconos bajo strict** (orquestador)
+  - Página scratch (fuera de src/) con mermaid 11.16.0 + `registerIconPacks`
+    (JSON local de `@iconify-json/logos`) renderizando el few-shot del prompt con
+    `securityLevel: 'strict'` + `theme: 'neutral'`. Verificar: iconos visibles
+    (sobreviven al sanitizado), layout legible con grupos, `align row|column`.
+  - Si falla ⇒ decidir plan C (flowchart + icon shapes v11.13+) ANTES de la ola 2
+    y actualizar PLAN.md + T77.
+  - Gate para T77; NO bloquea T75/T76.
+  - _Verificado 2026-07-12 (orquestador, captura MIRADA): chromium headless +
+    mermaid.min.js UMD del repo + JSON de logos volcado local. 3 casos OK bajo
+    strict+neutral: (1) big picture con grupos iconizados (logos:aws /
+    logos:cloudflare) y 7 servicios con logos reales; (2) zoom con sufijo "PR"
+    en labels y "align row" (11.16) funcionando; (3) icono inexistente degrada
+    a placeholder "?" SIN romper el render (comportamiento tolerante). El
+    mini-pack custom (prefix cf, IconifyJSON inline) renderiza — el mecanismo
+    de vendoreo para R2/D1/KV está validado. Nota menor: algunos labels se
+    cruzan con aristas largas — mitigar en el prompt (grafos ≤10 servicios,
+    aristas cortas, align). GATE T77: ABIERTO._
+
+- [x] **T75. Shared + parser + mapper: kind `cloud` con multi-mermaid** (Sonnet)
+  _Verificado 2026-07-12 (orquestador): diff revisado (parser acumula mermaids[]
+  solo para cloud al CERRAR cada bloque; mapper nunca descarta por falta de
+  diagramas; entrada mínima en SECTION_META para el Record exhaustivo — la UI
+  real es T77). typecheck+lint verdes, 664/664 tests (47 nuevos en parser/mapper:
+  2/1/0 diagramas, streaming incremental 0→1→2, roundtrip stringify⇄parse).
+  Gotcha del subagente anotado: los mermaid de fixtures terminan en salto de
+  línea A PROPÓSITO (el parser lo preserva al cerrar, a diferencia de snippets
+  que recortan) — los roundtrips byte a byte deben replicarlo._
+  - `shared/types.ts`: variante `{ kind: 'cloud'; markdown: string;
+    mermaids: string[] }` en `DidacticSection`.
+  - `shared/events.ts`: variante con `mermaids?: string[]` en
+    `DraftDidacticSection`.
+  - `main/ai/stream-parser.ts`: `'cloud'` en `KNOWN_KINDS` (:43); `toDraft()`
+    (76-98): para cloud, ACUMULAR cada bloque `@@@MERMAID` cerrado en `mermaids[]`
+    en orden (los demás kinds intactos con su `mermaid` único); `sectionToText()`
+    (286-306): serializar N bloques MERMAID para cloud.
+  - `main/ai/section-mapper.ts`: `case 'cloud'` — markdown obligatorio,
+    `mermaids` = los bloques presentes (0..2; con 0 la sección SIGUE siendo
+    válida: solo markdown). NUNCA descartar la sección por un diagrama ausente.
+  - Tests (vitest): parse de sección cloud con 2 MERMAID en orden, con 1, con 0;
+    streaming incremental (draft crece de 1 a 2 diagramas); roundtrip
+    `stringifySections` ⇄ parser para cloud; kinds existentes sin regresión.
+  - GOTCHAS repo: sin backticks en strings largos de main; `import.meta.dirname`.
+  Aceptación: typecheck+lint+test verdes; los 5 kinds previos parsean idéntico.
+
+- [x] **T76. Prompt + fixtures mock de la sección cloud** (Sonnet; depende de T75)
+  _Verificado 2026-07-12 (orquestador). Entrega: prompt con categoría condicional
+  + anti-alucinación, gramática architecture-beta, whitelist de 33 iconos, reglas
+  de tamaño, few-shot con sección cloud completa; fixture en
+  shopwave/checkout-service#77 (webhook de pagos — encaje natural: la narrativa
+  cloud explica por qué el lock en memoria no sirve en Lambda concurrente).
+  FIX del orquestador post-entrega: la convención de marcado " (PR)" en labels
+  ERA INVÁLIDA — el lexer de architecture-beta solo acepta letras/números/
+  espacios en [Label] (paréntesis, guiones, ★, «» probados: todos ERR). Se
+  corrigió a sufijo plano " PR" en prompt (3 sitios) y fixture (2 labels). Los
+  4 diagramas embarcados (2 fixture + 2 few-shot) validados contra mermaid
+  11.16 real vía spike headless: 4/4 OK. typecheck+lint+664 tests verdes._
+  - `main/ai/prompts/analyze-pr.ts` (string concatenado con comillas simples,
+    JAMÁS backticks — gotcha vite:esm-shim):
+    - Enum del marcador (:95): añadir `cloud`.
+    - Regla de clasificación (58-64): categoría condicional `cloud` — emitir SOLO
+      si el repo contiene infra reconocible de AWS/Cloudflare: Terraform (*.tf),
+      CDK, SAM/CloudFormation, serverless.yml, wrangler.toml|jsonc, Pulumi, o
+      deploy workflows que la referencien. Anti-alucinación explícita: si el mapa
+      no se puede reconstruir desde el repo, NO emitir la sección.
+    - Bloque de contenido (105-130): markdown didáctico (qué hace el sistema
+      completo, cómo interactúan las piezas, y qué piezas toca este PR y cómo
+      cambia la interacción) + DOS bloques @@@MERMAID `architecture-beta`:
+      1º sistema completo; 2º zoom al área modificada con los servicios tocados
+      marcados en el label (sufijo '(PR)').
+    - Gramática exacta de architecture-beta (group/service/junction, aristas
+      `a:R -- L:b`, `align`) + WHITELIST literal de iconos permitidos:
+      `logos:aws-lambda|aws-s3|aws-dynamodb|aws-sqs|aws-sns|aws-eventbridge|`
+      `aws-api-gateway|aws-step-functions|aws-cloudfront|aws-ec2|aws-ecs|`
+      `aws-fargate|aws-rds|aws-aurora|aws-cognito|aws-kinesis|aws-route53|`
+      `aws-vpc|aws-cloudwatch|aws-secrets-manager|cloudflare|cloudflare-workers`,
+      `cf:r2|d1|kv|durable-objects|pages|queues`, y built-ins
+      `cloud|database|disk|internet|server` como fallback. Reglas de tamaño:
+      ≤10 servicios, labels ≤3 palabras, grupos por proveedor/dominio.
+    - Few-shot: ampliar el ejemplo (131-160) con una sección cloud completa.
+  - `main/ai/fixtures.ts`: sección `cloud` (markdown + 2 diagramas) en el PR
+    shopwave que mejor encaje temáticamente, para e2e determinista con
+    `MINERVA_MOCK_AI=1`. Los diagramas de la fixture usan SOLO iconos de la
+    whitelist. Sin backticks en los strings.
+  Aceptación: typecheck+lint+test verdes; con `MINERVA_MOCK=1 MINERVA_MOCK_AI=1`
+  el análisis del PR elegido emite la sección cloud por el pipeline tagged
+  (verificable en el resultado de `ai:analyzePullRequest`).
+
+- [x] **T77. Renderer: card cloud + icon packs locales** (Sonnet; gate: S0 OK)
+  _Verificado 2026-07-12 (orquestador): diff revisado (cf-icon-pack.ts tipado
+  IconifyJSON con atribución CC-BY-4.0; registerIconPacks una vez junto a
+  initialize; card con subtítulos fijos por posición y key por índice —
+  correcto: el array es append-only durante streaming). GOTCHA descubierto por
+  el subagente y bien resuelto: un import estático de @iconify-json/logos en
+  MermaidDiagram.tsx (alcanzable estáticamente desde el entry) infla el bundle
+  principal de 2.5MB a 10MB — los packs se cargan con import() dinámico dentro
+  del mismo Promise.all del singleton lazy de mermaid. Build verificado: entry
+  2531 kB (±1 kB vs baseline), logos 7496 kB y cf-pack 5 kB en chunks lazy.
+  typecheck+lint+664 tests verdes. Verificación visual e2e: en T78._
+  - Deps: `npm i @iconify-json/logos`. Nuevo
+    `renderer/src/assets/cf-icon-pack.ts`: mini-pack IconifyJSON `cf` vendoreado
+    (r2, d1, kv, durable-objects, pages, queues) con los SVG del Style Guide
+    oficial de Cloudflare + comentario de atribución/fuente.
+  - `MermaidDiagram.tsx` (initialize lazy, 109-133): `registerIconPacks([logos,
+    cf])` UNA vez, con los JSON importados estáticamente en el mismo módulo/chunk
+    lazy (la CSP `connect-src 'self'` prohíbe el loader remoto de Iconify).
+  - `DidacticAnalysisArea.tsx`: entrada en `SECTION_META` (título
+    "Infraestructura cloud", icono lucide `Cloud`); rama cloud en
+    `renderSection`/`renderDraftSection`: markdown + cada diagrama de `mermaids`
+    en su propio `MermaidDiagram` con subtítulo fijo ("Sistema completo" /
+    "Dónde incide este PR"; si solo hay 1 diagrama, solo el primero).
+  - El fallback existente de MermaidDiagram (card con código fuente si el parse
+    falla) debe aplicar POR diagrama, sin tumbar la card entera.
+  - GOTCHA: linter react-hooks prohíbe setState-en-efecto; reset por entidad =
+    remount por `key`.
+  Aceptación: typecheck+lint+test verdes; con la app en
+  `MINERVA_MOCK=1 MINERVA_MOCK_AI=1`, el PR de la fixture muestra la card con
+  los DOS diagramas renderizados con logos (no basta el DOM: captura).
+
+- [x] **T78. Verificación integral F15 + suite e2e + docs + v0.6.0** (orquestador)
+  - Nueva `scripts/smoke-cloud-section.mjs` (app `MINERVA_MOCK=1
+    MINERVA_MOCK_AI=1` + CDP puerto 9222): analizar el PR de la fixture, esperar
+    señal inequívoca (botón "Re-analizar" habilitado), verificar card cloud con 2
+    SVGs de mermaid CON CONTENIDO (checks de contenido, no solo rects — el gotcha
+    del visor colapsado), presencia de un icono de la whitelist en el SVG, y que
+    un PR SIN infra no emite la sección. Excluir `#didactic` del target CDP;
+    limpiar estado global al arrancar (`ai:invalidateAnalysis` + PR neutral).
+  - Regresión: `smoke-didactic` (o la suite didáctica vigente) + `smoke-settings`.
+  - Prueba con IA REAL (proveedor activo, sin MINERVA_MOCK_AI) sobre un repo real
+    con infra AWS o Cloudflare: la sección aparece y los diagramas son coherentes
+    con el repo; anotar tasa de Mermaid inválido (decide si el follow-up del
+    validation-loop con `mermaid.parse()` se agenda).
+  - Captura MIRADA de la card con logos (screenshot-app.sh, receta e2e de
+    CLAUDE.md).
+  - Docs: CLAUDE.md (sección cloud en el stack + gotcha de icon packs locales),
+    README roadmap, bitácora F15, `package.json` 0.6.0.
+
+### Cierre F15 (2026-07-12, orquestador)
+
+_Verificación integral:_ typecheck/lint verdes, 664/664 tests. Nueva
+`scripts/smoke-cloud-section.mjs` 9/9 (x2 corridas, idempotente): card presente,
+subtítulos big picture/zoom, 2 SVGs mermaid CON contenido y visibles (nodos>20,
+altura>50px), iconos inlineados (packs locales), markdown didáctico, marcado
+"PR" en el zoom, y caso negativo (#482 sin infra ⇒ sin card). Regresión:
+`smoke-didactic` 13/13, `smoke-streaming` 6/6, `smoke-harness-activity` 11/11
+(el parser de streaming cambió en T75 — por eso estas dos extra). Captura
+MIRADA con IA mock (card completa, logos AWS reales, zoom con Webhook Handler
+PR / Orders Table PR). **Prueba con IA REAL (Claude Code / Fable 5, sin
+MINERVA_MOCK_AI)**, dos casos: (a) snapshot SIN IaC ⇒ NO emitió la sección
+(anti-alucinación funciona) y 0 mermaid rotos; (b) snapshot CON
+`serverless.yml` (agregado a fixtures-snapshot.ts para habilitar el caso
+positivo, coherente con la fixture didáctica) ⇒ sección cloud con 2
+architecture-beta VÁLIDOS (0 rotos), narrativa fiel al serverless.yml — el
+modelo incluso distinguió la parte Express/Redis NO declarada como infra y
+sugirió confirmar en review que el lock nuevo no requiere un recurso propio.
+Tasa de mermaid inválido con IA real: 0/2 corridas ⇒ el validation-loop con
+mermaid.parse NO se agenda por ahora. Docs: CLAUDE.md (sección cloud + gotchas
+7-9), README roadmap, package.json 0.6.0. **F15 COMPLETA.**
+
+### Bitácora F15 — gotchas
+
+- **Los `[Label]` de architecture-beta solo aceptan letras/números/espacios**:
+  paréntesis, guion, ★ y «» rompen el lexer (probado uno a uno contra mermaid
+  11.16 en spike headless). La convención de marcado " (PR)" del primer draft
+  del prompt/fixture era INVÁLIDA — se corrigió a sufijo plano " PR". Moraleja:
+  todo DSL que embarque una fixture o un few-shot se valida contra el parser
+  REAL antes de darlo por bueno (los 4 diagramas embarcados pasaron por el
+  spike).
+- **Icon packs de mermaid: import() dinámico o pagas 7 MB en el entry**:
+  `MermaidDiagram.tsx` es alcanzable estáticamente desde el entry del renderer,
+  así que un `import` estático de `@iconify-json/logos` cae al bundle principal
+  (2.5→10 MB medido) aunque solo se use dentro del `.then()` del singleton.
+  `Promise.all([import('mermaid'), import('@iconify-json/logos'), ...])` deja
+  los packs en el chunk lazy de mermaid.
+- **El snapshot mock se cachea por headSha y sobrevive al hot reload**: tras
+  editar `fixtures-snapshot.ts` hay que borrar
+  `userData/snapshots/<owner>-<repo>-<sha>` Y reiniciar la app completa — en
+  esta sesión el watcher de electron-vite NO reinició main tras la edición y el
+  mock re-escribió el árbol viejo (1ª prueba real dio falso negativo).
+- **chromium headless como banco de pruebas de mermaid**: `--headless=new
+  --dump-dom` + mermaid.min.js UMD local + JSON de iconos volcado a un .js =
+  validador de DSL sin app ni display (el spike S0 y el fix de labels salieron
+  de ahí). Con hyprlock activo la captura grim sale negra — la alternativa es
+  `scripts/screenshot-cdp.mjs` (Page.captureScreenshot, independiente del
+  compositor).
+- **Los iconos de producto de Cloudflare (R2/D1/KV/DO/Pages/Queues) no existen
+  en ninguna colección Iconify**: se vendorearon los SVG oficiales de
+  `cloudflare/cloudflare-docs` `src/icons/` (CC-BY-4.0, atribución en
+  `cf-icon-pack.ts`), monocromos `currentColor` fijados al naranja #F6821F.

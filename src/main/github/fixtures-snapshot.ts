@@ -283,6 +283,70 @@ const checkoutFiles: SnapshotFixtureFile[] = [
       '  created_at TIMESTAMPTZ NOT NULL DEFAULT now()\n' +
       ');\n',
   },
+  // Infra AWS declarada (F15): habilita la sección didáctica `cloud` cuando el
+  // proveedor de IA es REAL (la regla anti-alucinación del prompt exige IaC
+  // visible en el snapshot). Coherente con la fixture didáctica de
+  // shopwave/checkout-service#77 (Lambda + DynamoDB + SQS + SES).
+  {
+    path: 'serverless.yml',
+    content:
+      'service: checkout-service\n\n' +
+      'provider:\n' +
+      '  name: aws\n' +
+      '  runtime: nodejs20.x\n' +
+      '  region: us-east-1\n\n' +
+      'functions:\n' +
+      '  payment-webhook-handler:\n' +
+      '    handler: src/webhooks/payment-webhook-handler.handle\n' +
+      '    events:\n' +
+      '      - httpApi:\n' +
+      '          method: POST\n' +
+      '          path: /webhooks/payment\n' +
+      '  order-notifier:\n' +
+      '    handler: src/notifier/order-notifier.handle\n' +
+      '    events:\n' +
+      '      - sqs:\n' +
+      '          arn: !GetAtt NotifyQueue.Arn\n\n' +
+      'resources:\n' +
+      '  Resources:\n' +
+      '    OrdersTable:\n' +
+      '      Type: AWS::DynamoDB::Table\n' +
+      '      Properties:\n' +
+      '        TableName: shopwave-orders\n' +
+      '        BillingMode: PAY_PER_REQUEST\n' +
+      '    NotifyQueue:\n' +
+      '      Type: AWS::SQS::Queue\n' +
+      '      Properties:\n' +
+      '        QueueName: shopwave-order-notify\n',
+  },
+  {
+    path: 'src/webhooks/payment-webhook-handler.ts',
+    content:
+      "import { DynamoDBClient } from '@aws-sdk/client-dynamodb'\n" +
+      "import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs'\n" +
+      "import { acquireOrderLock, releaseOrderLock } from './order-lock.js'\n\n" +
+      'const db = new DynamoDBClient({})\n' +
+      'const sqs = new SQSClient({})\n\n' +
+      'export async function handle(event: { body: string }): Promise<{ statusCode: number }> {\n' +
+      '  const payload = JSON.parse(event.body)\n' +
+      '  const lock = await acquireOrderLock(payload.orderId)\n' +
+      '  if (!lock) return { statusCode: 409 }\n' +
+      '  try {\n' +
+      '    // marca la orden como pagada en DynamoDB y encola la notificacion\n' +
+      '    await markOrderPaid(db, payload.orderId)\n' +
+      '    await sqs.send(new SendMessageCommand({\n' +
+      '      QueueUrl: process.env.NOTIFY_QUEUE_URL,\n' +
+      '      MessageBody: JSON.stringify({ orderId: payload.orderId }),\n' +
+      '    }))\n' +
+      '    return { statusCode: 200 }\n' +
+      '  } finally {\n' +
+      '    await releaseOrderLock(payload.orderId)\n' +
+      '  }\n' +
+      '}\n\n' +
+      'async function markOrderPaid(client: DynamoDBClient, orderId: string): Promise<void> {\n' +
+      '  // UpdateItem sobre la tabla shopwave-orders (omitido en la fixture)\n' +
+      '}\n',
+  },
 ]
 
 /** Árbol fixture por repo, indexado por `RepoRef.fullName` (p. ej. `shopwave/api`). */

@@ -101,6 +101,45 @@ describe('mapRawSection', () => {
     expect(mapRawSection({ kind: 'schema', markdown: 'texto' })).toBeNull()
   })
 
+  it('mapea una sección cloud válida con 2 diagramas', () => {
+    expect(
+      mapRawSection({
+        kind: 'cloud',
+        markdown: 'texto',
+        mermaids: ['C4Context\n  big picture', 'C4Container\n  zoom'],
+      }),
+    ).toEqual({
+      kind: 'cloud',
+      markdown: 'texto',
+      mermaids: ['C4Context\n  big picture', 'C4Container\n  zoom'],
+    })
+  })
+
+  it('mapea una sección cloud válida con 1 diagrama', () => {
+    expect(
+      mapRawSection({ kind: 'cloud', markdown: 'texto', mermaids: ['C4Context\n  x'] }),
+    ).toEqual({ kind: 'cloud', markdown: 'texto', mermaids: ['C4Context\n  x'] })
+  })
+
+  it('mapea una sección cloud válida sin diagramas (nunca null solo por faltar mermaid)', () => {
+    expect(mapRawSection({ kind: 'cloud', markdown: 'texto', mermaids: [] })).toEqual({
+      kind: 'cloud',
+      markdown: 'texto',
+      mermaids: [],
+    })
+    expect(mapRawSection({ kind: 'cloud', markdown: 'texto' })).toEqual({
+      kind: 'cloud',
+      markdown: 'texto',
+      mermaids: [],
+    })
+  })
+
+  it('descarta mermaids individuales malformados de una sección cloud sin invalidarla', () => {
+    expect(
+      mapRawSection({ kind: 'cloud', markdown: 'texto', mermaids: ['ok', '   ', 42, null] }),
+    ).toEqual({ kind: 'cloud', markdown: 'texto', mermaids: ['ok'] })
+  })
+
   it('rechaza endpoint sin snippets (o snippets no-array)', () => {
     expect(mapRawSection({ kind: 'endpoint', markdown: 'texto' })).toBeNull()
     expect(mapRawSection({ kind: 'endpoint', markdown: 'texto', snippets: 'x' })).toBeNull()
