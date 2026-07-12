@@ -1,12 +1,25 @@
 /**
- * Smoke e2e UI de F9 vía CDP. Requiere app con MINERVA_MOCK=1 OPENROUTER_API_KEY=
- * (mock AI) y --remote-debugging-port=9222.
+ * Smoke e2e UI de F9 vía CDP. Mundo post-T59 (sin OpenRouter, T61): requiere
+ * app con MINERVA_MOCK=1 MINERVA_MOCK_AI=1 --remote-debugging-port=9222 —
+ * MINERVA_MOCK_AI=1 fuerza `MockAiService` sin importar el proveedor
+ * seleccionado (commit 92a9ee2), así que el banner queda sellado con la
+ * SELECCIÓN activa (`generatedWith.provider`, vía `getEffectiveAiSelection`)
+ * aunque quien responda de verdad sea el mock.
+ *
+ * Formato EXACTO del banner (`ActiveModelHint.tsx`): `providerLabel + ' · ' +
+ * model + (effortLabel ? ' · ' + effortLabel : '')`, donde `model` es el ID
+ * crudo del modelo (NO su label humano) y `providerLabel` sale de
+ * `catalog[provider].label`. Con provider=opencode y model=`opencode/big-pickle`
+ * (sin descriptor `effort` en el catálogo curado, T57) el banner queda
+ * literalmente `vía OpenCode · opencode/big-pickle` — sin label "Big Pickle".
  *
  * Modos (argv[2]):
  *   banner      : Issue 1 — el banner del panel sella la config de generación.
- *                 Analiza #482 con provider=openrouter; luego cambia la config
- *                 vigente a claude-code (persist + reload) y verifica que el
- *                 banner del análisis YA generado sigue mostrando OpenRouter.
+ *                 Setea provider=opencode + modelo=opencode/big-pickle EXPLÍCITO
+ *                 (determinismo: no depender del default del catálogo) y
+ *                 analiza #482; luego cambia la config vigente a claude-code
+ *                 (persist + reload) y verifica que el banner del análisis YA
+ *                 generado sigue mostrando OpenCode · opencode/big-pickle.
  *   stale-check : Issue 2 — con una entrada persistida de #482 con headSha viejo
  *                 (la escribe el orquestador antes de lanzar), al abrir el panel
  *                 aparece la barra "commits nuevos"; "Actualizar" la limpia.
@@ -107,11 +120,18 @@ const bannerText = (evaluate) =>
   })()
 `)
 
+const EXPECTED_BANNER = 'vía OpenCode · opencode/big-pickle'
+
 if (MODE === 'banner') {
   let { ws, evaluate } = await connect()
 
-  // 1. provider=openrouter (main persiste) + reload para alinear el store del renderer.
-  await evaluate(`window.minerva.settings.setAiProvider({ provider: 'openrouter' })`)
+  // 1. provider=opencode + modelo=opencode/big-pickle EXPLÍCITO (main persiste)
+  // + reload para alinear el store del renderer. Con MINERVA_MOCK_AI=1 quien
+  // responde es el mock, pero generatedWith se sella con esta SELECCIÓN.
+  await evaluate(`window.minerva.settings.setAiProvider({ provider: 'opencode' })`)
+  await evaluate(
+    `window.minerva.settings.setProviderModel({ provider: 'opencode', model: 'opencode/big-pickle' })`,
+  )
   await evaluate(`window.minerva.ai.invalidateAnalysis({ repo: ${repoLit}, number: ${NUMBER} })`)
   await evaluate('location.reload()')
   ws.close()
@@ -128,7 +148,7 @@ if (MODE === 'banner') {
   check('análisis #482 terminó', done)
 
   const banner1 = await bannerText(evaluate)
-  check('banner tras generar = OpenRouter · glm-5.2', /OpenRouter/.test(banner1) && /glm-5\.2/.test(banner1), banner1)
+  check('banner tras generar = ' + EXPECTED_BANNER, banner1 === EXPECTED_BANNER, banner1)
 
   // 2. Cambiar la config VIGENTE a claude-code (persist + reload) y reabrir #482.
   const info = await evaluate(`window.minerva.settings.setAiProvider({ provider: 'claude-code' })`)
@@ -145,8 +165,8 @@ if (MODE === 'banner') {
 
   const banner2 = await bannerText(evaluate)
   check(
-    'banner SIGUE sellado = OpenRouter · glm-5.2 (no claude-code)',
-    /OpenRouter/.test(banner2) && /glm-5\.2/.test(banner2) && !/Claude Code/.test(banner2),
+    'banner SIGUE sellado = ' + EXPECTED_BANNER + ' (no claude-code)',
+    banner2 === EXPECTED_BANNER,
     banner2,
   )
   ws.close()
