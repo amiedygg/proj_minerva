@@ -1817,3 +1817,207 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   Gotcha nuevo: los probes CDP heredan el estado que las suites anteriores
   dejaron en el renderer (vista inline, wrap toggled) — un `location.reload()`
   al arrancar resetea el store zustand y devuelve los defaults reales.
+
+## F11 — Panel didáctico como harness agéntico sobre snapshot del PR + proveedor OpenCode (v0.4.0, 2026-07-11)
+
+> Rama `feature/didactic-agentic-harness` (desde `main`; F10/T50–T53 vive en su propia
+> rama sin mergear — la numeración no colisiona). Plan completo y decisiones en
+> `PLAN.md`. Resumen: snapshot local del commit del PR (tarball por headSha) +
+> herramientas read-only para los TRES proveedores; OpenCode reemplaza a OpenRouter
+> (patrón T3 Code, repo `pingdotgg/t3code`); sin CLIs instalados → card con enlaces
+> oficiales de instalación.
+
+- [ ] **T54. `snapshot-store`: copia local del commit del PR + limpieza periódica**
+  Contexto: los proveedores agénticos necesitan un directorio con el repo AL COMMIT del
+  PR. Fuente real: tarball `GET /repos/{owner}/{repo}/tarball/{sha}` con el Octokit ya
+  autenticado (NUNCA git); mock: árbol fixture escrito con fs.
+  Entregables:
+  (a) `GithubService.writeSnapshot(req: { repo: RepoRef; headSha: string }, destDir)`
+  en la interfaz (`github/service.ts`) + real (`real-service.ts`: request tarball,
+  abortar si supera 150 MB, extraer con la dep `tar` YA instalada — `tar.extract`
+  con `strip: 1`, `cwd: destDir`) + mock (`mock-service.ts`: escribe ~8 archivos
+  plausibles del universo shopwave por repo — package.json, un par de rutas/handlers,
+  un modelo — en un módulo nuevo `fixtures-snapshot.ts`; SIN backticks en los strings).
+  (b) `src/main/github/snapshot-store.ts`: `ensureSnapshot(repo, headSha): Promise<string>`
+  → `userData/snapshots/<owner>-<name>-<sha7>/` (sanitizar owner/name/sha a
+  `[A-Za-z0-9._-]`; `app.getPath` SIEMPRE perezoso, patrón settings-store); dedupe de
+  descargas en vuelo (Map de promesas, patrón inFlightAnalyses T22); escribir a dir
+  temporal + rename atómico (nunca dejar snapshots a medias); `touch` mtime al reusar.
+  (c) Limpieza: `createSnapshotCleaner({ start, stop, sweep })` — sweep al arrancar y
+  cada 30 min: borra por LRU (mtime) lo que exceda 10 snapshots o 2 GB. `stop()` se
+  cablea en `before-quit` (`main/index.ts`), junto al resto del teardown.
+  Gotchas: `import.meta.dirname`, sin backticks en strings de main, el snapshot es
+  contenido NO confiable (jamás ejecutarlo). NO tocar package.json (deps ya
+  instaladas por el orquestador).
+  _Aceptación:_ typecheck/lint/tests verdes; unit tests con dirs temporales (fake
+  service): ensureSnapshot crea/reusa/dedupea, sanitización de paths, LRU expulsa por
+  count y por bytes, rename atómico (un fallo a mitad no deja dir final).
+
+- [ ] **T55. `opencode-runtime`: server OpenCode gestionado desde main**
+  Contexto: patrón T3 Code (`opencodeRuntime.ts` del repo `pingdotgg/t3code`). El
+  binario `opencode` 1.17.18 ESTÁ instalado en esta máquina (`~/.local/bin/opencode`):
+  verificar el wire EMPÍRICAMENTE (lección T29 — nunca adivinar el protocolo; se puede
+  spawnear `opencode serve` en un puerto libre y curlear `/global/health`, `/doc`).
+  Entregables:
+  (a) `resolve-cli.ts`: `CliBinaryName` gana `'opencode'` (mismas ubicaciones).
+  (b) `src/main/ai/providers/opencode-runtime.ts`: `getOpencodeServer(): Promise<{ url }>`
+  singleton lazy — puerto efímero (net listen(0)), spawn del binario resuelto con
+  `serve --hostname=127.0.0.1 --port=N`, `detached: true`, env =
+  `buildSanitizedSpawnEnv()` + `OPENCODE_CONFIG_CONTENT` (JSON de permisos read-only:
+  `"*"`, `edit`, `bash`, `webfetch`, `websearch`, `question`, `external_directory` →
+  `"deny"`; `read`, `grep`, `glob`, `list` → `"allow"`; NUNCA `ask`: en headless
+  cuelga). Ready = línea "opencode server listening" en stdout (URL vía regex
+  `/on\s+(https?:\/\/[^\s]+)/`, timeout 10s); si el proceso sale antes → error con
+  stdout+stderr. `stopOpencodeServer()`: kill de process-group (SIGTERM → 1s →
+  SIGKILL), cableado en `before-quit` (`main/index.ts`).
+  (c) Gate de versión: `opencode --version` (execFile, timeout corto), mínimo
+  `1.14.19` (constante exportada), comparador semver simple local (sin dep nueva).
+  Gotchas: NO tocar package.json (`@opencode-ai/sdk` ya instalado y pinneado por el
+  orquestador — este módulo NO usa el SDK, solo gestiona el proceso); sin backticks
+  en strings de main; sanear env (OpenCode usa su propio auth store, no necesita
+  nuestras keys).
+  _Aceptación:_ typecheck/lint/tests verdes; unit tests (spawn mockeado): parseo de
+  ready-line, timeout, exit-antes-de-ready con detalle, config JSON exacta de
+  permisos, semver gate; y UNA verificación manual reportada contra el binario real
+  (server arranca, `/global/health` responde `{ healthy: true, version }`, se mata
+  limpio sin huérfanos).
+
+- [ ] **T56. `OpenCodeAiService` + user message agéntico compartido + timeouts agénticos**
+  Contexto: cuarto `AiService` real (patrón `OpenCodeAdapter.ts` de t3code, adaptado a
+  nuestra vuelta única). Depende de T54+T55.
+  Entregables:
+  (a) `analysis-timeouts.ts`: constantes agénticas `AGENTIC_REQUEST_TIMEOUT_MS=300_000`
+  / `AGENTIC_INACTIVITY_TIMEOUT_MS=60_000` (los 3 proveedores agentizados las usarán).
+  (b) `analysis-prompt.ts`: `buildAgenticUserMessage(detail, files)` — mismo contenido
+  que `buildUserMessage` MÁS instrucción: el repo al commit del PR está en el
+  directorio de trabajo, explorarlo (grep/read) ANTES de responder, no ejecutar nada;
+  `prompts/analyze-pr.ts` gana un párrafo de herramientas (mismo estilo concatenado,
+  SIN backticks como delimitador).
+  (c) `src/main/ai/providers/opencode-service.ts` (`OpenCodeAiService implements
+  AiService`): `ensureSnapshot` → `createOpencodeClient({ baseUrl, directory: snapshot })`
+  (`@opencode-ai/sdk` YA instalado; decidir v1 vs `/v2` contra lo que el SDK 1.17.x
+  realmente exporte y ANOTAR en el reporte) → suscribirse a eventos ANTES de promptear
+  → `session.create` → prompt con `system` = system prompt didáctico, `model` = slug
+  `<providerID>/<modelID>` parseado (separador = PRIMER `/`), parts de texto →
+  acumular SOLO deltas de texto del asistente de ESE sessionID
+  (`message.part.delta`; ignorar partes de tool/razonamiento) → `parser.push` +
+  throttle de progreso (patrón claude-code-service) → fin por `session.idle` →
+  `parser.finalize`. En abort/timeout: `session.abort` best-effort. Errores
+  accionables: sin upstream conectado → "corré «opencode auth login» y conectá un
+  proveedor"; CLI ausente → mensaje con https://opencode.ai/docs/ .
+  Gotchas: NO confiar en `message.part.updated` (bug #27966/#26697 — deltas +
+  session.idle); el filtrado de partes debe verificarse EMPÍRICAMENTE con el binario
+  real (una sesión de humo contra un dir de prueba); jamás loguear contenido.
+  _Aceptación:_ typecheck/lint/tests verdes; unit tests con cliente/stream mockeados
+  (deltas → secciones, idle → finalize, error de sesión → throw accionable, timeout
+  inactividad); reporte de UNA corrida de humo real (snapshot pequeño, modelo del
+  gateway `opencode/*`) con las secciones parseadas.
+
+- [ ] **T57. Proveedor `opencode` en registry/probe/modelos/settings (aditivo)**
+  Contexto: cablear `opencode` como proveedor de PRIMERA clase. `openrouter` NO se toca
+  acá (se elimina en T59 — orden importa). Depende de T55.
+  Entregables: `AiProviderId` gana `'opencode'` (`shared/ai-providers.ts`: catálogo con
+  label "OpenCode" y fallback curado mínimo — `opencode/big-pickle` como default +
+  2-3 del gateway; `DEFAULT_MODEL_BY_PROVIDER.opencode='opencode/big-pickle'`);
+  registry (`authKind:'cli'`, binary `opencode`); `cli-probe.ts`/`provider-status.ts`:
+  installed = binario+versión OK; authenticated = server responde y
+  `client.provider.list()` (o `GET /provider` crudo) reporta ≥1 upstream en
+  `connected` (criterio t3code); `provider-models.ts`: modelos dinámicos vía
+  `provider.list()` de providers connected (slug `<provider>/<model>`, variants →
+  `ModelOptionDescriptor` patrón T34) con cache TTL 60s + fallback al curado (patrón
+  EXACTO `codex-model-catalog.ts` → `opencode-model-catalog.ts`); `createAiService`
+  (`ai/index.ts`): case `'opencode'` → `OpenCodeAiService` si authenticated, si no
+  `mockFallbackOrThrow` con mensaje accionable; Settings UI: `ProviderPicker` muestra
+  la card (via catálogo, verificar que no haya listas hardcodeadas), `ModelPicker`
+  con campo libre "Otro" también para opencode; validators de `settings:setAiProvider`
+  aceptan el id nuevo.
+  _Aceptación:_ typecheck/lint/tests verdes; unit: probe (3 estados), catálogo
+  dinámico con fallback, mapping de variants; con la app corriendo (`MINERVA_MOCK=1`),
+  Settings muestra OpenCode "Conectado" en esta máquina y el picker lista modelos
+  reales del `provider.list()`.
+
+- [ ] **T58. Agentizar Claude Code y Codex sobre el snapshot**
+  Contexto: igualdad de condiciones día 1 (decisión de Edilson). Depende de T54.
+  Entregables:
+  (a) `claude-code-service.ts`: `ensureSnapshot` → `query({ options: { cwd: snapshot,
+  ... } })` con herramientas READ-ONLY habilitadas (nombres reales contra el .d.ts del
+  SDK instalado — se esperan `Read`/`Grep`/`Glob`; NADA de Write/Edit/Bash/WebFetch),
+  `maxTurns` alto (30), timeouts agénticos de T56, y MANTENER `settingSources: []` +
+  `persistSession: false` (el snapshot puede traer CLAUDE.md/hooks hostiles — verificar
+  con un snapshot de prueba que contenga un CLAUDE.md trampa que NO se carga).
+  `buildAgenticUserMessage` en vez del clásico. Actualizar el link viejo
+  `docs.claude.com/...` → `https://code.claude.com/docs/en/setup`.
+  (b) `codex-service.ts`/`codex-app-server-client.ts`: `thread/start` gana el cwd al
+  snapshot — VERIFICAR el nombre real del param con `codex app-server
+  generate-json-schema` (lección T29: el binario genera su propio esquema; NO
+  adivinar); mantener `sandbox:'read-only'` + `approvalPolicy:'never'`; confirmar que
+  el sandbox permite LEER el cwd; `buildAgenticUserMessage` + timeouts agénticos.
+  Los tres proveedores comparten ahora el mismo user message y los mismos timeouts.
+  Gotchas: los deltas de tool-use de Claude (`input_json_delta`) SIGUEN ignorándose
+  (solo `text_delta` va al parser); en Codex solo `item/agentMessage/delta`.
+  _Aceptación:_ typecheck/lint/tests verdes (tests existentes de ambos servicios
+  actualizados); reporte de humo real de AL MENOS Claude Code (cuenta Max de Edilson)
+  sobre un snapshot fixture: el análisis usa herramientas (visible en los mensajes del
+  stream) y produce secciones; el CLAUDE.md trampa no se carga.
+
+- [ ] **T59. Eliminar OpenRouter como proveedor directo + migración de settings**
+  Contexto: decisión de Edilson — OpenRouter ahora se usa DENTRO de OpenCode. Depende
+  de T57. Borrar con confianza; git recuerda.
+  Entregables: eliminar `openrouter-service.ts`, `openrouter-key-store.ts`,
+  `ai-models.ts` (legacy re-export), slice openrouter del catálogo, resolución de key
+  en `env.ts` (`getAiEnv().openRouterApiKey` y el `.env` loader SI ya nadie más lo
+  usa), canales `settings:setOpenRouterKey`/`getOpenRouterKeyStatus` (ipc.ts,
+  validators, handlers, preload), `OpenRouterKeyForm.tsx`, `use-openrouter-key.ts` y
+  sus usos en `SettingsModal`/`ProviderPicker`; `AiProviderId` queda
+  `'opencode'|'claude-code'|'codex'`; `DEFAULT_AI_PROVIDER='opencode'`. Migración en
+  `settings/store.ts` al hidratar: `provider:'openrouter'` → `'opencode'` y
+  `model:'X'` → `'openrouter/X'` (slug de upstream openrouter en OpenCode);
+  best-effort borrar el archivo de key cifrada huérfano. `MINERVA_AI_PROVIDER=openrouter`
+  en env se trata como inválido (warn + default), documentarlo. Actualizar tests
+  afectados y `README.md` (sección proveedores).
+  Gotchas: buscar TODOS los usos (`grep -ri openrouter src/`) — incluye
+  `ActiveModelHint`, smokes y fixtures de tests; el smoke `smoke-settings` de T47 se
+  ajusta en T61 pero no debe romper unit acá.
+  _Aceptación:_ typecheck/lint/tests verdes; `grep -ri openrouter src/` solo devuelve
+  el slug de modelos `openrouter/...` (upstream de OpenCode) y la migración; arranque
+  con settings.json viejo (provider openrouter persistido) migra sin crash y Settings
+  muestra OpenCode activo.
+
+- [ ] **T60. UI: card "sin CLIs" con enlaces oficiales + CliLoginGuide x3 + fase "explorando"**
+  Contexto: decisión de Edilson — sin ningún CLI instalado, guiar con enlaces
+  oficiales. Depende de T57 (y de T59 para el copy final sin OpenRouter).
+  Entregables:
+  (a) `CliLoginGuide.tsx` generalizado a los 3 proveedores con `installUrl` y
+  `loginCmd` por proveedor (opencode → `opencode auth login`,
+  https://opencode.ai/docs/ ; claude → `claude login`,
+  https://code.claude.com/docs/en/setup ; codex → `codex login`,
+  https://developers.openai.com/codex/cli/) — enlaces como `<a target="_blank"
+  rel="noreferrer">` (el `external-link-guard` ya los abre en el navegador y limita a
+  http/https).
+  (b) Card "Necesitás al menos un CLI de IA" en el placeholder del panel didáctico
+  cuando `use-provider-status` reporta los 3 `unavailable`: explica en una línea el
+  porqué, lista los 3 CLIs con su enlace y trae "Volver a comprobar" (re-fetch del
+  status). No aparece con `MINERVA_MOCK=1` + mock IA activo.
+  (c) Fase "explorando": `AnalysisProgressEvent` (`shared/events.ts`) gana
+  `phase?: 'exploring' | 'writing'` (ADITIVO — validators/preload sin romper);
+  los servicios agénticos emiten `exploring` al detectar actividad de tools antes de
+  la primera sección y `writing` desde el primer delta de texto; el panel pinta
+  "Explorando el repositorio…" (spinner) durante `exploring`.
+  Gotchas: react-hooks del linter (nada de setState-en-efecto — remount por key);
+  copy en español consistente con el resto.
+  _Aceptación:_ typecheck/lint/tests verdes; captura MIRADA de: (1) card sin CLIs
+  (PATH capado), (2) "Explorando el repositorio…" durante un análisis real, (3)
+  CliLoginGuide con enlace de instalación visible; click de un enlace abre el
+  navegador del sistema (verificación manual del orquestador).
+
+- [ ] **T61. Verificación integral F11 + revisión de seguridad + docs + v0.4.0**
+  Del orquestador (no delegable la verificación): typecheck/lint/tests; suites e2e
+  (smoke-didactic + smoke-settings ajustadas al mundo sin OpenRouter; caso nuevo o
+  suite nueva para: análisis agéntico mock end-to-end, card sin CLIs si es
+  automatizable con PATH capado); regresión del resto de suites; e2e real con
+  OpenCode (upstream de Edilson) y Claude Code sobre snapshot fixture; verificación
+  de snapshots (creación, LRU, limpieza al arrancar); captura mirada de todos los
+  estados nuevos; agente `electron-security-reviewer` sobre el diff completo (jail de
+  permisos, secretos, snapshot no confiable, spawn env); README (arquitectura +
+  requisitos: al menos un CLI) + CLAUDE.md (sección IA/stack) + version bump 0.4.0 +
+  bitácora.
