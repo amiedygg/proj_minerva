@@ -37,6 +37,13 @@ const ISSUE_THREAD_PREFIX = 'issue-'
  */
 export const MAX_TARBALL_BYTES = 150 * 1024 * 1024
 
+/**
+ * Tope del tamaño DESCOMPRIMIDO declarado por el índice del tarball (revisión
+ * de seguridad F11): sin esto, un tarball de <150 MB comprimido podía
+ * expandirse a varios GB (bomba de descompresión) — ver `writeSnapshot`.
+ */
+export const MAX_EXTRACTED_BYTES = 500 * 1024 * 1024
+
 // ---------------------------------------------------------------------------
 // Tipos propios para las respuestas de GraphQL (Octokit no genera tipos para
 // queries arbitrarias: se declaran a mano, con los campos que efectivamente
@@ -720,6 +727,32 @@ export class RealGithubService implements GithubService {
       }
 
       await writeFile(tmpTarPath, buffer)
+
+      // Bomba de descompresión (revisión de seguridad F11, hallazgo #1): el
+      // tope de arriba es sobre el tarball COMPRIMIDO — un repo hostil puede
+      // meter archivos altamente compresibles que quepan en 150 MB pero se
+      // expandan a varios GB al extraer, llenando el disco antes de que el
+      // barrido LRU de snapshot-store corra. Pre-scan barato del índice del
+      // tarball (sin escribir nada) sumando los tamaños declarados; si el
+      // total DESCOMPRIMIDO excede el tope, se aborta ANTES de extraer.
+      let declaredBytes = 0
+      await tar.list({
+        file: tmpTarPath,
+        onReadEntry: (entry) => {
+          declaredBytes += entry.size ?? 0
+        },
+      })
+      if (declaredBytes > MAX_EXTRACTED_BYTES) {
+        const maxMb = Math.floor(MAX_EXTRACTED_BYTES / (1024 * 1024))
+        throw new Error(
+          'El repositorio ' +
+            req.repo.fullName +
+            ' es demasiado grande para copiar localmente (más de ' +
+            maxMb +
+            ' MB descomprimido). No se puede generar un análisis agéntico para este PR.',
+        )
+      }
+
       // Solo archivos y directorios: un repo hostil puede traer SYMLINKS
       // apuntando fuera del snapshot (p. ej. a `~/.ssh`), y las herramientas
       // read-only de los proveedores agénticos los seguirían al leer —

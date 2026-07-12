@@ -1,6 +1,6 @@
 {
   "name": "proj-minerva",
-  "version": "0.2.6",
+  "version": "0.4.0",
   "description": "Revisa Pull Requests de GitHub y entiendelos de verdad antes de aprobarlos.",
   "private": true,
   "type": "module",

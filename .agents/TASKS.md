@@ -2118,3 +2118,29 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   permisos, secretos, snapshot no confiable, spawn env); README (arquitectura +
   requisitos: al menos un CLI) + CLAUDE.md (sección IA/stack) + version bump 0.4.0 +
   bitácora.
+
+### Bitácora F11 — revisión de seguridad (2026-07-11, agente electron-security-reviewer)
+
+- **[Medio, ARREGLADO] Bomba de descompresión en el snapshot**: `MAX_TARBALL_BYTES`
+  topeaba solo el .tar.gz comprimido; un repo hostil ultra-compresible podía expandirse
+  a GBs al extraer, llenando el disco antes del barrido LRU. Fix del orquestador:
+  pre-scan del índice del tarball (`tar.list` + `onReadEntry` sumando `entry.size` —
+  OJO: en node-tar 7 la opción canónica es `onReadEntry`, `onentry` es alias deprecado)
+  y abort ANTES de extraer si el total declarado supera `MAX_EXTRACTED_BYTES` (500 MB).
+- **[Alto, REFUTADO empíricamente] ¿`opencode.json` hostil dentro del snapshot puede
+  re-permitir bash/edit?** Prueba con trampa real (snapshot con `opencode.json` +
+  `.opencode/config.json` con bash/edit/webfetch en "allow", server con nuestro
+  `OPENCODE_CONFIG_CONTENT`): `GET /config` con el header `x-opencode-directory`
+  apuntando a la trampa devuelve TODOS los deny intactos — `OPENCODE_CONFIG_CONTENT`
+  tiene precedencia sobre la config de proyecto (consistente con la doc). El jail
+  aguanta. Vale re-verificar este mismo probe al subir la versión pinneada de opencode.
+- **[Nota] `'*': 'deny'` como catch-all**: la config enumera los permisos conocidos hoy;
+  si una versión futura de OpenCode agrega tipos de permiso nuevos, se confía en que
+  `'*'` los cubra — re-confirmar al actualizar la versión mínima.
+- Defensas verificadas por el revisor: sanitización de paths del snapshot, filtro de
+  symlinks, jails de Claude (`settingSources: []` + tests) y Codex (read-only),
+  resolve-cli sin cwd/rutas relativas (un PR no puede colar su propio binario),
+  GITHUB_TOKEN estripado en todos los spawns, validators IPC completos (incl. `phase`
+  en preload), links externos solo los 3 oficiales hardcodeados vía external-link-guard,
+  migración de settings con guards estrictos sobre JSON crudo.
+

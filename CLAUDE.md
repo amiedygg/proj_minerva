@@ -29,8 +29,8 @@ Regla de oro: **ninguna tarea pasa a `[x]` sin verificación del orquestador** �
 ## Stack y arquitectura
 
 - **Electron** con `electron-vite` 5 (vite 7). Tres procesos claramente separados:
-  - `src/main/` — proceso principal (Node). Ventanas, OAuth, llamadas a GitHub y a
-    OpenRouter, acceso a secretos, cache de análisis. **Nunca** exponer tokens al renderer.
+  - `src/main/` — proceso principal (Node). Ventanas, OAuth, llamadas a GitHub, CLIs
+    de IA, acceso a secretos, cache de análisis. **Nunca** exponer tokens al renderer.
   - `src/preload/` — puente `contextBridge`. API tipada y mínima; sin `nodeIntegration`.
     Compilado a **CJS** (obligatorio con `sandbox: true`, ver gotchas).
   - `src/renderer/` — UI React 19 + TypeScript estricto + Tailwind v4 (CSS-first,
@@ -42,13 +42,23 @@ Regla de oro: **ninguna tarea pasa a `[x]` sin verificación del orquestador** �
   `safeStorage` cae a `basic_text` y el token no persiste (re-login en cada arranque).
   `MINERVA_MOCK=1` activa la capa GitHub mock (universo "shopwave", 8 PRs) — solo
   afecta GitHub, NO a la IA.
-- **IA:** [OpenRouter](https://openrouter.ai/docs/quickstart) desde **main**
-  (`src/main/ai/`, API OpenAI-compatible). La IA real se activa si existe
-  `OPENROUTER_API_KEY` (`.env` raíz, gitignored), independiente de `MINERVA_MOCK`;
-  sin key hay un mock que streamea fixtures por el mismo pipeline.
-  - **Modelo configurable por el usuario** (Settings UI, engrane en la TitleBar):
-    lista curada en `src/shared/ai-models.ts`, default **`z-ai/glm-5.2`**.
-    Precedencia: settings.json (userData) > env `MINERVA_AI_MODEL` > default.
+- **IA (F11, v0.4.0): tres proveedores AGÉNTICOS vía CLIs oficiales**, sin API keys
+  propias: **OpenCode** (default; `opencode serve` local + `@opencode-ai/sdk` v2,
+  exact-pinneado en lockstep con el CLI), **Claude Code** (Agent SDK oficial) y
+  **Codex** (`codex app-server` JSON-RPC). Cada análisis descarga un **snapshot del
+  repo al commit del PR** (`github/snapshot-store.ts`: tarball por `headSha`, LRU en
+  disco 10/2 GB con limpieza periódica, symlinks filtrados) y el modelo lo explora con
+  **herramientas de solo lectura** (jail: OpenCode vía `OPENCODE_CONFIG_CONTENT`
+  deny-por-defecto; Claude `tools: [Read,Grep,Glob]` + `permissionMode: 'dontAsk'` +
+  `settingSources: []`; Codex `sandbox: 'read-only'`). "Autenticado" = sesión del CLI
+  (para OpenCode: ≥1 upstream `connected`). `MINERVA_MOCK_AI=1` fuerza el mock de IA
+  (fixtures por el mismo pipeline) sin importar proveedor — el mecanismo para e2e
+  determinista. OpenRouter ya NO es proveedor directo (T59): sus modelos se usan
+  DENTRO de OpenCode (`opencode auth login`), y settings.json viejos migran solos.
+  - **Proveedor y modelo configurables** (Settings UI, engrane en la TitleBar):
+    catálogo por proveedor en `src/shared/ai-providers.ts` (OpenCode además refresca
+    modelos dinámicos vía `provider.list`). Precedencia: settings.json (userData) >
+    env `MINERVA_AI_PROVIDER`/`MINERVA_AI_MODEL` > default (`opencode/big-pickle`).
   - **Streaming**: SSE en main + protocolo de secciones **tagged**
     (`@@@SECTION kind=...`, `@@@MERMAID...@@@END_MERMAID`, `@@@SNIPPET...`) parseado
     incrementalmente por `StreamSectionParser`; progreso al renderer vía evento push
@@ -64,7 +74,13 @@ Regla de oro: **ninguna tarea pasa a `[x]` sin verificación del orquestador** �
   (re-navegar con solo el hash distinto es same-document: Chromium NO recarga).
 
 ### Frontera de seguridad (crítica)
-- Todo secreto (GitHub token, `OPENROUTER_API_KEY`) vive **solo** en `main`.
+- Todo secreto (GitHub token; las sesiones de los CLIs de IA viven en SUS stores,
+  `~/.claude`/`~/.codex`/`~/.local/share/opencode`, fuera de Minerva) vive **solo**
+  en `main`.
+- El **snapshot del PR es código hostil**: jamás ejecutarlo; solo lo leen las
+  herramientas enjauladas de los proveedores (deny de write/bash/red; symlinks
+  filtrados al extraer; `settingSources: []` en Claude para no cargar un CLAUDE.md
+  del snapshot).
 - El preload expone funciones concretas (`window.minerva.*`), nunca `ipcRenderer`
   crudo; los eventos push tienen un método concreto por evento (`onAnalysisProgress`).
 - Main valida payloads por canal (`src/main/ipc/validators.ts`).
@@ -81,14 +97,17 @@ src/
   main/
     index.ts        ventana principal, password-store, lifecycle
     auth/           device-flow, token-store (safeStorage), auth-manager
-    github/         service.ts (interfaz), real-service (Octokit), mock + fixtures
-    ai/             openrouter-service (SSE), stream-parser, prompts/, analysis-cache,
-                    diff-budget, section-mapper, env
+    github/         service.ts (interfaz), real-service (Octokit), mock + fixtures,
+                    snapshot-store (copia del PR por headSha + limpieza LRU)
+    ai/             stream-parser, prompts/, analysis-cache, analysis-prompt,
+                    diff-budget, analysis-timeouts, env; providers/ (opencode-runtime
+                    + opencode-service, claude-code-service, codex-*, cli-probe,
+                    registry, *-model-catalog)
     ipc/            register, handlers (cache-first), validators
     settings/       store.ts (settings.json en userData, escritura atómica)
     windows/        didactic-window, secure-web-preferences, external-link-guard
   preload/          index.ts → window.minerva.{system,auth,github,ai,settings,window,events}
-  shared/           ipc.ts (contrato único), types.ts, events.ts, ai-models.ts,
+  shared/           ipc.ts (contrato único), types.ts, events.ts, ai-providers.ts,
                     didactic-route.ts
   renderer/src/
     components/     layout/, pr-list/, pr-detail/, didactic/, settings/, ui/
@@ -126,7 +145,11 @@ scripts/            smoke-*.mjs (e2e vía CDP), screenshot-app.sh, debug-*.mjs
 - `npm run dev` — Electron con hot reload (main cambia ⇒ reinicio completo).
 - `npm run dev -- -- --remote-debugging-port=9222` — dev + CDP para las suites e2e.
 - `npm run build` / `npm run typecheck` / `npm run lint` / `npm test` (vitest).
-- `MINERVA_MOCK=1 npm run dev` — demo: PRs mock + IA real si hay key.
+- `MINERVA_MOCK=1 npm run dev` — demo: PRs mock + IA real del proveedor activo (si su
+  CLI está autenticado; si no, cae al mock de IA).
+- `MINERVA_MOCK=1 MINERVA_MOCK_AI=1 npm run dev` — demo/e2e 100% determinista: PRs
+  mock + IA mock forzada (desde F11 los proveedores son CLIs que suelen estar
+  logueados en dev — este flag es LA forma de pedir el mock a propósito).
 
 ## Verificación (obligatoria antes de dar algo por hecho)
 
@@ -139,7 +162,9 @@ scripts/            smoke-*.mjs (e2e vía CDP), screenshot-app.sh, debug-*.mjs
    - Espera señales inequívocas (botón "Re-analizar" habilitado), no textos que ya
      existen en el placeholder ("Resumen").
    - Con IA real las secciones varían por corrida: checks de snippet/diagrama con
-     fallback a otro PR.
+     fallback a otro PR. Para suites deterministas lanza la app con
+     `MINERVA_MOCK_AI=1` (fuerza el mock de IA); `smoke-settings` necesita IA real
+     de OpenCode para su paso de modelo inválido (se auto-skipea si no hay sesión).
    - Verifica **contenido**, no solo URLs o rects: `getBoundingClientRect` ignora el
      clipping (un visor colapsado a 0px "pasaba" los checks geométricos).
 3. **Verificación visual**: toda verificación de UI termina MIRANDO una captura:
