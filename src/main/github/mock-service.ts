@@ -94,10 +94,25 @@ export class MockGithubService implements GithubService {
     req: IpcRequest<'github:listPullRequests'>,
   ): Promise<IpcResponse<'github:listPullRequests'>> {
     await delay(LATENCY_MS.listPullRequests)
-    const all: PullRequestSummary[] = [...this.records.values()].map((record) => record.detail)
+    // Copia shallow por PR: el servicio real construye objetos frescos en cada
+    // fetch, y consumidores como el watcher (`pr-watcher.ts`) dependen de eso —
+    // su snapshot guarda lo devuelto acá, y si fuera el MISMO objeto que muta
+    // `postComment` (commentCount += 1), el diff entre ticks nunca vería nada.
+    const all: PullRequestSummary[] = [...this.records.values()].map((record) => ({
+      ...record.detail,
+    }))
+    // Filtro de estado (T51, F10): default 'open' (comportamiento previo).
+    // 'closed' incluye tanto `closed` como `merged` — la UI distingue con un
+    // badge (ver `PrListItem.tsx`); 'all' no filtra por estado.
+    const state = req.state ?? 'open'
+    const byState = all.filter((pr) => {
+      if (state === 'all') return true
+      if (state === 'closed') return pr.state === 'closed' || pr.state === 'merged'
+      return pr.state === 'open'
+    })
     const query = req.search?.trim().toLowerCase()
-    if (!query) return all
-    return all.filter(
+    if (!query) return byState
+    return byState.filter(
       (pr) =>
         pr.title.toLowerCase().includes(query) || pr.repo.fullName.toLowerCase().includes(query),
     )

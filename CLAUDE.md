@@ -171,6 +171,53 @@ scripts/            smoke-*.mjs (e2e vía CDP), screenshot-app.sh, debug-*.mjs
    `scripts/screenshot-app.sh <salida.png> [patrón-título]` (hyprctl + grim, no
    interactivo; 2º argumento para la ventana didáctica). No sirve con hyprlock activo.
 
+### Receta e2e paso a paso (shell de agente / sesión tty)
+
+El shell de un agente NO hereda la sesión gráfica de Hyprland: sin estos exports
+Electron muere con "Missing X server or $DISPLAY" y `hyprctl` con
+"HYPRLAND_INSTANCE_SIGNATURE not set". Receta completa, en orden:
+
+1. **Arrancar la app** (en background, log a archivo):
+
+   ```bash
+   WAYLAND_DISPLAY=wayland-1 DISPLAY=:0 \
+     MINERVA_MOCK=1 OPENROUTER_API_KEY= \
+     npm run dev -- -- --remote-debugging-port=9222 > /tmp/minerva-dev.log 2>&1 &
+   ```
+
+   - `WAYLAND_DISPLAY`/`DISPLAY`: los sockets reales están en
+     `/run/user/$(id -u)/` (`wayland-1`) y `/tmp/.X11-unix/` (`X0`) — verifica ahí
+     si estos valores no funcionan.
+   - `OPENROUTER_API_KEY=` (vacío) fuerza el mock de IA ⇒ suites deterministas.
+     Omítelo solo si la suite necesita IA real.
+   - `MINERVA_WATCH_INTERVAL_MS=1500` extra para `smoke-pr-list` (el caso del
+     watcher espera un push que con el default de 60s haría timeout).
+
+2. **Esperar el target CDP** (~10–15 s): `curl -s http://127.0.0.1:9222/json/list`
+   debe listar una `page` con `localhost:5173`. Recién entonces correr suites.
+
+3. **Correr las suites**: `node scripts/smoke-<suite>.mjs`. Si encadenas varias en
+   la misma sesión de app, haz `location.reload()` (vía CDP) entre suites: algunas
+   dejan estado global (p. ej. `smoke-search` deja "refunds" en el buscador y
+   `smoke-comments` no limpia al arrancar). El reload resetea el store zustand.
+
+4. **Captura** (verificación visual obligatoria):
+
+   ```bash
+   export WAYLAND_DISPLAY=wayland-1 \
+     HYPRLAND_INSTANCE_SIGNATURE=$(ls -t /run/user/$(id -u)/hypr/ | head -1)
+   scripts/screenshot-app.sh /tmp/captura.png
+   ```
+
+   La firma de Hyprland es el nombre del directorio de instancia más reciente en
+   `/run/user/$(id -u)/hypr/`. Después MIRA la captura (leer el PNG), no basta
+   con que el comando salga 0.
+
+5. **Matar la app**: `pkill -f "[e]lectron"` en un comando/llamada SEPARADO y
+   solo. Si la app es hija de tu propio shell (la arrancaste con `&` en esa
+   sesión), un compound command `pkill ...; git ...` muere entero con exit 144
+   antes de ejecutar lo que sigue — el truco del corchete no salva eso.
+
 ## Al terminar un cambio
 
 - Corre la verificación de arriba (al menos las suites afectadas).

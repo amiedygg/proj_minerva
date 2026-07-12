@@ -15,12 +15,13 @@ import type {
   DidacticAnalysis,
   DiffFile,
   PrComment,
+  PrStateFilter,
   PullRequestDetail,
   PullRequestSummary,
   RepoRef,
 } from './types'
 import type { AiModelOption, AiProviderId } from './ai-providers'
-import type { AnalysisProgressEvent } from './events'
+import type { AnalysisProgressEvent, PrListChangedEvent } from './events'
 
 export interface IpcContract {
   'minerva:ping': { req: void; res: string }
@@ -29,7 +30,26 @@ export interface IpcContract {
   'auth:startDeviceFlow': { req: void; res: AuthStatus }
   'auth:signOut': { req: void; res: AuthStatus }
 
-  'github:listPullRequests': { req: { search?: string }; res: PullRequestSummary[] }
+  /**
+   * `state` (T50, F10): filtro de estado (`PrStateFilter`, `./types.ts`),
+   * opcional — default `'open'` (comportamiento previo). La respuesta trae
+   * cada summary decorado con `unread` (`main/ipc/handlers.ts` contra
+   * `seen-store.ts`); los servicios `GithubService` no conocen ese campo.
+   */
+  'github:listPullRequests': {
+    req: { search?: string; state?: PrStateFilter }
+    res: PullRequestSummary[]
+  }
+  /**
+   * Sella el estado "visto" de un PR (T50/T51, F10) contra
+   * `main/github/seen-store.ts`: se llama al abrir el PR en el detalle, con
+   * el `updatedAt`/`commentCount` ACTUALES del summary (no valores futuros) —
+   * si luego el PR cambia, `computeUnread` vuelve a marcarlo no visto.
+   */
+  'github:markPrSeen': {
+    req: { prId: string; updatedAt: string; commentCount: number }
+    res: { ok: true }
+  }
   'github:getPullRequestDetail': {
     req: { repo: RepoRef; number: number }
     res: PullRequestDetail
@@ -161,6 +181,7 @@ export const IPC_CHANNELS = [
   'auth:startDeviceFlow',
   'auth:signOut',
   'github:listPullRequests',
+  'github:markPrSeen',
   'github:getPullRequestDetail',
   'github:getPullRequestFiles',
   'github:getCommentThreads',
@@ -218,6 +239,13 @@ type InvokeApi = {
  */
 interface EventsApi {
   onAnalysisProgress(callback: (payload: AnalysisProgressEvent) => void): () => void
+  /**
+   * Suscripción al watcher de PRs (T50/T51, F10): se dispara con los cambios
+   * detectados contra el snapshot anterior (`main/github/pr-watcher.ts`) —
+   * nunca en el primer tick (baseline silencioso). Mismo patrón que
+   * `onAnalysisProgress`: método concreto, no un `on(channel, cb)` genérico.
+   */
+  onPrListChanged(callback: (payload: PrListChangedEvent) => void): () => void
 }
 
 export type MinervaApi = InvokeApi & { events: EventsApi }

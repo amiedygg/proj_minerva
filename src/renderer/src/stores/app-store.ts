@@ -11,7 +11,12 @@
  * en vez de desestructurar el store completo, para no re-renderizar de más.
  */
 import { create } from 'zustand'
-import type { AiSettingsInfo, AuthStatus, PullRequestSummary } from '../../../shared/types'
+import type {
+  AiSettingsInfo,
+  AuthStatus,
+  PrStateFilter,
+  PullRequestSummary,
+} from '../../../shared/types'
 
 export type CenterTab = 'conversation' | 'files'
 export type DiffViewMode = 'split' | 'inline'
@@ -61,6 +66,13 @@ interface PendingThreadFocus {
 interface AppState {
   selectedPr: PullRequestSummary | null
   searchQuery: string
+  /**
+   * Filtro de estado de la lista de PRs (T52, F10): `'open'` por defecto
+   * (comportamiento previo). Vive SOLO en sesión — a diferencia de
+   * `didacticPanelWidth`, no se persiste en `localStorage` (decisión de
+   * diseño de PLAN.md: no hay razón para recordar "Cerrados" entre arranques).
+   */
+  prStateFilter: PrStateFilter
   centerTab: CenterTab
   didacticPanelOpen: boolean
   /** Ancho en px del panel didáctico acoplado (T23); se arrastra desde su borde izquierdo y persiste en `localStorage`. */
@@ -100,6 +112,7 @@ interface AppState {
 
   selectPr: (pr: PullRequestSummary | null) => void
   setSearchQuery: (query: string) => void
+  setPrStateFilter: (filter: PrStateFilter) => void
   setCenterTab: (tab: CenterTab) => void
   toggleDidacticPanel: () => void
   /** Fija el ancho del panel didáctico acoplado (clampeado y persistido); ver `clampDidacticPanelWidth`. */
@@ -121,6 +134,7 @@ interface AppState {
 export const useAppStore = create<AppState>((set) => ({
   selectedPr: null,
   searchQuery: '',
+  prStateFilter: 'open',
   centerTab: 'conversation',
   didacticPanelOpen: true,
   didacticPanelWidth: readInitialDidacticPanelWidth(),
@@ -149,6 +163,7 @@ export const useAppStore = create<AppState>((set) => ({
       pendingThreadFocus: null,
     }),
   setSearchQuery: (query) => set({ searchQuery: query }),
+  setPrStateFilter: (filter) => set({ prStateFilter: filter }),
   setCenterTab: (tab) => set({ centerTab: tab }),
   toggleDidacticPanel: () => set((state) => ({ didacticPanelOpen: !state.didacticPanelOpen })),
   setDidacticPanelWidth: (width) => {

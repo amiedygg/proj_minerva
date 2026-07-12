@@ -1,6 +1,11 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { IpcChannel, IpcRequest, IpcResponse, MinervaApi } from '../shared/ipc'
-import { MINERVA_EVENTS, type AnalysisProgressEvent } from '../shared/events'
+import {
+  MINERVA_EVENTS,
+  type AnalysisProgressEvent,
+  type PrChange,
+  type PrListChangedEvent,
+} from '../shared/events'
 
 /** Wrapper fino sobre `ipcRenderer.invoke` para un canal concreto del contrato. */
 function invoke<C extends IpcChannel>(channel: C) {
@@ -51,6 +56,52 @@ function onAnalysisProgress(callback: (payload: AnalysisProgressEvent) => void):
   return () => ipcRenderer.removeListener(MINERVA_EVENTS.analysisProgress, listener)
 }
 
+/** Guard de forma para un elemento individual de `PrListChangedEvent.changes`. */
+function isPrChange(value: unknown): value is PrChange {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  return (
+    (v.type === 'new_pr' ||
+      v.type === 'pr_closed' ||
+      v.type === 'pr_merged' ||
+      v.type === 'new_comments' ||
+      v.type === 'updated') &&
+    typeof v.prId === 'string' &&
+    typeof v.number === 'number' &&
+    typeof v.title === 'string' &&
+    typeof v.repo === 'object' &&
+    v.repo !== null
+  )
+}
+
+/**
+ * Guard mínimo de forma para el payload de `prListChanged` (T50, F10): no
+ * revalida cada campo de `RepoRef` (ya lo hizo el watcher en main), solo que
+ * `changes` es un array y cada elemento tiene la forma esperada de nivel
+ * superior — mismo criterio de defensa en profundidad que
+ * `isAnalysisProgressPayload`.
+ */
+function isPrListChangedPayload(value: unknown): value is PrListChangedEvent {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  return Array.isArray(v.changes) && v.changes.every(isPrChange)
+}
+
+/**
+ * Suscripción al watcher de PRs (T50/T51, F10). Mismo patrón que
+ * `onAnalysisProgress`: canal hardcodeado, guard de payload, devuelve la
+ * función de desuscripción de ESE listener.
+ */
+function onPrListChanged(callback: (payload: PrListChangedEvent) => void): () => void {
+  const listener = (_event: IpcRendererEvent, payload: unknown): void => {
+    if (isPrListChangedPayload(payload)) {
+      callback(payload)
+    }
+  }
+  ipcRenderer.on(MINERVA_EVENTS.prListChanged, listener)
+  return () => ipcRenderer.removeListener(MINERVA_EVENTS.prListChanged, listener)
+}
+
 const minervaApi = {
   system: {
     ping: invoke('minerva:ping'),
@@ -62,6 +113,7 @@ const minervaApi = {
   },
   github: {
     listPullRequests: invoke('github:listPullRequests'),
+    markPrSeen: invoke('github:markPrSeen'),
     getPullRequestDetail: invoke('github:getPullRequestDetail'),
     getPullRequestFiles: invoke('github:getPullRequestFiles'),
     getCommentThreads: invoke('github:getCommentThreads'),
@@ -86,6 +138,7 @@ const minervaApi = {
   },
   events: {
     onAnalysisProgress,
+    onPrListChanged,
   },
 } satisfies MinervaApi
 

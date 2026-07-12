@@ -1,6 +1,8 @@
 import { BrowserWindow } from 'electron'
 import { handle } from './register'
 import { createGithubService } from '../github'
+import { createPrWatcher, type PrWatcher } from '../github/pr-watcher'
+import { seenStore } from '../github/seen-store'
 import { createAiService } from '../ai'
 import { getAiSettingsInfo, getEffectiveAiSelection } from '../ai/env'
 import { getAiProviderStatusMap } from '../ai/providers/provider-status'
@@ -13,6 +15,7 @@ import {
   MINERVA_EVENTS,
   type AnalysisProgressEvent,
   type DraftDidacticSection,
+  type PrListChangedEvent,
 } from '../../shared/events'
 import type { IpcResponse } from '../../shared/ipc'
 import type { DidacticAnalysis, RepoRef } from '../../shared/types'
@@ -34,6 +37,29 @@ function broadcastProgress(payload: AnalysisProgressEvent): void {
       win.webContents.send(MINERVA_EVENTS.analysisProgress, payload)
     }
   }
+}
+
+/** Empuja los cambios detectados por el watcher de PRs (T51, F10) a TODAS las ventanas abiertas; mismo patrón que `broadcastProgress`. */
+function broadcastPrListChanged(payload: PrListChangedEvent): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send(MINERVA_EVENTS.prListChanged, payload)
+    }
+  }
+}
+
+/**
+ * Intervalo del watcher de PRs (T51, F10): `MINERVA_WATCH_INTERVAL_MS` lo
+ * overridea (los smokes e2e lo usan para no esperar 60s reales), `undefined`
+ * deja que `createPrWatcher` aplique su propio default. Solo se acepta un
+ * override si parsea a un entero positivo; cualquier otra cosa se ignora en
+ * vez de tumbar el arranque de la app.
+ */
+function resolveWatchIntervalMs(): number | undefined {
+  const raw = process.env.MINERVA_WATCH_INTERVAL_MS
+  if (!raw) return undefined
+  const parsed = Number.parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
 }
 
 /**
@@ -60,8 +86,12 @@ function broadcastProgress(payload: AnalysisProgressEvent): void {
  * `claude --version` con timeout corto) antes de decidir qué `AiService`
  * instanciar — quien llama debe `await`earlo, igual que ya hacía con
  * `authManager.init()` (ver `../index.ts`).
+ *
+ * Devuelve `{ stopPrWatcher }` (T51, F10) para que `../index.ts` pueda parar
+ * el watcher de PRs en `app.on('before-quit')` — sin esto el timer seguiría
+ * re-armándose después de que las ventanas ya se destruyeron.
  */
-export async function registerIpcHandlers(): Promise<void> {
+export async function registerIpcHandlers(): Promise<{ stopPrWatcher: () => void }> {
   handle('minerva:ping', () => 'pong from main @ electron ' + process.versions.electron)
 
   handle('auth:getStatus', () => authManager.getStatus())
@@ -69,11 +99,36 @@ export async function registerIpcHandlers(): Promise<void> {
   handle('auth:signOut', () => authManager.signOut())
 
   const githubService = createGithubService()
-  handle('github:listPullRequests', (req) => githubService.listPullRequests(req))
+  // `unread` (T51, F10) se decora ACÁ, en el handler — no en el servicio: los
+  // `GithubService` (real/mock) quedan puros y ajenos al estado de lectura,
+  // que vive en `seenStore` (`../github/seen-store.ts`). Spread inmutable
+  // (no se muta el summary que devuelve el servicio).
+  handle('github:listPullRequests', async (req) => {
+    const summaries = await githubService.listPullRequests(req)
+    return summaries.map((pr) => ({ ...pr, unread: seenStore.computeUnread(pr) }))
+  })
+  handle('github:markPrSeen', (req) => {
+    seenStore.markSeen(req.prId, { updatedAt: req.updatedAt, commentCount: req.commentCount })
+    return { ok: true as const }
+  })
   handle('github:getPullRequestDetail', (req) => githubService.getPullRequestDetail(req))
   handle('github:getPullRequestFiles', (req) => githubService.getPullRequestFiles(req))
   handle('github:getCommentThreads', (req) => githubService.getCommentThreads(req))
   handle('github:postComment', (req) => githubService.postComment(req))
+
+  // Watcher de PRs en background (T51, F10, `../github/pr-watcher.ts`): pide
+  // `listPullRequests({ state: 'all' })` a la MISMA instancia de
+  // `githubService` a intervalos regulares y empuja `prListChanged` cuando
+  // detecta cambios. Los summaries que diffea el watcher NO pasan por la
+  // decoración de `unread` de arriba (no la necesitan, solo comparan
+  // estado/updatedAt/commentCount entre dos snapshots). `start()` de
+  // inmediato; `stop()` la llama `../index.ts` en `before-quit`.
+  const prWatcher: PrWatcher = createPrWatcher({
+    list: () => githubService.listPullRequests({ state: 'all' }),
+    broadcast: broadcastPrListChanged,
+    intervalMs: resolveWatchIntervalMs(),
+  })
+  prWatcher.start()
 
   /**
    * Registro de análisis EN CURSO por PR (T22). Sin esto, dos solicitudes
@@ -267,4 +322,6 @@ export async function registerIpcHandlers(): Promise<void> {
   handle('window:openDidactic', (req) => {
     openDidacticWindow(req.repo, req.number, req.title)
   })
+
+  return { stopPrWatcher: () => prWatcher.stop() }
 }

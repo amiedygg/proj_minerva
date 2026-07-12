@@ -61,6 +61,82 @@ describe('payloadValidators', () => {
       expect(validate('x')).toBe(false)
       expect(validate(undefined)).toBe(false)
     })
+
+    it('acepta cada valor de state (T50)', () => {
+      expect(validate({ state: 'open' })).toBe(true)
+      expect(validate({ state: 'closed' })).toBe(true)
+      expect(validate({ state: 'all' })).toBe(true)
+    })
+
+    it('acepta state y search combinados', () => {
+      expect(validate({ search: 'design system', state: 'all' })).toBe(true)
+    })
+
+    it('rechaza un state desconocido', () => {
+      expect(validate({ state: 'merged' })).toBe(false)
+      expect(validate({ state: 'OPEN' })).toBe(false)
+    })
+
+    it('rechaza state que no es string', () => {
+      expect(validate({ state: 1 })).toBe(false)
+    })
+  })
+
+  describe('github:markPrSeen', () => {
+    const validate = payloadValidators['github:markPrSeen']
+    const base = { prId: 'PR_kwDOA1', updatedAt: '2026-07-11T10:00:00Z', commentCount: 3 }
+
+    it('acepta payload válido', () => {
+      expect(validate(base)).toBe(true)
+    })
+
+    it('acepta commentCount en 0', () => {
+      expect(validate({ ...base, commentCount: 0 })).toBe(true)
+    })
+
+    it('rechaza prId vacío', () => {
+      expect(validate({ ...base, prId: '' })).toBe(false)
+    })
+
+    it('rechaza prId > 200 chars', () => {
+      expect(validate({ ...base, prId: 'a'.repeat(201) })).toBe(false)
+    })
+
+    it('acepta prId justo en el límite (200)', () => {
+      expect(validate({ ...base, prId: 'a'.repeat(200) })).toBe(true)
+    })
+
+    it('rechaza updatedAt vacío', () => {
+      expect(validate({ ...base, updatedAt: '' })).toBe(false)
+    })
+
+    it('rechaza updatedAt > 64 chars', () => {
+      expect(validate({ ...base, updatedAt: 'a'.repeat(65) })).toBe(false)
+    })
+
+    it('acepta updatedAt justo en el límite (64)', () => {
+      expect(validate({ ...base, updatedAt: 'a'.repeat(64) })).toBe(true)
+    })
+
+    it('rechaza commentCount negativo o no entero', () => {
+      expect(validate({ ...base, commentCount: -1 })).toBe(false)
+      expect(validate({ ...base, commentCount: 1.5 })).toBe(false)
+    })
+
+    it('rechaza commentCount que no es number', () => {
+      expect(validate({ ...base, commentCount: '3' })).toBe(false)
+    })
+
+    it('rechaza claves desconocidas', () => {
+      expect(validate({ ...base, evil: true })).toBe(false)
+    })
+
+    it('rechaza payload incompleto o no-objeto', () => {
+      expect(validate({ prId: 'PR_kwDOA1' })).toBe(false)
+      expect(validate(undefined)).toBe(false)
+      expect(validate('x')).toBe(false)
+      expect(validate([])).toBe(false)
+    })
   })
 
   describe('github:getPullRequestDetail / Files / getCommentThreads / ai:analyzePullRequest / ai:getCachedAnalysis / ai:invalidateAnalysis / ai:getAnalysisState', () => {

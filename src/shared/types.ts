@@ -22,6 +22,27 @@ export type ReviewDecision = 'approved' | 'changes_requested' | 'review_required
 
 export type CiStatus = 'success' | 'failure' | 'pending' | null
 
+/**
+ * Filtro de estado para `github:listPullRequests` (T50, F10): `'open'` es el
+ * default (comportamiento actual, hoy hardcodeado en `real-service.ts`);
+ * `'closed'` incluye tanto cerrados como mergeados (la UI distingue con un
+ * badge, ver `PrListItem.tsx`); `'all'` no filtra por estado.
+ */
+export type PrStateFilter = 'open' | 'closed' | 'all'
+
+/**
+ * Estado de "visto" de un PR para la sidebar (T50/T51, F10), calculado por
+ * `main/github/seen-store.ts` contra el snapshot sellado la última vez que el
+ * usuario abrió el PR en el detalle: `isNew` (sin entrada sellada todavía),
+ * `hasUpdates` (`updatedAt` avanzó desde que se selló) y `hasNewComments`
+ * (`commentCount` subió desde que se selló).
+ */
+export interface PrUnread {
+  isNew: boolean
+  hasUpdates: boolean
+  hasNewComments: boolean
+}
+
 export interface PullRequestSummary {
   id: string
   number: number
@@ -47,6 +68,13 @@ export interface PullRequestSummary {
   additions: number
   deletions: number
   changedFiles: number
+  /**
+   * Estado de "visto" (T50/T51, F10). OPCIONAL a propósito: lo decora SOLO el
+   * handler IPC (`github:listPullRequests` en `main/ipc/handlers.ts`) contra
+   * `seen-store.ts` — los servicios `GithubService` (real/mock) devuelven el
+   * summary sin este campo, permanecen puros y ajenos al estado de lectura.
+   */
+  unread?: PrUnread
 }
 
 export interface PullRequestDetail extends PullRequestSummary {

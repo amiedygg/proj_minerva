@@ -1,14 +1,17 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
+import type { PullRequestSummary } from '../../../../shared/types'
 import type { RepoGroupData } from '../../lib/pr-filters'
 import { PrListItem } from './PrListItem'
 
 interface RepoGroupProps {
   group: RepoGroupData
+  /** Llamado al hacer click en un item (T52, F10): selecciona el PR y lo marca visto. */
+  onSelectPr: (pr: PullRequestSummary) => void
 }
 
 /** Header colapsable por repo (owner/name) + lista de PRs de ese repo. */
-export function RepoGroup({ group }: RepoGroupProps): React.JSX.Element {
+export function RepoGroup({ group, onSelectPr }: RepoGroupProps): React.JSX.Element {
   const [collapsed, setCollapsed] = useState(false)
 
   return (
@@ -29,7 +32,7 @@ export function RepoGroup({ group }: RepoGroupProps): React.JSX.Element {
         <ul>
           {group.pullRequests.map((pr) => (
             <li key={pr.id}>
-              <PrListItem pr={pr} />
+              <PrListItem pr={pr} onSelect={onSelectPr} />
             </li>
           ))}
         </ul>
