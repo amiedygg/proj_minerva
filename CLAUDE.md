@@ -37,7 +37,18 @@ Regla de oro: **ninguna tarea pasa a `[x]` sin verificación del orquestador** �
     `@theme` en `styles.css`) + Zustand.
 - **GitHub:** Octokit (GraphQL para listados, REST para acciones). Auth por **OAuth
   Device Flow** (Client ID público en `src/main/auth/config.ts`); el token se guarda
-  cifrado con `safeStorage` en userData. En desktops que Chromium no reconoce
+  cifrado con `safeStorage` en userData. **Desde F14 (v0.5.0) hay un segundo modo de
+  acceso, `gh-cli`** (toggle en Settings, `githubAccessMode` en settings.json): para
+  orgs enterprise con *OAuth app access restrictions* que bloquean la OAuth App de
+  Minerva pero permiten GitHub CLI. Es un **puente de token**: `main/auth/gh-cli-auth.ts`
+  obtiene el token con `execFile(gh, ['auth','token',...])` (probe TTL 5s, validado
+  contra `GET /user`) y los datos siguen por el mismo `RealGithubService`/Octokit;
+  `withGhCliTokenRetry` (`main/github/gh-retry.ts`) reintenta UNA vez ante 401
+  re-pidiendo el token a gh. El token de gh vive SOLO en memoria de main (Minerva
+  jamás lo persiste ni loguea); `signOut`/`startDeviceFlow` son no-op en modo gh
+  (JAMÁS `gh auth logout` — la sesión del CLI es del usuario). El spawn de gh usa
+  env crudo, NO `buildSanitizedSpawnEnv` (ese saneado borra `GH_TOKEN`/`GITHUB_TOKEN`
+  y es solo para CLIs de IA). En desktops que Chromium no reconoce
   (Hyprland/sway) `main/index.ts` fuerza `--password-store=gnome-libsecret` — sin eso
   `safeStorage` cae a `basic_text` y el token no persiste (re-login en cada arranque).
   `MINERVA_MOCK=1` activa la capa GitHub mock (universo "shopwave", 8 PRs) — solo

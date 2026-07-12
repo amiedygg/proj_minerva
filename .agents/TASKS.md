@@ -2631,7 +2631,7 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
     re-reintenta; errores no-auth pasan intactos.
   Aceptación: typecheck+lint+test verdes (incl. pr-watcher.test.ts intacto).
 
-- [ ] **T71. Renderer: auth UI consciente del modo**
+- [x] **T71. Renderer: auth UI consciente del modo**
   - `stores/app-store.ts` (~152): initial `authStatus: { mode: 'oauth', state:
     'signed_out' }`.
   - `hooks/use-auth.ts`: polling DECLARATIVO — un efecto sobre `[state, mode]`
@@ -2651,7 +2651,7 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   reset por entidad usar remount por `key`.
   Aceptación: typecheck+lint+test verdes.
 
-- [ ] **T72. Settings UI: sección "Acceso a GitHub"**
+- [x] **T72. Settings UI: sección "Acceso a GitHub"**
   - `hooks/use-settings.ts`: `setGithubAccessMode(mode): Promise<boolean>`
     (patrón `selectProvider`) + refresco inmediato de `auth:getStatus` al store
     (que TitleBar/Sidebar reaccionen sin esperar al polling).
@@ -2667,7 +2667,7 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   Aceptación: typecheck+lint+test verdes; el toggle persiste (verificable vía
   `window.minerva.settings.get()`).
 
-- [ ] **T73. Verificación integral F14 + suite e2e + docs + v0.5.0** (orquestador)
+- [x] **T73. Verificación integral F14 + suite e2e + docs + v0.5.0** (orquestador)
   - Nueva `scripts/smoke-github-mode.mjs` (app `MINERVA_MOCK=1 MINERVA_MOCK_AI=1`
     + CDP): sección visible, toggle oauth↔gh-cli con señales inequívocas,
     persistencia vía `settings.get()`, TitleBar en rama gh, restaurar `oauth` al
@@ -2678,3 +2678,48 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   - Captura MIRADA de TitleBar en modo gh + sección nueva.
   - `package.json` 0.5.0, README roadmap, CLAUDE.md (párrafo del modo gh),
     bitácora F14.
+
+### Cierre F14 (2026-07-12, orquestador)
+
+_Verificación integral (orquestador):_ typecheck/lint verdes, 649/649 tests
+(41 nuevos: gh-cli-auth 18, gh-retry 7, store/validators/env ampliados).
+Nueva `scripts/smoke-github-mode.mjs` 18/18 (x2 corridas seguidas,
+idempotente): sección en Settings, toggle oauth<->gh-cli VÍA UI con
+persistencia verificada, `auth:getStatus` en rama gh SIN token en el payload,
+TitleBar en rama gh, restauración a oauth. Regresión: `smoke-settings` 13/13
+(tras endurecerla, ver bitácora) y `smoke-pr-list` completa. Capturas MIRADAS:
+modal con la sección nueva (card gh "Activo" + guía + "Autenticado como
+edyggclevr vía gh") y TitleBar con badge "vía GitHub CLI" sin "Cerrar sesión".
+Revisión del agente electron-security-reviewer: sin hallazgos altos/medios
+(token confinado a main, canal con whitelist, execFile sin shell, sin rutas a
+gh auth logout/clearToken accidentales). **Prueba REAL del puente** (app sin
+MINERVA_MOCK, modo gh-cli): lista de PRs reales por GraphQL, detalle y diff de
+21 archivos por REST — todo con el token de gh; settings.json solo guarda el
+modo, 0 apariciones de token en logs. Versión 0.5.0 + README + CLAUDE.md.
+**F14 COMPLETA.**
+
+### Bitácora F14 — gotchas
+
+- **El token de `gh auth token` hereda la aprobación de la app "GitHub CLI"**:
+  GitHub autoriza por token + app emisora, nunca por cliente HTTP. Verificado
+  con curl crudo contra org privada (repos, GraphQL search de Minerva,
+  tarball 302). Si una org bloquea también GitHub CLI, `gh` tampoco
+  funcionaría — no hay caso donde el puente sea peor que gh.
+- **`smoke-settings` tenía una falla fantasma PREEXISTENTE (también en main)**,
+  dependiente del settings.json de la máquina: sus primeros pasos mutan
+  settings por IPC crudo (sin pasar por `useSettings`), el store zustand del
+  renderer queda VIEJO, y si el proveedor activo stale coincide con la card a
+  clickear, el click cae en el no-op de "card ya activa" (diseño F12) y la
+  activación nunca dispara. Endurecida en F14: `location.reload()` + sleep
+  antes del bloque de UI (regla que CLAUDE.md ya pedía entre suites; también
+  aplica DENTRO de una suite entre mutaciones IPC crudas y checks de UI).
+  `smoke-github-mode` nació con ese reload y con el toggle de VUELTA vía UI
+  (un `setGithubAccessMode` por IPC persiste bien pero el TitleBar no se
+  entera: el polling declarativo está apagado a propósito con gh signed_in).
+- **Los setters del settings store construyen el objeto persistido a mano**:
+  al agregar un campo top-level nuevo (githubAccessMode) hay que arrastrarlo
+  en TODOS los setters existentes o el próximo cambio de proveedor/modelo lo
+  borra en silencio. Cubierto con tests de "los otros setters no lo pisan".
+- **`AuthStatus.mode` requerido fue la decisión correcta**: el typecheck
+  encontró solo el initial del app-store como constructor extra — con campo
+  opcional, la UI habría tenido ramas gh sin discriminante confiable.

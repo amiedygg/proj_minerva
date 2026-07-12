@@ -203,6 +203,16 @@ try {
   // UI (F12, T62/T64): el engrane abre el modal REDISEÑADO — strip "En uso",
   // tabs por proveedor (role="tab", ver solo cambia la vista) y activación de
   // proveedor+modelo por click de card (sin radios ni botón Guardar).
+  //
+  // RELOAD OBLIGATORIO antes del bloque de UI (endurecido en F14): los pasos
+  // de arriba mutaron settings por IPC crudo, que NO actualiza el store
+  // zustand del renderer — el modal abriría con el proveedor activo VIEJO y,
+  // si ese proveedor viejo coincide con la card a clickear (depende del
+  // settings.json de la máquina), el click sería el no-op de "card ya
+  // activa" (diseño F12) y el check de activación fallaría fantasma. El
+  // reload re-sincroniza el store con lo persistido (regla CLAUDE.md).
+  await evaluate(`location.reload()`)
+  await sleep(3000)
   await evaluate(`
     (() => {
       const btn = Array.from(document.querySelectorAll('button')).find((b) =>
