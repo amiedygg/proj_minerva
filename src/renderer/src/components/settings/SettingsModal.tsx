@@ -1,43 +1,35 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { useAppStore } from '../../stores/app-store'
 import { useSettings } from '../../hooks/use-settings'
 import { useProviderStatus } from '../../hooks/use-provider-status'
+import type { AiProviderId } from '../../../../shared/ai-providers'
+import type { AiProviderStatus, AiSettingsInfo } from '../../../../shared/types'
 import { IconButton } from '../ui/IconButton'
-import { ModelPicker } from './ModelPicker'
-import { ProviderPicker } from './ProviderPicker'
+import { ActiveConfigSummary } from './ActiveConfigSummary'
+import { ProviderTabs } from './ProviderTabs'
+import { ProviderModelPanel } from './ProviderModelPanel'
 
 /**
- * Modal de settings (T12, reestructurado en T30 a proveedor+modelo): monta
- * `ProviderPicker` (proveedor activo + estado de login + acción de
- * configuración/login) y `ModelPicker` (modelo dentro del proveedor activo),
- * pensado para crecer con más secciones más adelante.
+ * Modal de settings (T12; rediseñado en T62/F12: tabs por proveedor + strip
+ * "En uso" en reemplazo de los radios de `ProviderPicker`/`ModelPicker`).
+ * Diagnóstico que motivó el rediseño (ver `PLAN.md` § F12, pedido de
+ * Edilson): con el diseño viejo nada enunciaba la config VIGENTE (el
+ * proveedor se deducía de qué radio estaba marcada, el modelo ACTIVO se
+ * confundía con el BORRADOR sin "Guardar" todavía) y para mirar los modelos
+ * de otro proveedor había que cambiar el proveedor activo — acá "ver" y
+ * "activar" son gestos distintos: las tabs solo cambian la vista, activar
+ * es clickear una card de modelo (`ProviderModelPanel`).
  *
  * `App.tsx` solo monta este componente mientras `settingsOpen` es `true`
- * (`{settingsOpen && <SettingsModal />}`): al cerrar, se desmonta por
+ * (`{settingsOpen && <SettingsModal />}`): al cerrar se desmonta por
  * completo, lo que resetea cualquier estado local (de este componente o de
- * sus hijos) de forma automática la próxima vez que se abra — el mismo
- * patrón de "resetear vía remount" que usa `DidacticPanel` con
- * `useDidacticAnalysis`. Los dos fetches iniciales (`settings:get`,
- * `ai:getProviderStatus`) se piden en paralelo, uno por hook.
+ * sus hijos, incluido `viewedProvider` en `SettingsModalBody`) de forma
+ * automática la próxima vez que se abra — el mismo patrón de "resetear vía
+ * remount" que usa `DidacticPanel` con `useDidacticAnalysis`.
  *
  * Cierra con Esc o con un clic fuera de la card (el overlay tiene el
- * `onClick`; la card detiene la propagación). El borrador de modelo vive en
- * `ModelPicker` como estado local: cerrar sin pulsar "Guardar" no aplica ese
- * cambio (el cambio de PROVEEDOR, en cambio, persiste al instante al
- * seleccionarlo, ver `ProviderPicker`).
- *
- * `ModelPicker` se monta con `key={info.provider}`: cambiar de proveedor
- * debe resetear su selección/borrador local en vez de arrastrar el estado
- * del proveedor anterior, y el remount-por-`key` es el patrón que este
- * repo usa para eso (en vez de un efecto de sincronización, prohibido por
- * el lint de hooks de este proyecto).
- *
- * Foco inicial: la primera radio-card de `ModelPicker` tiene `autoFocus`
- * (nativo de React, se aplica en el commit inicial). La card en sí es
- * `tabIndex={-1}` como respaldo focoable mientras `info` todavía carga (sin
- * radios que enfocar todavía) — no se fuerza `.focus()` desde un efecto para
- * no competir con ese `autoFocus`.
+ * `onClick`; la card detiene la propagación).
  */
 export function SettingsModal(): React.JSX.Element {
   const closeSettings = useAppStore((s) => s.closeSettings)
@@ -77,27 +69,73 @@ export function SettingsModal(): React.JSX.Element {
         {info === null ? (
           <p className="p-4 text-xs text-muted">Cargando…</p>
         ) : (
-          <div className="flex-1 overflow-y-auto p-4">
-            <ProviderPicker
-              info={info}
-              statuses={providerStatus.statuses}
-              statusLoading={providerStatus.loading}
-              statusError={providerStatus.error}
-              onRefetchStatus={providerStatus.refetch}
-              onSelectProvider={selectProvider}
-            />
-            <div className="border-t border-border pt-4">
-              <ModelPicker
-                key={info.provider}
-                info={info}
-                error={error}
-                onSave={(model) => saveModel(info.provider, model)}
-                onSetModelOption={setModelOption}
-              />
-            </div>
-          </div>
+          <SettingsModalBody
+            info={info}
+            error={error}
+            statuses={providerStatus.statuses}
+            statusLoading={providerStatus.loading}
+            onRefetchStatus={providerStatus.refetch}
+            selectProvider={selectProvider}
+            saveModel={saveModel}
+            setModelOption={setModelOption}
+          />
         )}
       </div>
     </div>
+  )
+}
+
+interface SettingsModalBodyProps {
+  info: AiSettingsInfo
+  error: string | null
+  statuses: Record<AiProviderId, AiProviderStatus> | null
+  statusLoading: boolean
+  onRefetchStatus: () => void
+  selectProvider: (provider: AiProviderId) => Promise<boolean>
+  saveModel: (provider: AiProviderId, model: string) => Promise<boolean>
+  setModelOption: (provider: AiProviderId, optionId: string, value: string) => Promise<boolean>
+}
+
+/**
+ * Cuerpo del modal, montado SOLO cuando `info` ya cargó: acá vive
+ * `viewedProvider`, qué proveedor están VIENDO las tabs (independiente del
+ * proveedor ACTIVO, `info.provider`). Vive en este componente hijo — no en
+ * `SettingsModal` — a propósito: `SettingsModal` recién lo monta cuando
+ * `info !== null`, así el lazy initializer `useState(info.provider)` siempre
+ * arranca en el proveedor activo real, sin necesitar un efecto de
+ * sincronización para "corregirlo" cuando `info` termina de cargar
+ * (antipatrón que el lint react-hooks de este repo prohíbe).
+ */
+function SettingsModalBody({
+  info,
+  error,
+  statuses,
+  statusLoading,
+  onRefetchStatus,
+  selectProvider,
+  saveModel,
+  setModelOption,
+}: SettingsModalBodyProps): React.JSX.Element {
+  const [viewedProvider, setViewedProvider] = useState<AiProviderId>(info.provider)
+
+  return (
+    <>
+      <ActiveConfigSummary info={info} statuses={statuses} />
+      <ProviderTabs info={info} statuses={statuses} viewed={viewedProvider} onChange={setViewedProvider} />
+      <div className="flex-1 overflow-y-auto">
+        <ProviderModelPanel
+          key={viewedProvider}
+          info={info}
+          viewedProvider={viewedProvider}
+          statuses={statuses}
+          statusLoading={statusLoading}
+          error={error}
+          onRefetchStatus={onRefetchStatus}
+          saveModel={saveModel}
+          selectProvider={selectProvider}
+          setModelOption={setModelOption}
+        />
+      </div>
+    </>
   )
 }
