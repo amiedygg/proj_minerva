@@ -177,6 +177,20 @@ export async function registerIpcHandlers(): Promise<{ stopPrWatcher: () => void
         // NUEVO (los cache/in-flight hits retornan antes), y `createAiService`
         // consulta el probe de login ya cacheado (TTL corto), así que el costo
         // por llamada es mínimo.
+        // El sello `generatedWith` se captura ACÁ, al arrancar, no al terminar
+        // (T65, F12): los servicios leen la selección efectiva UNA vez al
+        // inicio de su `analyzePullRequest` (opencode-service.ts:215,
+        // claude-code-service.ts:182, codex-service.ts:170), así que un cambio
+        // de Settings a mitad de un análisis (30-60s con proveedores
+        // agénticos) no afecta la generación en vuelo — pero sellar con
+        // `getEffectiveAiSelection()` DESPUÉS del await hacía mentir a la
+        // metadata: un análisis generado por opencode/big-pickle quedaba
+        // cacheado/persistido como si lo hubiera hecho la config nueva
+        // (verificado empíricamente en F12; es la variante DURANTE del mismo
+        // problema que T41 arregló para cambios POSTERIORES al análisis).
+        // Queda una ventana teórica de milisegundos entre esta captura y la
+        // lectura interna del servicio — irrelevante frente a la de 30-60s.
+        const selectionAtStart = getEffectiveAiSelection()
         const aiService = await createAiService(githubService)
         const generated = await aiService.analyzePullRequest(req, {
           onProgress: (sections, meta) => {
@@ -204,8 +218,9 @@ export async function registerIpcHandlers(): Promise<{ stopPrWatcher: () => void
         // Sellado (T39/T40): el `AiService` produce `GeneratedAnalysis` (sin
         // `headSha`/`generatedWith`, ver `../ai/service.ts`); acá se enriquece
         // a `DidacticAnalysis` completo antes de cachear/persistir/devolver.
-        // `generatedWith` sale de `getEffectiveAiSelection()` (síncrono, sin
-        // I/O) — ya es la selección REAL con la que se generó este análisis.
+        // `generatedWith` usa `selectionAtStart` (capturada ANTES de crear el
+        // servicio, ver arriba) — la selección REAL con la que se generó,
+        // aunque Settings haya cambiado durante el análisis (T65).
         // `headSha` (T40) sale de un fetch aparte, barato pero con I/O, del
         // detalle del PR — envuelto en su PROPIO try/catch: si fallara (red,
         // rate limit, etc.) NO debe tumbar un análisis ya generado, se cae a
@@ -221,7 +236,7 @@ export async function registerIpcHandlers(): Promise<{ stopPrWatcher: () => void
         const result: DidacticAnalysis = {
           ...generated,
           headSha,
-          generatedWith: getEffectiveAiSelection(),
+          generatedWith: selectionAtStart,
         }
 
         analysisCache.set(req.repo, req.number, result)

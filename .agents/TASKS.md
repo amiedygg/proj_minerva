@@ -2449,3 +2449,23 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   smoke-settings, que snapshotea y restaura en `finally`). Detectado al verificar
   el estado final de la sesion; restaurado a mano. Deuda: darle a esa suite el
   mismo patron snapshot+finally.
+- [x] **T65. Sellado de `generatedWith` capturado al INICIO del análisis (fix de carrera)**
+  Pregunta de Edilson: ¿cambiar CLI/modelo/esfuerzo con un análisis en vuelo lo
+  afecta? Verificado en código Y empíricamente (análisis real de opencode/big-pickle
+  + cambio a claude-code/haiku/low a los ~6s): la GENERACIÓN es inmune — proveedor
+  resuelto al crear el servicio por análisis (`handlers.ts`) y modelo/esfuerzo
+  leídos UNA vez al inicio del `analyzePullRequest` de cada servicio
+  (opencode:215/claude:182/codex:170); los re-clicks caen en el registro in-flight.
+  PERO el sello `generatedWith` se evaluaba AL TERMINAR con la selección vigente:
+  el análisis quedó cacheado/persistido como si lo hubiera generado la config
+  nueva (la variante DURANTE del problema que T41 arregló para cambios
+  POSTERIORES; F12 agranda la ventana porque activar es 1 click y lo agéntico
+  tarda 30-60s). Fix directo del orquestador: capturar `getEffectiveAiSelection()`
+  antes de `createAiService` y sellar con esa constante.
+  _Verificación:_ typecheck/lint/585 tests verdes; experimento repetido con el fix
+  → sello `opencode/big-pickle` correcto (resultado y cache) pese al cambio en
+  vuelo; smoke-f9-ui (suite del sellado) OK con MINERVA_MOCK_AI=1 — corrida antes
+  con IA real dio un FAIL fantasma en "análisis terminó": el waiter de 60s quedó
+  corto para una corrida agéntica lenta, los checks del sello igual pasaron
+  (gotcha: esa suite es determinista SOLO con MINERVA_MOCK_AI=1, como documenta
+  su propio comentario).
