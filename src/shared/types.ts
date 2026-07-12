@@ -2,7 +2,7 @@
  * Modelos de dominio compartidos entre `main` y `renderer`.
  * Solo tipos (interfaces / type aliases) — sin clases, sin lógica.
  */
-import type { DraftDidacticSection } from './events'
+import type { AnalysisActivityItem, DraftDidacticSection } from './events'
 import type { AiProviderCatalogEntry, AiProviderId } from './ai-providers'
 
 export interface RepoRef {
@@ -209,10 +209,15 @@ export interface DidacticAnalysis extends GeneratedAnalysis {
  * `./events.ts`, tipo-only para no crear un ciclo de imports en runtime: ese
  * archivo a su vez importa tipos de este) porque un análisis en curso puede
  * tener secciones a medio cerrar, igual que en `AnalysisProgressEvent`.
+ * `activity` (F13, aditivo/opcional) es el buffer rodante del mini-log de
+ * actividad del harness en ese instante — mismo tipo y semántica que
+ * `AnalysisProgressEvent.activity` — para que una ventana que se engancha
+ * tarde pinte "qué está pasando" de inmediato en vez de esperar al próximo
+ * evento de progreso.
  */
 export type AnalysisState =
   | { status: 'idle' }
-  | { status: 'streaming'; sections: DraftDidacticSection[] }
+  | { status: 'streaming'; sections: DraftDidacticSection[]; activity?: AnalysisActivityItem[] }
   | { status: 'cached'; analysis: DidacticAnalysis }
 
 /**

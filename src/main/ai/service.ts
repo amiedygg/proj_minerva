@@ -34,7 +34,7 @@
  */
 import type { IpcRequest } from '../../shared/ipc'
 import type { GeneratedAnalysis } from '../../shared/types'
-import type { DraftDidacticSection } from '../../shared/events'
+import type { AnalysisActivityItem, DraftDidacticSection } from '../../shared/events'
 
 export interface AnalyzeProgressMeta {
   /** `true` en la última llamada a `onProgress`: el análisis ya terminó (con éxito). */
@@ -46,9 +46,20 @@ export interface AnalyzeProgressMeta {
    * (`./providers/{claude-code,codex,opencode}-service.ts`) lo pasan en cada
    * llamada intermedia; la llamada FINAL (`done: true`) lo omite a propósito
    * (decisión T60: `sections` ya es la fuente de verdad en ese punto, no
-   * hace falta distinguir fase). Ausente en el `MockAiService`.
+   * hace falta distinguir fase). Desde F13 el `MockAiService` TAMBIÉN lo
+   * emite (antes lo omitía) — ver el comentario de
+   * `AnalysisProgressEvent.phase` en `../../shared/events.ts`.
    */
   phase?: 'exploring' | 'writing'
+  /**
+   * Mini-log de actividad del harness (F13): mismo campo/semántica que
+   * `AnalysisProgressEvent.activity` (`../../shared/events.ts`, comentario
+   * completo ahí). Los proveedores lo llenan con
+   * `createActivityTracker().buffer()` (`./activity-tracker.ts`) en cada
+   * llamada intermedia; la FINAL (`done: true`) lo omite — es efímero, nunca
+   * forma parte del análisis cacheado.
+   */
+  activity?: AnalysisActivityItem[]
 }
 
 export type AnalyzeProgressCallback = (

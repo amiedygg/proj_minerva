@@ -2469,3 +2469,73 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   corto para una corrida agéntica lenta, los checks del sello igual pasaron
   (gotcha: esa suite es determinista SOLO con MINERVA_MOCK_AI=1, como documenta
   su propio comentario).
+
+## F13 — Mini-log de actividad del harness en el panel didáctico (2026-07-12)
+
+> Pedido de Edilson: mientras un análisis corre, el panel didáctico debe dar
+> feedback SUTIL de lo que el harness hace por dentro (tool calls, razonamiento).
+> Investigado t3code (pingdotgg/t3code) como referencia: colapso por identidad
+> (running→done actualiza la misma fila), labels tersos derivados
+> (`deriveToolActivityPresentation`), historial plegado. Decisiones de UX
+> acordadas: mini-log de últimas ≤5 acciones (no línea única ni log expandible),
+> visible también en fase 'writing' (franja sobre las secciones), razonamiento
+> como "Pensando…" genérico (NUNCA el texto: prompt injection desde el snapshot).
+
+- [x] **T66. Mini-log de actividad end-to-end (tipos + tracker + 3 proveedores + mock + UI + e2e)**
+  Implementado por el orquestador en una sola pasada (plan aprobado por Edilson):
+  - `shared/events.ts`: `AnalysisActivityKind`/`AnalysisActivityItem` +
+    `AnalysisProgressEvent.activity?` (buffer RODANTE completo en cada evento
+    intermedio, no deltas: late-attach gratis y throttle inofensivo); variante
+    `streaming` de `AnalysisState` (`shared/types.ts`) y `AnalyzeProgressMeta`
+    (`main/ai/service.ts`) ganan el mismo campo aditivo.
+  - Nuevo `main/ai/activity-tracker.ts` (puro, estilo throttle.ts): buffer ≤5 con
+    colapso por id, labels en español derivados en main (`deriveActivityLabel`) y
+    saneo en un solo lugar (`sanitizeDetail`: control chars, whitespace, truncado
+    64, rutas relativizadas al snapshotDir). EDGES SIN THROTTLE (begin/complete/
+    fail/primer thinking emiten onProgress directo — el createThrottle es
+    leading-edge sin trailing flush, un edge tragado quedaría invisible);
+    refinamientos viajan con la próxima emisión. 15 tests propios.
+  - Proveedores: Claude (content_block_start tool_use + input_json_delta
+    acumulado por `index` con cap 4KB + thinking_delta), OpenCode
+    (ToolPart begin/complete/fail por state.status + ReasoningPart; con filtro
+    de sesión NUEVO en `message.part.updated` — sin él un análisis concurrente
+    contaminaría el feed), Codex (item/started|completed con sondeo defensivo de
+    detalle + item/reasoning/textDelta ignorando el delta). Tests por proveedor
+    (colapso, labels, "Pensando…" único, terminal sin activity, filtro sesión).
+  - Handler: `activityBox` junto a snapshotBox, getter vivo en inFlightAnalyses,
+    `ai:getAnalysisState` streaming devuelve `activity` (late-attach). Preload:
+    guard aditivo `isActivityItem` (patrón `phase`). NADA toca AnalysisCache.
+  - **Cambio de contrato T60**: el MOCK ahora SÍ emite `phase` + preludio
+    guionado de actividad (4 pasos × 150ms por el tracker REAL, luego chunks con
+    'writing') — ÚNICA vía e2e determinista; doc comments actualizados en
+    events.ts/service.ts. Suma ~600ms al mock (inocuo para smoke-streaming).
+  - Renderer: `activity` en use-didactic-analysis (attach + local + limpieza en
+    terminal SIEMPRE), nuevo `HarnessActivityLog.tsx` (glifo por status, opacidad
+    decreciente, aria-live) en la rama skeleton Y como franja sobre las secciones
+    en 'writing'.
+  _Verificación (orquestador):_ typecheck/lint verdes, 608/608 tests; nueva
+  `scripts/smoke-harness-activity.mjs` 11/11 (wire + colapso + late-attach + UI
+  en ambas fases); regresión smoke-streaming 6/6 y smoke-didactic 13/13;
+  capturas MIRADAS: skeleton 'exploring' con "Listó la estructura / Leyendo
+  src/api/routes.ts" bajo el spinner, y franja con las filas cerradas sobre la
+  card Resumen en 'writing'. **F13 COMPLETA.**
+
+### Bitácora F13 — gotchas
+
+- **Claude correlaciona los deltas de tool-use por `index`, no por id de bloque**:
+  `content_block_start` trae `{id, name}` pero los `input_json_delta` solo traen
+  `index` — hace falta un `Map<index, {id, name, json}>` hasta el
+  `content_block_stop`.
+- **La rama `message.part.updated` de OpenCode NO filtraba por sesión** (era
+  inocuo cuando solo alimentaba `partTypeById`): al colgarle actividad hubo que
+  filtrar por `sessionID` o un análisis concurrente en el server compartido
+  cruzaría sus tool calls al feed ajeno. El test del fixture minimalista
+  (`partUpdated` sin `state`/`callID`) además obligó a guards defensivos: la
+  forma real del wire manda, un part incompleto se ignora en vez de reventar.
+- **Escapes unicode (estilo "backslash-u0000") en código generado por agente
+  pueden colarse como BYTES de control literales** en el archivo escrito (un NUL
+  en el fuente rompe grep/eslint de formas raras). Si un archivo recién escrito
+  se comporta raro, verificar a nivel de bytes con python3 y parchear.
+- **El screensaver de omarchy tapa las capturas**: `screenshot-app.sh` sale 0
+  pero el PNG es negro. `hyprctl clients` lo delata
+  (`org.omarchy.screensaver` encima); cerrarlo y recapturar.

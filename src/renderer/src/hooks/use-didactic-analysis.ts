@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DidacticAnalysis, RepoRef } from '../../../shared/types'
-import type { DraftDidacticSection } from '../../../shared/events'
+import type { AnalysisActivityItem, DraftDidacticSection } from '../../../shared/events'
 
 interface DidacticAnalysisTarget {
   repo: RepoRef
@@ -26,6 +26,14 @@ interface UseDidacticAnalysisResult {
    * "generando contenido" (ver `DidacticAnalysisArea`).
    */
   phase: 'exploring' | 'writing' | null
+  /**
+   * Mini-log de actividad del harness (F13, `AnalysisProgressEvent.activity`):
+   * buffer rodante con las últimas acciones internas del agente, `null`
+   * cuando no hay análisis en curso (o el proveedor no lo emite). Los labels
+   * vienen YA derivados y saneados desde main — se pintan tal cual. Efímero:
+   * el evento terminal (`done: true`) lo limpia SIEMPRE, con éxito o error.
+   */
+  activity: AnalysisActivityItem[] | null
   /** `true` mientras se consulta `ai:getAnalysisState` al montar (ver el efecto de "attach" más abajo). */
   checkingCache: boolean
   loading: boolean
@@ -112,6 +120,7 @@ export function useDidacticAnalysis(target: DidacticAnalysisTarget): UseDidactic
   const [analysis, setAnalysis] = useState<DidacticAnalysis | null>(null)
   const [streamingSections, setStreamingSections] = useState<DraftDidacticSection[] | null>(null)
   const [phase, setPhase] = useState<'exploring' | 'writing' | null>(null)
+  const [activity, setActivity] = useState<AnalysisActivityItem[] | null>(null)
   const [checkingCache, setCheckingCache] = useState(true)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -157,9 +166,12 @@ export function useDidacticAnalysis(target: DidacticAnalysisTarget): UseDidactic
         setError(null)
         setStreamingSections(event.sections)
         setPhase(event.phase ?? null)
+        setActivity(event.activity ?? null)
         return
       }
 
+      // Terminal (éxito o error): el mini-log es efímero, desaparece SIEMPRE.
+      setActivity(null)
       if (event.error) {
         setError(event.error)
         return
@@ -199,6 +211,10 @@ export function useDidacticAnalysis(target: DidacticAnalysisTarget): UseDidactic
           // Mismo criterio: si ya llegó un chunk por el listener permanente,
           // ese snapshot es más nuevo que el de esta respuesta.
           setStreamingSections((prev) => prev ?? state.sections)
+          // Late-attach del mini-log (F13): el estado in-flight de main trae
+          // el buffer actual — así esta superficie pinta "qué está pasando"
+          // de inmediato en vez de esperar al próximo evento de actividad.
+          setActivity((prev) => prev ?? state.activity ?? null)
         }
         // `idle`: no hay nada que mostrar todavía, se queda en el
         // placeholder; si un análisis arranca después en otra superficie,
@@ -228,6 +244,7 @@ export function useDidacticAnalysis(target: DidacticAnalysisTarget): UseDidactic
     setError(null)
     setStreamingSections(null)
     setPhase(null)
+    setActivity(null)
     // Limpia también el resultado viejo: la precedencia de render es
     // `analysis > streamingSections`, así que sin esto un re-análisis
     // streamearía invisible detrás del contenido anterior y el swap final
@@ -246,6 +263,7 @@ export function useDidacticAnalysis(target: DidacticAnalysisTarget): UseDidactic
       }
       setStreamingSections(event.sections)
       setPhase(event.phase ?? null)
+      setActivity(event.done ? null : (event.activity ?? null))
     })
 
     void (async () => {
@@ -257,6 +275,7 @@ export function useDidacticAnalysis(target: DidacticAnalysisTarget): UseDidactic
         if (requestSeq.current === seq) {
           setAnalysis(result)
           setStreamingSections(null)
+          setActivity(null)
         }
       } catch (err: unknown) {
         if (requestSeq.current === seq) setError(toErrorMessage(err))
@@ -286,5 +305,15 @@ export function useDidacticAnalysis(target: DidacticAnalysisTarget): UseDidactic
     // eslint-disable-next-line react-hooks/exhaustive-deps -- se depende de campos primitivos de `target`, no de su identidad de objeto.
   }, [target.repo.owner, target.repo.name, target.number, analyze])
 
-  return { analysis, streamingSections, phase, checkingCache, loading, error, analyze, reanalyze }
+  return {
+    analysis,
+    streamingSections,
+    phase,
+    activity,
+    checkingCache,
+    loading,
+    error,
+    analyze,
+    reanalyze,
+  }
 }

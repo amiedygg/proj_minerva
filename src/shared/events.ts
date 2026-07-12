@@ -46,6 +46,33 @@ export type DraftDidacticSection =
   | ({ kind: 'endpoint'; snippets: DidacticSnippet[] } & DraftSectionCommon)
   | ({ kind: 'schema'; mermaid?: string } & DraftSectionCommon)
 
+/**
+ * Verbo canónico de una acción interna del harness agéntico (F13): a qué
+ * "familia" pertenece la herramienta que el modelo está usando sobre el
+ * snapshot del PR. Cada proveedor mapea sus nombres propios a este union
+ * (Claude `Read`/`Grep`/`Glob`, OpenCode `read`/`grep`/`glob`/`list`, Codex
+ * `fileRead`/`webSearch`/...); `thinking` cubre los deltas de razonamiento y
+ * `tool` es el cajón genérico para herramientas no reconocidas.
+ */
+export type AnalysisActivityKind = 'read' | 'search' | 'list' | 'thinking' | 'tool'
+
+/**
+ * Una entrada del mini-log de actividad del harness (F13). El renderer la
+ * pinta tal cual: `label` ya viene derivado en `main` (en español) y SANEADO
+ * (`src/main/ai/activity-tracker.ts`) — los detalles (rutas, patrones) salen
+ * del snapshot hostil del PR, así que se truncan y se les quitan caracteres
+ * de control ANTES de cruzar el IPC; el renderer nunca deriva texto por su
+ * cuenta. `id` es estable por llamada de herramienta: una fila pasa de
+ * `running` a `done`/`error` EN EL MISMO LUGAR (colapso por identidad, nunca
+ * se duplica una acción como dos filas).
+ */
+export interface AnalysisActivityItem {
+  id: string
+  kind: AnalysisActivityKind
+  label: string
+  status: 'running' | 'done' | 'error'
+}
+
 export interface AnalysisProgressEvent {
   repo: RepoRef
   number: number
@@ -74,14 +101,28 @@ export interface AnalysisProgressEvent {
    * texto que entra al `StreamSectionParser` (el agente está usando
    * herramientas de solo lectura para explorar el snapshot del PR, sin
    * texto todavía); `'writing'` desde ese primer delta en adelante (ya está
-   * redactando secciones). Campo ADITIVO: ausente en el `MockAiService`
-   * (`../main/ai/mock-service.ts`, sin cambios) y en el evento TERMINAL
-   * (`done: true`) de cualquier proveedor — para ese momento `sections` ya
-   * es la fuente de verdad, no hace falta distinguir fase. Ver
+   * redactando secciones). Campo ADITIVO: desde F13 el `MockAiService`
+   * (`../main/ai/mock-service.ts`) TAMBIÉN lo emite (preludio guionado en
+   * `'exploring'`, chunks de texto en `'writing'`) para que las suites e2e
+   * con `MINERVA_MOCK_AI=1` puedan ejercitar el mini-log de actividad de
+   * forma determinista — hasta T60 el mock lo omitía. Sigue ausente en el
+   * evento TERMINAL (`done: true`) de cualquier proveedor — para ese momento
+   * `sections` ya es la fuente de verdad, no hace falta distinguir fase. Ver
    * `AnalyzeProgressMeta` (`../main/ai/service.ts`) para el mismo campo del
    * lado de los `AiService`.
    */
   phase?: 'exploring' | 'writing'
+  /**
+   * Mini-log de actividad del harness (F13): buffer RODANTE con las últimas
+   * ≤5 acciones internas del agente (tool calls sobre el snapshot +
+   * "Pensando…"). Viaja COMPLETO en cada evento intermedio (no deltas): una
+   * ventana que se engancha a mitad de análisis recibe el estado íntegro con
+   * el primer evento que vea, y un evento perdido solo retrasa la vista,
+   * nunca la corrompe. EFÍMERO por diseño: ausente en el evento TERMINAL
+   * (`done: true`) y jamás se cachea/persiste (`analysis-cache.ts` ni lo
+   * conoce) — es feedback de "qué está pasando ahora", no parte del análisis.
+   */
+  activity?: AnalysisActivityItem[]
 }
 
 /**

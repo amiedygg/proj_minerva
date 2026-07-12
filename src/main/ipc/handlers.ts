@@ -13,6 +13,7 @@ import { authManager } from '../auth/auth-manager'
 import { openDidacticWindow } from '../windows/didactic-window'
 import {
   MINERVA_EVENTS,
+  type AnalysisActivityItem,
   type AnalysisProgressEvent,
   type DraftDidacticSection,
   type PrListChangedEvent,
@@ -142,7 +143,12 @@ export async function registerIpcHandlers(): Promise<{ stopPrWatcher: () => void
    */
   const inFlightAnalyses = new Map<
     string,
-    { promise: Promise<IpcResponse<'ai:analyzePullRequest'>>; snapshot: DraftDidacticSection[] }
+    {
+      promise: Promise<IpcResponse<'ai:analyzePullRequest'>>
+      snapshot: DraftDidacticSection[]
+      /** Buffer rodante del mini-log de actividad (F13), mismo criterio de getter vivo que `snapshot`. */
+      activity: AnalysisActivityItem[]
+    }
   >()
 
   handle('ai:analyzePullRequest', (req) => {
@@ -166,6 +172,9 @@ export async function registerIpcHandlers(): Promise<{ stopPrWatcher: () => void
     // registrarse en el Map) — mutar un objeto que ya existe evita cualquier
     // orden de inicialización delicado.
     const snapshotBox: { current: DraftDidacticSection[] } = { current: [] }
+    // Mismo criterio que `snapshotBox` pero para el mini-log de actividad
+    // del harness (F13): caja mutable declarada antes de arrancar.
+    const activityBox: { current: AnalysisActivityItem[] } = { current: [] }
 
     const promise = (async (): Promise<IpcResponse<'ai:analyzePullRequest'>> => {
       try {
@@ -202,15 +211,18 @@ export async function registerIpcHandlers(): Promise<{ stopPrWatcher: () => void
             // enganchada al streaming no debe ver nunca un "terminó" que
             // todavía no se puede leer de `ai:getCachedAnalysis`).
             if (meta.done) return
-            // `meta.phase` (T60): "exploring"/"writing" para proveedores
-            // agénticos, `undefined` para el mock — se propaga tal cual, sin
-            // interpretarlo acá.
+            // `meta.phase` (T60) y `meta.activity` (F13) se propagan tal
+            // cual, sin interpretarlos acá — main solo transporta; derivar
+            // labels es cosa del tracker en el AiService, pintarlos es cosa
+            // del renderer.
+            if (meta.activity) activityBox.current = meta.activity
             broadcastProgress({
               repo: req.repo,
               number: req.number,
               sections,
               done: false,
               phase: meta.phase,
+              activity: meta.activity,
             })
           },
         })
@@ -273,6 +285,9 @@ export async function registerIpcHandlers(): Promise<{ stopPrWatcher: () => void
       get snapshot() {
         return snapshotBox.current
       },
+      get activity() {
+        return activityBox.current
+      },
     })
 
     return promise
@@ -290,7 +305,12 @@ export async function registerIpcHandlers(): Promise<{ stopPrWatcher: () => void
     if (cached) return { status: 'cached' as const, analysis: cached }
 
     const inFlight = inFlightAnalyses.get(prKey(req.repo, req.number))
-    if (inFlight) return { status: 'streaming' as const, sections: inFlight.snapshot }
+    if (inFlight)
+      return {
+        status: 'streaming' as const,
+        sections: inFlight.snapshot,
+        activity: inFlight.activity,
+      }
 
     return { status: 'idle' as const }
   })

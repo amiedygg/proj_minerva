@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { IpcChannel, IpcRequest, IpcResponse, MinervaApi } from '../shared/ipc'
 import {
   MINERVA_EVENTS,
+  type AnalysisActivityItem,
   type AnalysisProgressEvent,
   type PrChange,
   type PrListChangedEvent,
@@ -33,8 +34,28 @@ function isAnalysisProgressPayload(value: unknown): value is AnalysisProgressEve
     typeof v.done === 'boolean' &&
     (v.error === undefined || typeof v.error === 'string') &&
     // `phase` (T60): campo ADITIVO opcional, mismo criterio que `error` —
-    // ausente (mock/evento terminal) o uno de los dos valores válidos.
-    (v.phase === undefined || v.phase === 'exploring' || v.phase === 'writing')
+    // ausente (evento terminal) o uno de los dos valores válidos.
+    (v.phase === undefined || v.phase === 'exploring' || v.phase === 'writing') &&
+    // `activity` (F13): campo ADITIVO opcional, mismo criterio que `phase` —
+    // acá sí se valida cada elemento (a diferencia de `sections`) porque el
+    // renderer pinta `label` tal cual, sin ningún parser propio de por medio.
+    (v.activity === undefined || (Array.isArray(v.activity) && v.activity.every(isActivityItem)))
+  )
+}
+
+/** Guard de forma para un elemento del mini-log de actividad (F13). */
+function isActivityItem(value: unknown): value is AnalysisActivityItem {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  return (
+    typeof v.id === 'string' &&
+    (v.kind === 'read' ||
+      v.kind === 'search' ||
+      v.kind === 'list' ||
+      v.kind === 'thinking' ||
+      v.kind === 'tool') &&
+    typeof v.label === 'string' &&
+    (v.status === 'running' || v.status === 'done' || v.status === 'error')
   )
 }
 

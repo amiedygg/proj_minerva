@@ -67,7 +67,10 @@
  *    (`../stream-parser.ts`), con `onProgress` throttleado — CUALQUIER
  *    notificación (delta de texto o item de tool-use) resetea el timer de
  *    inactividad, no solo las de texto (ver el listener de abajo: el reset
- *    está al tope, antes de distinguir el método). El fin del turno es
+ *    está al tope, antes de distinguir el método). Desde F13 los
+ *    `item/started`/`item/completed` (y el hecho — nunca el texto — de
+ *    `item/reasoning/textDelta`) alimentan además el mini-log de actividad
+ *    (`../activity-tracker.ts`). El fin del turno es
  *    `turn/completed`; una notificación `error` o un `turn.status: 'failed'`
  *    lo aborta.
  * 5. Timeouts AGÉNTICOS compartidos (`../analysis-timeouts.ts`, T56: total
@@ -86,6 +89,8 @@ import { ANALYZE_PR_SYSTEM_PROMPT } from '../prompts/analyze-pr'
 import { buildAgenticUserMessage, prId } from '../analysis-prompt'
 import { StreamSectionParser } from '../stream-parser'
 import { createThrottle } from '../throttle'
+import { createActivityTracker } from '../activity-tracker'
+import type { AnalysisActivityKind } from '../../../shared/events'
 import { ensureSnapshot } from '../../github/snapshot-store'
 import {
   AGENTIC_INACTIVITY_TIMEOUT_MS,
@@ -137,6 +142,55 @@ function extractThreadId(result: unknown): string {
   const id = (result as ThreadStartResult | null)?.thread?.id
   if (typeof id === 'string' && id.length > 0) return id
   throw new Error('codex app-server no devolvió un id de thread en la respuesta a "thread/start".')
+}
+
+/**
+ * Verbo canónico del mini-log (F13) por `item.type` de las notificaciones
+ * `item/started`/`item/completed`. Solo `fileRead` está VERIFICADO contra un
+ * turno real (fixtures de T58/T60); el resto es mapeo defensivo — un tipo
+ * fuera de la tabla cae al genérico `tool` ("Explorando el repositorio…"),
+ * que es exactamente el fallback aceptable mientras no se inspeccione el
+ * wire real de cada tipo.
+ */
+const CODEX_ITEM_KIND: Record<string, AnalysisActivityKind> = {
+  fileRead: 'read',
+  fileSearch: 'search',
+  webSearch: 'search',
+  fileList: 'list',
+  commandExecution: 'tool',
+}
+
+/** Tipos de item que NO son actividad de herramientas: el texto de respuesta y el plan interno tienen su propio camino (o se ignoran). */
+const CODEX_ITEM_SKIP = new Set(['agentMessage', 'plan'])
+
+/**
+ * Item agéntico de `item/started`/`item/completed` (F13). Forma mínima
+ * VERIFICADA en fixtures: `params.item: { id, type }`; los campos de detalle
+ * (ruta/comando/patrón) NO están verificados en el wire real, así que se
+ * sondean defensivamente — si no aparecen, el label queda genérico
+ * ("Leyó un archivo"), el fallback aceptado.
+ */
+function extractCodexItem(
+  notification: JsonRpcNotification,
+): { id: string; type: string; detail?: string } | null {
+  if (notification.method !== 'item/started' && notification.method !== 'item/completed') {
+    return null
+  }
+  const params = notification.params
+  if (!params || typeof params !== 'object') return null
+  const item = (params as Record<string, unknown>).item
+  if (!item || typeof item !== 'object') return null
+  const v = item as Record<string, unknown>
+  if (typeof v.id !== 'string' || typeof v.type !== 'string') return null
+  let detail: string | undefined
+  for (const key of ['path', 'filePath', 'command', 'query', 'pattern']) {
+    const candidate = v[key]
+    if (typeof candidate === 'string' && candidate.length > 0) {
+      detail = candidate
+      break
+    }
+  }
+  return { id: v.id, type: v.type, detail }
 }
 
 /** Mensaje de error de una notificación `error` del servidor, o de un `turn/completed` con `turn.status: 'failed'`. */
@@ -196,6 +250,17 @@ export class CodexAiService implements AiService {
     // texto, solo pudo haber items de tool-use) y pasa a "writing" en el
     // PRIMER `item/agentMessage/delta` aceptado, sin volver atrás.
     let phase: 'exploring' | 'writing' = 'exploring'
+    // Mini-log de actividad del harness (F13, `../activity-tracker.ts`):
+    // mismo criterio que Claude Code/OpenCode — las transiciones emiten
+    // onProgress SIN throttle.
+    const activity = createActivityTracker({
+      basePath: snapshotDir,
+      onEdge: () => {
+        if (onProgress) {
+          onProgress(parser.snapshot(), { done: false, phase, activity: activity.buffer() })
+        }
+      },
+    })
 
     let client: CodexAppServerClient | null = null
     controller.signal.addEventListener('abort', () => client?.kill())
@@ -271,12 +336,44 @@ export class CodexAiService implements AiService {
         const delta = extractAgentDelta(notification)
         if (delta !== null) {
           if (phase === 'exploring') phase = 'writing'
+          if (!sawAnyDelta) activity.settleThinking()
           sawAnyDelta = true
           parser.push(delta)
           if (onProgress && throttle.shouldRun()) {
-            onProgress(parser.snapshot(), { done: false, phase })
+            onProgress(parser.snapshot(), { done: false, phase, activity: activity.buffer() })
           }
           return
+        }
+
+        // Mini-log (F13): items agénticos begin/complete (lectura, grep,
+        // comandos read-only sobre el snapshot). El item `reasoning` es una
+        // fila "Pensando…" genérica; `agentMessage`/`plan` se saltan (el
+        // texto de respuesta tiene su propio camino arriba, el plan interno
+        // se ignora igual que su delta).
+        const item = extractCodexItem(notification)
+        if (item && !CODEX_ITEM_SKIP.has(item.type)) {
+          if (item.type === 'reasoning') {
+            if (notification.method === 'item/started') {
+              activity.thinking(item.id)
+            } else {
+              activity.settleThinking()
+            }
+          } else {
+            const kind = CODEX_ITEM_KIND[item.type] ?? 'tool'
+            if (notification.method === 'item/started') {
+              activity.begin(item.id, kind, item.detail)
+            } else {
+              activity.complete(item.id, item.detail)
+            }
+          }
+        }
+
+        // Razonamiento streameado (`item/reasoning/textDelta`): solo el
+        // HECHO de que razona — `params.delta` se ignora a propósito
+        // (prompt injection desde el snapshot; decisión F13, misma que en
+        // el resto de proveedores).
+        if (notification.method === 'item/reasoning/textDelta') {
+          activity.thinking('reasoning')
         }
 
         // Notificaciones `item/*` que NO son delta de texto (T60: lectura,
@@ -290,7 +387,7 @@ export class CodexAiService implements AiService {
           onProgress &&
           throttle.shouldRun()
         ) {
-          onProgress(parser.snapshot(), { done: false, phase })
+          onProgress(parser.snapshot(), { done: false, phase, activity: activity.buffer() })
         }
 
         const failure = turnFailureMessage(notification)

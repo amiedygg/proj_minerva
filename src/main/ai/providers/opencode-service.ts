@@ -94,7 +94,11 @@
  *    (`message.updated`) y `partID` es de tipo `'text'`
  *    (`message.part.updated`, ver el gotcha de arriba) — así se excluye el
  *    razonamiento interno del modelo (`type:'reasoning'`) y cualquier eco del
- *    propio prompt (mensajes `role:'user'`). Cada delta resetea el timer de
+ *    propio prompt (mensajes `role:'user'`). Desde F13, las partes `tool`
+ *    (con su `callID`/`tool`/`state`) y `reasoning` de NUESTRA sesión
+ *    alimentan además el mini-log de actividad (`../activity-tracker.ts`) —
+ *    nunca el parser, y del razonamiento solo el HECHO de que existe
+ *    ("Pensando…"), jamás su texto. Cada delta resetea el timer de
  *    inactividad (igual que cualquier otro evento de la sesión: el agente
  *    sigue vivo explorando aunque no emita texto, mismo criterio que
  *    Claude Code/Codex en T58).
@@ -128,6 +132,8 @@ import { ANALYZE_PR_SYSTEM_PROMPT } from '../prompts/analyze-pr'
 import { buildAgenticUserMessage, prId } from '../analysis-prompt'
 import { StreamSectionParser } from '../stream-parser'
 import { createThrottle } from '../throttle'
+import { createActivityTracker } from '../activity-tracker'
+import type { AnalysisActivityKind } from '../../../shared/events'
 import { ensureSnapshot } from '../../github/snapshot-store'
 import { getOpencodeServer } from './opencode-runtime'
 import {
@@ -157,6 +163,49 @@ export function parseOpencodeModelSlug(slug: string): ParsedOpencodeModelSlug | 
 
 /** Payload de un evento `session.error` (unión con `name`/`data.message` casi siempre presente). */
 type SessionErrorPayload = Extract<Event, { type: 'session.error' }>['properties']['error']
+
+/** La `Part` que viaja en `message.part.updated`, derivada del union `Event` para no depender de que el SDK exporte `Part` directo. */
+type OpencodeUpdatedPart = Extract<Event, { type: 'message.part.updated' }>['properties']['part']
+type OpencodeToolPart = Extract<OpencodeUpdatedPart, { type: 'tool' }>
+
+/**
+ * Verbo canónico del mini-log (F13) por nombre de tool de OpenCode (los
+ * nombres reales del server: minúsculas). Tools fuera de la tabla caen al
+ * genérico `tool` con el nombre como detalle.
+ */
+const OPENCODE_TOOL_KIND: Record<string, AnalysisActivityKind> = {
+  read: 'read',
+  grep: 'search',
+  glob: 'list',
+  list: 'list',
+  ls: 'list',
+}
+
+/**
+ * Detalle "humano" de una parte `tool` (F13): primero el input real
+ * (`filePath`/`path`/`pattern`, defensivo — el SDK lo tipa como record
+ * abierto), después el `title` legible que OpenCode pone en
+ * `ToolStateRunning`/`Completed`.
+ */
+function extractOpencodeToolDetail(part: OpencodeToolPart): string | undefined {
+  // Defensivo aunque el tipo diga que `state` siempre viene: la forma real
+  // del wire manda (lección T29/T56) y un part incompleto no debe tumbar el
+  // stream entero por un TypeError del mini-log.
+  const state: OpencodeToolPart['state'] | undefined = part.state
+  if (!state || typeof state !== 'object') return undefined
+  const input: unknown = 'input' in state ? state.input : undefined
+  if (input && typeof input === 'object') {
+    const v = input as Record<string, unknown>
+    for (const key of ['filePath', 'path', 'pattern']) {
+      const candidate = v[key]
+      if (typeof candidate === 'string' && candidate.length > 0) return candidate
+    }
+  }
+  if ('title' in state && typeof state.title === 'string' && state.title.length > 0) {
+    return state.title
+  }
+  return undefined
+}
 
 /** Forma parcial del `.cause.body` que arma `wrapClientError` (`@opencode-ai/sdk/dist/error-interceptor.js`) cuando el cliente lanza por `throwOnError: true`. */
 interface OpencodeErrorBody {
@@ -272,6 +321,17 @@ export class OpenCodeAiService implements AiService {
     // del asistente, solo pudo haber actividad de bookkeeping/tool-use) y
     // pasa a "writing" en el PRIMER delta de texto ACEPTADO, sin volver atrás.
     let phase: 'exploring' | 'writing' = 'exploring'
+    // Mini-log de actividad del harness (F13, `../activity-tracker.ts`):
+    // mismo criterio que Claude Code — las transiciones emiten onProgress
+    // SIN throttle, los refinamientos viajan con la próxima emisión.
+    const activity = createActivityTracker({
+      basePath: snapshotDir,
+      onEdge: () => {
+        if (onProgress) {
+          onProgress(parser.snapshot(), { done: false, phase, activity: activity.buffer() })
+        }
+      },
+    })
 
     timeouts.resetInactivityTimer()
 
@@ -311,7 +371,7 @@ export class OpenCodeAiService implements AiService {
       /** Progreso de actividad SIN delta de texto aceptado (T60) mientras seguimos "exploring": throttleado, nunca cambia `sections`. */
       const pingExploring = (): void => {
         if (phase === 'exploring' && onProgress && throttle.shouldRun()) {
-          onProgress(parser.snapshot(), { done: false, phase })
+          onProgress(parser.snapshot(), { done: false, phase, activity: activity.buffer() })
         }
       }
       void (async () => {
@@ -328,6 +388,36 @@ export class OpenCodeAiService implements AiService {
             if (event.type === 'message.part.updated') {
               const part = event.properties.part
               partTypeById.set(part.id, part.type)
+              // Mini-log (F13): SOLO partes de NUESTRA sesión (esta rama no
+              // filtraba por sesión — para `partTypeById` es inocuo, para el
+              // log no: un análisis concurrente en el server compartido
+              // contaminaría el feed con sus tool calls).
+              if (event.properties.sessionID === currentSessionId) {
+                // Guard defensivo sobre `callID`/`state` aunque el tipo los
+                // declare obligatorios: la forma real del wire manda (lección
+                // T29/T56) y un part incompleto se ignora en vez de reventar.
+                if (
+                  part.type === 'tool' &&
+                  typeof part.callID === 'string' &&
+                  part.state !== undefined
+                ) {
+                  const kind = OPENCODE_TOOL_KIND[part.tool] ?? 'tool'
+                  const detail =
+                    extractOpencodeToolDetail(part) ?? (kind === 'tool' ? part.tool : undefined)
+                  const status = part.state.status
+                  if (status === 'pending' || status === 'running') {
+                    activity.begin(part.callID, kind, detail)
+                  } else if (status === 'completed') {
+                    activity.complete(part.callID, detail)
+                  } else if (status === 'error') {
+                    activity.fail(part.callID)
+                  }
+                } else if (part.type === 'reasoning') {
+                  // Solo el HECHO de que razona ("Pensando…"), nunca
+                  // `part.text` (prompt injection desde el snapshot).
+                  activity.thinking(part.id)
+                }
+              }
               pingExploring()
               continue
             }
@@ -342,15 +432,21 @@ export class OpenCodeAiService implements AiService {
               if (!isAssistantTextDelta) {
                 // Deltas de razonamiento/tool o de otra sesión (T60): mientras
                 // seguimos "exploring" siguen siendo señal de actividad, sin
-                // que nada de esto llegue al parser.
+                // que nada de esto llegue al parser. Los de razonamiento
+                // alimentan el "Pensando…" del mini-log (F13) — solo el hecho,
+                // nunca `p.delta`.
+                if (partTypeById.get(p.partID) === 'reasoning') {
+                  activity.thinking(p.partID)
+                }
                 pingExploring()
                 continue
               }
               if (phase === 'exploring') phase = 'writing'
+              if (!sawAnyDelta) activity.settleThinking()
               sawAnyDelta = true
               parser.push(p.delta)
               if (onProgress && throttle.shouldRun()) {
-                onProgress(parser.snapshot(), { done: false, phase })
+                onProgress(parser.snapshot(), { done: false, phase, activity: activity.buffer() })
               }
               continue
             }
