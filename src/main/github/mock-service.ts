@@ -6,6 +6,8 @@
  * Simula latencia de red (150-400ms, fija por método, no aleatoria) para que
  * la UI ejercite sus estados de carga de forma reproducible.
  */
+import { mkdir, writeFile } from 'node:fs/promises'
+import { dirname, join, sep } from 'node:path'
 import type {
   CommentThread,
   DiffFile,
@@ -16,6 +18,7 @@ import type {
 } from '../../shared/types'
 import type { IpcRequest, IpcResponse } from '../../shared/ipc'
 import { prFixtures } from './fixtures'
+import { genericSnapshotFixture, snapshotFixturesByRepo } from './fixtures-snapshot'
 import type { GithubService } from './service'
 
 interface PrRecord {
@@ -157,5 +160,24 @@ export class MockGithubService implements GithubService {
     record.detail.commentCount += 1
 
     return comment
+  }
+
+  /**
+   * Mock de `writeSnapshot` (T54): en vez de bajar y extraer un tarball real,
+   * escribe con `fs` el árbol fixture del repo (`./fixtures-snapshot.ts`) —
+   * `headSha` se ignora (el fixture no varía por commit, igual que el resto
+   * del mock no varía por SHA real).
+   */
+  async writeSnapshot(req: { repo: RepoRef; headSha: string }, destDir: string): Promise<void> {
+    await delay(LATENCY_MS.getPullRequestFiles)
+    const files = snapshotFixturesByRepo[req.repo.fullName] ?? genericSnapshotFixture
+    for (const file of files) {
+      // Las rutas de fixture usan siempre '/'; se traducen al separador real
+      // del SO antes de unir con `destDir` (relevante solo fuera de POSIX).
+      const relativePath = sep === '/' ? file.path : file.path.split('/').join(sep)
+      const absolutePath = join(destDir, relativePath)
+      await mkdir(dirname(absolutePath), { recursive: true })
+      await writeFile(absolutePath, file.content, 'utf-8')
+    }
   }
 }

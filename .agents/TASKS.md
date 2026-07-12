@@ -1827,7 +1827,18 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
 > (patrón T3 Code, repo `pingdotgg/t3code`); sin CLIs instalados → card con enlaces
 > oficiales de instalación.
 
-- [ ] **T54. `snapshot-store`: copia local del commit del PR + limpieza periódica**
+- [x] **T54. `snapshot-store`: copia local del commit del PR + limpieza periódica**
+  _Hecha (2026-07-11, subagente Sonnet) y VERIFICADA por el orquestador: revisión de
+  código completa, 12/12 unit (create/reuse+touch, dedupe concurrente, sanitización
+  `../../evil`, atomicidad, huérfanos `.tmp-*`, LRU por count y bytes, timer), typecheck
+  y lint verdes. FIX del orquestador: `tar.extract` ahora filtra SYMLINKS/hardlinks
+  (`filter: 'type' in entry && (File|Directory)`) — un repo hostil podía traer un link a
+  `~/.ssh` que las herramientas read-only seguirían al leer, escapando el jail sin
+  escribir nada; verificado empíricamente con un tarball artesanal (el link se omite,
+  archivos y dirs intactos). Gotcha de tipos: el `filter` de node-tar 7 une
+  `Stats | ReadEntry` (compartido con `tar.create`) — hace falta el guard `'type' in
+  entry`. E2e con tarball real de GitHub queda cubierto en T61. Cableado del cleaner en
+  `before-quit`: pendiente de integración junto con T55 (lo hace el orquestador)._
   Contexto: los proveedores agénticos necesitan un directorio con el repo AL COMMIT del
   PR. Fuente real: tarball `GET /repos/{owner}/{repo}/tarball/{sha}` con el Octokit ya
   autenticado (NUNCA git); mock: árbol fixture escrito con fs.
@@ -1853,7 +1864,7 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   service): ensureSnapshot crea/reusa/dedupea, sanitización de paths, LRU expulsa por
   count y por bytes, rename atómico (un fallo a mitad no deja dir final).
 
-- [ ] **T55. `opencode-runtime`: server OpenCode gestionado desde main**
+- [~] **T55. `opencode-runtime`: server OpenCode gestionado desde main**
   Contexto: patrón T3 Code (`opencodeRuntime.ts` del repo `pingdotgg/t3code`). El
   binario `opencode` 1.17.18 ESTÁ instalado en esta máquina (`~/.local/bin/opencode`):
   verificar el wire EMPÍRICAMENTE (lección T29 — nunca adivinar el protocolo; se puede
