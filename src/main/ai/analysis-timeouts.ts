@@ -1,17 +1,18 @@
 /**
  * Lógica de doble timeout compartida entre los proveedores de IA que
- * streamean una respuesta larga desde un backend externo (`OpenRouterAiService`
- * vía SSE; `ClaudeCodeAiService`, T28, vía el Agent SDK oficial): un timeout
- * TOTAL desde que arranca el análisis y un timeout de INACTIVIDAD que se
- * reinicia con cada delta recibido. Cualquiera de los dos aborta el
- * `AbortController` que el proveedor ya le pasa a su transporte (fetch con
- * `signal`, o `Options.abortController` del Agent SDK).
+ * streamean una respuesta larga desde un backend externo (`ClaudeCodeAiService`,
+ * T28, vía el Agent SDK oficial; `CodexAiService`, T29, vía JSON-RPC;
+ * `OpenCodeAiService`, T56, vía el server local): un timeout TOTAL desde que
+ * arranca el análisis y un timeout de INACTIVIDAD que se reinicia con cada
+ * delta recibido. Cualquiera de los dos aborta el `AbortController` que el
+ * proveedor ya le pasa a su transporte (fetch con `signal`, o
+ * `Options.abortController` del Agent SDK).
  *
  * `getAbortReason()` le dice a quien llama CUÁL de los dos disparó el abort
  * (o `null` si el controller nunca fue abortado por este helper — p. ej. lo
  * abortó el usuario cancelando desde la UI, si eso existiera hoy) para que
  * cada proveedor arme su propio mensaje final con su propio nombre ("timeout
- * total de OpenRouter" vs. "timeout total de Claude Code").
+ * total de Codex" vs. "timeout total de Claude Code").
  */
 
 /** Timeout total del análisis completo (desde que arranca hasta el último delta). */
@@ -20,6 +21,16 @@ export const REQUEST_TIMEOUT_MS = 120_000
 export const INACTIVITY_TIMEOUT_MS = 20_000
 /** Cuánto, como mucho, se llama a `onProgress` mientras llegan deltas (ver `./throttle.ts`). */
 export const PROGRESS_THROTTLE_MS = 150
+
+/**
+ * Timeouts AGÉNTICOS (F11): un análisis con herramientas explora el snapshot
+ * (grep/read del repo) ANTES de emitir la primera sección — mucho más lento
+ * que la generación directa de texto. El de inactividad también sube: entre
+ * delta y delta puede haber vueltas enteras de tool-use sin texto nuevo.
+ * Los usan los tres proveedores agentizados (OpenCode/Claude Code/Codex).
+ */
+export const AGENTIC_REQUEST_TIMEOUT_MS = 300_000
+export const AGENTIC_INACTIVITY_TIMEOUT_MS = 60_000
 
 export type AbortReason = 'total-timeout' | 'inactivity-timeout' | null
 
@@ -32,13 +43,18 @@ export interface AnalysisTimeouts {
   getAbortReason(): AbortReason
 }
 
-export function createAnalysisTimeouts(controller: AbortController): AnalysisTimeouts {
+export function createAnalysisTimeouts(
+  controller: AbortController,
+  options?: { totalMs?: number; inactivityMs?: number },
+): AnalysisTimeouts {
+  const totalMs = options?.totalMs ?? REQUEST_TIMEOUT_MS
+  const inactivityMs = options?.inactivityMs ?? INACTIVITY_TIMEOUT_MS
   let abortReason: AbortReason = null
 
   const totalTimeoutId = setTimeout(() => {
     abortReason = 'total-timeout'
     controller.abort()
-  }, REQUEST_TIMEOUT_MS)
+  }, totalMs)
 
   let inactivityTimeoutId: ReturnType<typeof setTimeout> | null = null
 
@@ -47,7 +63,7 @@ export function createAnalysisTimeouts(controller: AbortController): AnalysisTim
     inactivityTimeoutId = setTimeout(() => {
       abortReason = 'inactivity-timeout'
       controller.abort()
-    }, INACTIVITY_TIMEOUT_MS)
+    }, inactivityMs)
   }
 
   function clearAll(): void {

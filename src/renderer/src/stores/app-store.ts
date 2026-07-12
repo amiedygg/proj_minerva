@@ -100,11 +100,12 @@ interface AppState {
   /**
    * Modal de settings (T12, engrane en TitleBar; forma multi-proveedor desde
    * T26). `aiModelInfo` es la última respuesta conocida de
-   * `settings:get`/`settings:setAiModel` (selección efectiva de
-   * proveedor+modelo + catálogo): se guarda en el store en vez de en estado
-   * local de un solo hook para que todos los consumidores (el modal y el
-   * hint sutil del panel didáctico, `useSettings` en ambos) compartan el
-   * mismo valor sin refetchear cada uno por su lado innecesariamente.
+   * `settings:get`/`settings:setAiProvider`/`settings:setProviderModel`
+   * (selección efectiva de proveedor+modelo + catálogo): se guarda en el
+   * store en vez de en estado local de un solo hook para que todos los
+   * consumidores (el modal y el hint sutil del panel didáctico, `useSettings`
+   * en ambos) compartan el mismo valor sin refetchear cada uno por su lado
+   * innecesariamente.
    */
   settingsOpen: boolean
   aiModelInfo: AiSettingsInfo | null

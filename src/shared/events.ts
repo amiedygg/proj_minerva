@@ -61,12 +61,27 @@ export interface AnalysisProgressEvent {
    * escucha el streaming sin haber disparado el análisis (p. ej. una ventana
    * desacoplada que se enganchó a un análisis ya en curso, ver
    * `ai:getAnalysisState` en `src/shared/ipc.ts`): sin este campo esa ventana
-   * se quedaría mostrando "streaming" para siempre ante un error, porque
-   * `OpenRouterAiService`/`MockAiService` nunca llaman a `onProgress` en el
-   * camino de error — el evento terminal con `error` lo arma el handler
+   * se quedaría mostrando "streaming" para siempre ante un error, porque los
+   * `AiService` reales/mock nunca llaman a `onProgress` en el camino de
+   * error — el evento terminal con `error` lo arma el handler
    * (`src/main/ipc/handlers.ts`), no el `AiService`.
    */
   error?: string
+  /**
+   * Fase del streaming AGÉNTICO (F11/T60), solo presente mientras un
+   * proveedor agéntico (Claude Code/Codex/OpenCode, T56/T58) está en curso:
+   * `'exploring'` desde que arranca el análisis hasta el PRIMER delta de
+   * texto que entra al `StreamSectionParser` (el agente está usando
+   * herramientas de solo lectura para explorar el snapshot del PR, sin
+   * texto todavía); `'writing'` desde ese primer delta en adelante (ya está
+   * redactando secciones). Campo ADITIVO: ausente en el `MockAiService`
+   * (`../main/ai/mock-service.ts`, sin cambios) y en el evento TERMINAL
+   * (`done: true`) de cualquier proveedor — para ese momento `sections` ya
+   * es la fuente de verdad, no hace falta distinguir fase. Ver
+   * `AnalyzeProgressMeta` (`../main/ai/service.ts`) para el mismo campo del
+   * lado de los `AiService`.
+   */
+  phase?: 'exploring' | 'writing'
 }
 
 /**

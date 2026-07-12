@@ -259,60 +259,18 @@ describe('payloadValidators', () => {
     })
   })
 
-  describe('settings:setAiModel', () => {
-    const validate = payloadValidators['settings:setAiModel']
-
-    it('acepta un id curado', () => {
-      expect(validate({ aiModel: 'z-ai/glm-5.2' })).toBe(true)
-    })
-
-    it('acepta un id fuera de la lista curada (modo avanzado)', () => {
-      expect(validate({ aiModel: 'mistralai/mistral-large-2411' })).toBe(true)
-    })
-
-    it('rechaza aiModel vacío', () => {
-      expect(validate({ aiModel: '' })).toBe(false)
-    })
-
-    it('rechaza aiModel > 100 chars', () => {
-      expect(validate({ aiModel: 'a'.repeat(101) })).toBe(false)
-    })
-
-    it('acepta aiModel justo en el límite (100)', () => {
-      expect(validate({ aiModel: 'a'.repeat(100) })).toBe(true)
-    })
-
-    it('rechaza aiModel que no es string', () => {
-      expect(validate({ aiModel: 123 })).toBe(false)
-    })
-
-    it('rechaza claves desconocidas', () => {
-      expect(validate({ aiModel: 'z-ai/glm-5.2', evil: true })).toBe(false)
-    })
-
-    it('rechaza payload sin aiModel', () => {
-      expect(validate({})).toBe(false)
-      expect(validate(undefined)).toBe(false)
-    })
-
-    it('rechaza payload no-objeto', () => {
-      expect(validate(undefined)).toBe(false)
-      expect(validate('x')).toBe(false)
-      expect(validate([])).toBe(false)
-    })
-  })
-
   describe('settings:setAiProvider', () => {
     const validate = payloadValidators['settings:setAiProvider']
 
     it('acepta cada proveedor conocido', () => {
-      expect(validate({ provider: 'openrouter' })).toBe(true)
       expect(validate({ provider: 'claude-code' })).toBe(true)
       expect(validate({ provider: 'codex' })).toBe(true)
+      expect(validate({ provider: 'opencode' })).toBe(true)
     })
 
-    it('rechaza un proveedor desconocido', () => {
+    it('rechaza un proveedor desconocido (incluido "openrouter", eliminado en T59)', () => {
       expect(validate({ provider: 'gemini-cli' })).toBe(false)
+      expect(validate({ provider: 'openrouter' })).toBe(false)
     })
 
     it('rechaza provider que no es string', () => {
@@ -320,7 +278,7 @@ describe('payloadValidators', () => {
     })
 
     it('rechaza claves desconocidas', () => {
-      expect(validate({ provider: 'openrouter', evil: true })).toBe(false)
+      expect(validate({ provider: 'codex', evil: true })).toBe(false)
     })
 
     it('rechaza payload sin provider o no-objeto', () => {
@@ -335,13 +293,14 @@ describe('payloadValidators', () => {
     const validate = payloadValidators['ai:getProviderModels']
 
     it('acepta cada proveedor conocido', () => {
-      expect(validate({ provider: 'openrouter' })).toBe(true)
       expect(validate({ provider: 'claude-code' })).toBe(true)
       expect(validate({ provider: 'codex' })).toBe(true)
+      expect(validate({ provider: 'opencode' })).toBe(true)
     })
 
-    it('rechaza un proveedor desconocido', () => {
+    it('rechaza un proveedor desconocido (incluido "openrouter", eliminado en T59)', () => {
       expect(validate({ provider: 'gemini-cli' })).toBe(false)
+      expect(validate({ provider: 'openrouter' })).toBe(false)
     })
 
     it('rechaza claves desconocidas', () => {
@@ -363,8 +322,8 @@ describe('payloadValidators', () => {
       expect(validate({ provider: 'claude-code', model: 'claude-sonnet-5' })).toBe(true)
     })
 
-    it('acepta un id de modelo fuera de cualquier lista curada (modo avanzado, mismo criterio que setAiModel)', () => {
-      expect(validate({ provider: 'openrouter', model: 'mistralai/mistral-large-2411' })).toBe(true)
+    it('acepta un id de modelo fuera de cualquier lista curada (modo "Otro (avanzado)" de OpenCode)', () => {
+      expect(validate({ provider: 'opencode', model: 'anthropic/claude-sonnet-5' })).toBe(true)
     })
 
     it('rechaza un proveedor desconocido', () => {

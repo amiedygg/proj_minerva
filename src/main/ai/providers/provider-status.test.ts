@@ -1,15 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 /**
- * `provider-status.ts` combina `getAiEnv` (OpenRouter, síncrono) con
- * `getCliProviderStatus` (Claude Code/Codex, probe de CLI) — se mockean
- * ambas dependencias para verificar el agregado sin spawnear procesos reales
- * ni depender de si hay `OPENROUTER_API_KEY` en el entorno que corre los
- * tests.
+ * `provider-status.ts` delega TODO en `getCliProviderStatus` (T59: los tres
+ * proveedores son `cli` desde que se eliminó OpenRouter) — se mockea esa
+ * única dependencia para verificar el agregado sin spawnear procesos reales.
  */
-const getAiEnvMock = vi.fn()
-vi.mock('../env', () => ({ getAiEnv: (...args: unknown[]) => getAiEnvMock(...args) }))
-
 const getCliProviderStatusMock = vi.fn()
 vi.mock('./cli-probe', () => ({
   getCliProviderStatus: (...args: unknown[]) => getCliProviderStatusMock(...args),
@@ -20,8 +15,7 @@ const { getAiProviderStatusMap } = await import('./provider-status')
 describe('getAiProviderStatusMap', () => {
   afterEach(() => vi.clearAllMocks())
 
-  it('openrouter authenticated (hay key) y delega claude-code/codex al probe de CLI', async () => {
-    getAiEnvMock.mockReturnValue({ openRouterApiKey: 'sk-x', aiModel: 'z-ai/glm-5.2' })
+  it('delega los tres proveedores al probe de CLI', async () => {
     getCliProviderStatusMock.mockImplementation(async (provider: string) =>
       provider === 'claude-code'
         ? { status: 'authenticated', account: { plan: 'max' } }
@@ -31,29 +25,22 @@ describe('getAiProviderStatusMap', () => {
     const map = await getAiProviderStatusMap()
 
     expect(map).toEqual({
-      openrouter: { status: 'authenticated' },
       'claude-code': { status: 'authenticated', account: { plan: 'max' } },
       codex: { status: 'installed' },
+      opencode: { status: 'installed' },
     })
     expect(getCliProviderStatusMock).toHaveBeenCalledWith('claude-code')
     expect(getCliProviderStatusMock).toHaveBeenCalledWith('codex')
+    expect(getCliProviderStatusMock).toHaveBeenCalledWith('opencode')
   })
 
-  it('openrouter unavailable cuando no hay key configurada', async () => {
-    getAiEnvMock.mockReturnValue({ openRouterApiKey: null, aiModel: 'z-ai/glm-5.2' })
+  it('propaga "unavailable" tal cual lo reporte el probe', async () => {
     getCliProviderStatusMock.mockResolvedValue({ status: 'unavailable' })
 
     const map = await getAiProviderStatusMap()
 
-    expect(map.openrouter).toEqual({ status: 'unavailable' })
-  })
-
-  it('nunca invoca el probe de CLI para openrouter (no es un CLI)', async () => {
-    getAiEnvMock.mockReturnValue({ openRouterApiKey: 'sk-x', aiModel: 'z-ai/glm-5.2' })
-    getCliProviderStatusMock.mockResolvedValue({ status: 'installed' })
-
-    await getAiProviderStatusMap()
-
-    expect(getCliProviderStatusMock).not.toHaveBeenCalledWith('openrouter')
+    expect(map['claude-code']).toEqual({ status: 'unavailable' })
+    expect(map.codex).toEqual({ status: 'unavailable' })
+    expect(map.opencode).toEqual({ status: 'unavailable' })
   })
 })

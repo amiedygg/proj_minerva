@@ -20,13 +20,16 @@ interface UseProviderStatusResult {
  * T30): `unavailable`/`installed`/`authenticated` por proveedor, sin
  * secretos (ver `AiProviderStatus` en `shared/types.ts`).
  *
- * A propósito NO vive en `app-store` como `aiModelInfo`: solo lo consume la
- * pantalla de Settings (que se desmonta por completo al cerrarse, ver el
- * comentario de cabecera de `SettingsModal`), así que no hace falta
- * compartirlo entre consumidores — y conviene refetchear siempre que se abre
- * Settings, porque el login de los CLIs (`claude login`/`codex login`)
- * sucede FUERA de la app y el estado puede haber cambiado desde la última
- * apertura.
+ * A propósito NO vive en `app-store` como `aiModelInfo`: cada consumidor
+ * (la pantalla de Settings, que se desmonta por completo al cerrarse, ver el
+ * comentario de cabecera de `SettingsModal`; y desde T60 también
+ * `DidacticAnalysisArea` para decidir si mostrar `NoCliProvidersCard`) monta
+ * su propia instancia y refetchea al montar — conviene así porque el login de
+ * los CLIs (`claude login`/`codex login`/`opencode auth login`) sucede FUERA
+ * de la app y el estado puede haber cambiado desde la última consulta; el
+ * costo real por consulta es bajo, `getAiProviderStatusMap` (`main/ai/
+ * providers/provider-status.ts`) delega en el probe de cada proveedor, que
+ * ya cachea con su propio TTL corto.
  *
  * Mismo criterio anti-`set-state-in-effect` que `use-settings.ts`/`use-auth.ts`:
  * el efecto de montaje no llama `setState` de forma síncrona (el `loading`

@@ -1,13 +1,19 @@
 /**
  * Smoke e2e de persistencia del análisis + sellado headSha/generatedWith (F9 T40).
- * Requiere la app corriendo con MINERVA_MOCK=1 OPENROUTER_API_KEY= (mock AI) y
- * --remote-debugging-port=9222.
+ * Mundo post-T59 (sin OpenRouter, T61): requiere la app corriendo con
+ * MINERVA_MOCK=1 MINERVA_MOCK_AI=1 --remote-debugging-port=9222 —
+ * MINERVA_MOCK_AI=1 fuerza `MockAiService` sin importar el proveedor
+ * seleccionado (commit 92a9ee2, `src/main/ai/index.ts`), reemplazo del viejo
+ * truco "openrouter sin key". `generatedWith.provider` de un análisis sellado
+ * refleja la SELECCIÓN activa (`getEffectiveAiSelection`), no el servicio que
+ * de verdad respondió — por eso alcanza con setear provider=opencode para que
+ * quede sellado como opencode aunque quien responda sea el mock.
  *
  * Modos (argv[2]):
- *   provider-openrouter : fuerza provider=openrouter (para usar el mock AI)
- *   analyze             : invalida + analiza #482 y verifica cached + headSha + generatedWith
- *   check               : SOLO getAnalysisState(#482) — debe dar cached SIN analizar (post-reinicio)
- *   restore             : restaura provider=claude-code (limpieza)
+ *   provider-opencode : fuerza provider=opencode (para sellar generatedWith con el mock AI)
+ *   analyze            : invalida + analiza #482 y verifica cached + headSha + generatedWith
+ *   check              : SOLO getAnalysisState(#482) — debe dar cached SIN analizar (post-reinicio)
+ *   restore            : restaura provider=claude-code (limpieza)
  */
 import WebSocket from 'ws'
 
@@ -59,9 +65,9 @@ const check = (name, cond, extra) => {
   console.log((cond ? 'PASS  ' : 'FAIL  ') + name + (!cond && extra ? ' — ' + extra : ''))
 }
 
-if (MODE === 'provider-openrouter') {
-  const info = await evaluate(`window.minerva.settings.setAiProvider({ provider: 'openrouter' })`)
-  check('provider=openrouter', info?.provider === 'openrouter', JSON.stringify(info?.provider))
+if (MODE === 'provider-opencode') {
+  const info = await evaluate(`window.minerva.settings.setAiProvider({ provider: 'opencode' })`)
+  check('provider=opencode', info?.provider === 'opencode', JSON.stringify(info?.provider))
 } else if (MODE === 'restore') {
   const info = await evaluate(`window.minerva.settings.setAiProvider({ provider: 'claude-code' })`)
   check('provider=claude-code', info?.provider === 'claude-code', JSON.stringify(info?.provider))
@@ -77,8 +83,8 @@ if (MODE === 'provider-openrouter') {
     JSON.stringify(analysis?.headSha),
   )
   check(
-    'generatedWith.provider = openrouter',
-    analysis?.generatedWith?.provider === 'openrouter',
+    'generatedWith.provider = opencode',
+    analysis?.generatedWith?.provider === 'opencode',
     JSON.stringify(analysis?.generatedWith),
   )
   check(
@@ -102,8 +108,8 @@ if (MODE === 'provider-openrouter') {
     JSON.stringify(state?.analysis?.headSha),
   )
   check(
-    'generatedWith persistido = openrouter',
-    state?.analysis?.generatedWith?.provider === 'openrouter',
+    'generatedWith persistido = opencode',
+    state?.analysis?.generatedWith?.provider === 'opencode',
     JSON.stringify(state?.analysis?.generatedWith),
   )
 }

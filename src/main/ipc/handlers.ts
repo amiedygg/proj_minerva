@@ -4,8 +4,7 @@ import { createGithubService } from '../github'
 import { createPrWatcher, type PrWatcher } from '../github/pr-watcher'
 import { seenStore } from '../github/seen-store'
 import { createAiService } from '../ai'
-import { getAiSettingsInfo, getEffectiveAiSelection, getOpenRouterKeyStatus } from '../ai/env'
-import { clearApiKey, saveApiKey } from '../ai/openrouter-key-store'
+import { getAiSettingsInfo, getEffectiveAiSelection } from '../ai/env'
 import { getAiProviderStatusMap } from '../ai/providers/provider-status'
 import { getProviderModels } from '../ai/providers/provider-models'
 import { analysisCache } from '../ai/analysis-cache'
@@ -66,22 +65,21 @@ function resolveWatchIntervalMs(): number | undefined {
 /**
  * Registra los handlers IPC disponibles hoy. Los canales `github:*`/`ai:*`
  * delegan a una única instancia de `GithubService`/`AiService` (real con
- * Octokit desde T6 salvo `MINERVA_MOCK=1`; `AiService` real con OpenRouter
- * desde T9-final si hay `OPENROUTER_API_KEY`, mock si no — ver
- * `../ai/index.ts`). `createAiService` recibe `githubService` (la misma
- * instancia usada por los canales `github:*`) para que el pipeline de IA
- * pida el detalle/archivos del PR a lo que sea que esté activo, mock o real.
- * Los canales `auth:*` delegan al `AuthManager` singleton
- * (`../auth/auth-manager.ts`) — quien llama a `registerIpcHandlers` debe
- * haber esperado `authManager.init()` antes, para que `auth:getStatus`
- * refleje el token persistido (si lo hay) desde la primera llamada.
- * `settings:get` (T12, reestructurado en T26 a multi-proveedor) expone la
- * selección efectiva de proveedor+modelo más el catálogo completo
- * (`getAiSettingsInfo`, `../ai/env.ts`); `settings:setAiModel` (compat
- * OpenRouter), `settings:setAiProvider` y `settings:setProviderModel`
- * persisten la elección (`settingsStore`, `../settings/store.ts`) y devuelven
- * la misma forma agregada. No delegan a una instancia de servicio porque no
- * hay estado por-request que mantener.
+ * Octokit desde T6 salvo `MINERVA_MOCK=1`; `AiService` real con el proveedor
+ * de IA activo — Claude Code/Codex/OpenCode, ver `../ai/index.ts`).
+ * `createAiService` recibe `githubService` (la misma instancia usada por los
+ * canales `github:*`) para que el pipeline de IA pida el detalle/archivos del
+ * PR a lo que sea que esté activo, mock o real. Los canales `auth:*` delegan
+ * al `AuthManager` singleton (`../auth/auth-manager.ts`) — quien llama a
+ * `registerIpcHandlers` debe haber esperado `authManager.init()` antes, para
+ * que `auth:getStatus` refleje el token persistido (si lo hay) desde la
+ * primera llamada. `settings:get` (T12, reestructurado en T26 a
+ * multi-proveedor) expone la selección efectiva de proveedor+modelo más el
+ * catálogo completo (`getAiSettingsInfo`, `../ai/env.ts`);
+ * `settings:setAiProvider` y `settings:setProviderModel` persisten la
+ * elección (`settingsStore`, `../settings/store.ts`) y devuelven la misma
+ * forma agregada. No delegan a una instancia de servicio porque no hay
+ * estado por-request que mantener.
  *
  * ASYNC desde T28: `createAiService` puede necesitar consultar el probe de
  * login de un proveedor `cli` (`../ai/providers/cli-probe.ts`, spawnea
@@ -190,7 +188,16 @@ export async function registerIpcHandlers(): Promise<{ stopPrWatcher: () => void
             // enganchada al streaming no debe ver nunca un "terminó" que
             // todavía no se puede leer de `ai:getCachedAnalysis`).
             if (meta.done) return
-            broadcastProgress({ repo: req.repo, number: req.number, sections, done: false })
+            // `meta.phase` (T60): "exploring"/"writing" para proveedores
+            // agénticos, `undefined` para el mock — se propaga tal cual, sin
+            // interpretarlo acá.
+            broadcastProgress({
+              repo: req.repo,
+              number: req.number,
+              sections,
+              done: false,
+              phase: meta.phase,
+            })
           },
         })
 
@@ -226,10 +233,10 @@ export async function registerIpcHandlers(): Promise<{ stopPrWatcher: () => void
         })
         return result
       } catch (error) {
-        // `OpenRouterAiService`/`MockAiService` NUNCA llaman a `onProgress`
-        // en el camino de error (solo lanzan) — sin este evento terminal
-        // manual, una ventana enganchada a este streaming se quedaría
-        // mostrando "analizando…" para siempre ante un fallo.
+        // Los `AiService` reales/mock NUNCA llaman a `onProgress` en el
+        // camino de error (solo lanzan) — sin este evento terminal manual,
+        // una ventana enganchada a este streaming se quedaría mostrando
+        // "analizando…" para siempre ante un fallo.
         broadcastProgress({
           repo: req.repo,
           number: req.number,
@@ -283,22 +290,17 @@ export async function registerIpcHandlers(): Promise<{ stopPrWatcher: () => void
   })
 
   // Estado de login por proveedor (T27, `../ai/providers/provider-status.ts`):
-  // OpenRouter se resuelve síncrono (¿hay key?); Claude Code/Codex vía un
-  // probe de CLI cacheado con TTL corto, nunca bloqueante.
+  // los tres proveedores son `cli` — se resuelven vía un probe cacheado con
+  // TTL corto, nunca bloqueante.
   handle('ai:getProviderStatus', () => getAiProviderStatusMap())
 
-  // Modelos disponibles por proveedor (T35, F8): estáticos para OpenRouter/
-  // Claude Code, dinámicos (con cache TTL + fallback al curado) para Codex —
-  // ver `../ai/providers/provider-models.ts`. Canal SEPARADO de
-  // `settings:get` (síncrono): esto puede tardar/fallar por spawnear un
-  // proceso externo.
+  // Modelos disponibles por proveedor (T35, F8): estático para Claude Code,
+  // dinámicos (con cache TTL + fallback al curado) para Codex/OpenCode — ver
+  // `../ai/providers/provider-models.ts`. Canal SEPARADO de `settings:get`
+  // (síncrono): esto puede tardar/fallar por spawnear un proceso externo.
   handle('ai:getProviderModels', (req) => getProviderModels(req.provider))
 
   handle('settings:get', () => getAiSettingsInfo())
-  handle('settings:setAiModel', (req) => {
-    settingsStore.setAiModel(req.aiModel)
-    return getAiSettingsInfo()
-  })
   handle('settings:setAiProvider', (req) => {
     settingsStore.setAiProvider(req.provider)
     return getAiSettingsInfo()
@@ -314,22 +316,6 @@ export async function registerIpcHandlers(): Promise<{ stopPrWatcher: () => void
     settingsStore.setModelOption(req.provider, req.optionId, req.value)
     return getAiSettingsInfo()
   })
-
-  // Key de OpenRouter persistida con `safeStorage` (T32,
-  // `../ai/openrouter-key-store.ts`): `key` vacía/solo espacios borra lo
-  // persistido en vez de guardar un valor vacío (mismo canal sirve para
-  // "guardar" y "borrar"). Nunca devuelve la key, solo el status agregado
-  // (`getOpenRouterKeyStatus`, `../ai/env.ts`).
-  handle('settings:setOpenRouterKey', (req) => {
-    const trimmed = req.key.trim()
-    if (trimmed.length > 0) {
-      saveApiKey(trimmed)
-    } else {
-      clearApiKey()
-    }
-    return getOpenRouterKeyStatus()
-  })
-  handle('settings:getOpenRouterKeyStatus', () => getOpenRouterKeyStatus())
 
   // Ventana didáctica desacoplada (T14, `../windows/didactic-window.ts`): una
   // sola instancia a la vez, mismo preload/webPreferences que la principal.

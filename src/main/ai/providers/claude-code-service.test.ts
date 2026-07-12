@@ -2,13 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GithubService } from '../../github/service'
 import type { DiffFile, PullRequestDetail } from '../../../shared/types'
 import type { DraftDidacticSection } from '../../../shared/events'
+import { AGENTIC_INACTIVITY_TIMEOUT_MS, AGENTIC_REQUEST_TIMEOUT_MS } from '../analysis-timeouts'
 
 /**
  * `ClaudeCodeAiService` (T28) habla con `@anthropic-ai/claude-agent-sdk`
  * (`query()`), NUNCA con una sesión real de Claude — se mockea el paquete
  * completo para simular el `AsyncGenerator<SDKMessage>` que devuelve `query()`
- * sin depender de que quien corre los tests tenga `claude` instalado/logueado
- * (mismo espíritu que `../openrouter-service.test.ts` mockeando `fetch`).
+ * sin depender de que quien corre los tests tenga `claude` instalado/logueado.
  *
  * También se mockea `../env` (`getEffectiveAiSelection`) para no pasar por
  * `settingsStore`/Electron real, igual que `../index.test.ts`.
@@ -28,6 +28,39 @@ const resolveCliPathMock = vi.fn()
 vi.mock('./resolve-cli', () => ({
   resolveCliPath: (...args: unknown[]) => resolveCliPathMock(...args),
 }))
+
+/**
+ * `ensureSnapshot` (T54) se mockea: los tests de este servicio NO deben
+ * pagar una descarga real de GitHub ni tocar disco, solo verificar que el
+ * servicio lo llama con `(github, repo, detail.headSha)` y usa lo que
+ * devuelve como `cwd` (T58).
+ */
+const ensureSnapshotMock = vi.fn()
+vi.mock('../../github/snapshot-store', () => ({
+  ensureSnapshot: (...args: unknown[]) => ensureSnapshotMock(...args),
+}))
+
+/**
+ * `createAnalysisTimeouts` (T56) se envuelve (NO se reemplaza: se preserva
+ * el comportamiento real) solo para capturar con QUÉ `{ totalMs, inactivityMs }`
+ * lo llama `ClaudeCodeAiService` — T58 pide verificar que usa los valores
+ * AGÉNTICOS (`AGENTIC_REQUEST_TIMEOUT_MS`/`AGENTIC_INACTIVITY_TIMEOUT_MS`),
+ * no los de generación directa.
+ */
+const createAnalysisTimeoutsCalls: Array<{ totalMs?: number; inactivityMs?: number } | undefined> = []
+vi.mock('../analysis-timeouts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../analysis-timeouts')>()
+  return {
+    ...actual,
+    createAnalysisTimeouts: (
+      controller: AbortController,
+      options?: { totalMs?: number; inactivityMs?: number },
+    ) => {
+      createAnalysisTimeoutsCalls.push(options)
+      return actual.createAnalysisTimeouts(controller, options)
+    },
+  }
+})
 
 /** Misma forma que la clase real exportada por el SDK: `class AbortError extends Error {}`, sin `.name` custom. */
 class FakeAbortError extends Error {}
@@ -153,6 +186,9 @@ describe('ClaudeCodeAiService.analyzePullRequest', () => {
     })
     resolveCliPathMock.mockReset()
     resolveCliPathMock.mockReturnValue('/home/test-user/.local/bin/claude')
+    ensureSnapshotMock.mockReset()
+    ensureSnapshotMock.mockResolvedValue('/home/test-user/.minerva/snapshots/shopwave-api-a1b2c3d')
+    createAnalysisTimeoutsCalls.length = 0
   })
 
   afterEach(() => {
@@ -161,7 +197,6 @@ describe('ClaudeCodeAiService.analyzePullRequest', () => {
   })
 
   it('mapea un stream de deltas de texto a DidacticAnalysis', async () => {
-    process.env.OPENROUTER_API_KEY = 'sk-secret'
     process.env.GITHUB_TOKEN = 'gh-secret'
     try {
       fakeQuery([
@@ -186,21 +221,35 @@ describe('ClaudeCodeAiService.analyzePullRequest', () => {
       expect(call.options.model).toBe('claude-sonnet-5')
       expect(call.options.pathToClaudeCodeExecutable).toBe('/home/test-user/.local/bin/claude')
       expect(call.options.systemPrompt).toEqual(expect.any(String))
-      expect(call.options.tools).toEqual([])
+      // AGÉNTICO (T58): cwd = snapshot local del PR, tools de solo lectura,
+      // permissionMode restrictivo y maxTurns alto (ya no una sola vuelta
+      // sin herramientas).
+      expect(call.options.cwd).toBe('/home/test-user/.minerva/snapshots/shopwave-api-a1b2c3d')
+      expect(call.options.tools).toEqual(['Read', 'Grep', 'Glob'])
+      expect(call.options.allowedTools).toEqual(['Read', 'Grep', 'Glob'])
+      expect(call.options.permissionMode).toBe('dontAsk')
+      expect(call.options.maxTurns).toBe(30)
+      // CRÍTICO: settingSources: [] + persistSession: false NO cambian con
+      // el snapshot como cwd — el snapshot es código hostil (T58).
       expect(call.options.persistSession).toBe(false)
       expect(call.options.settingSources).toEqual([])
       expect(call.options.includePartialMessages).toBe(true)
-      expect(call.options.maxTurns).toBe(1)
       expect(call.options.abortController).toBeInstanceOf(AbortController)
       expect(call.prompt).toContain(detail.title)
+
+      // `ensureSnapshot` se llama con el headSha del detail (T58).
+      expect(ensureSnapshotMock).toHaveBeenCalledWith(expect.anything(), repo, detail.headSha)
+
+      // Timeouts AGÉNTICOS (300s/60s), no los de generación directa (T58).
+      expect(createAnalysisTimeoutsCalls).toEqual([
+        { totalMs: AGENTIC_REQUEST_TIMEOUT_MS, inactivityMs: AGENTIC_INACTIVITY_TIMEOUT_MS },
+      ])
 
       // El entorno del subproceso que arma el SDK internamente no debe traer
       // secretos de otros proveedores (frontera de seguridad, T31).
       const env = call.options.env as NodeJS.ProcessEnv
-      expect(env.OPENROUTER_API_KEY).toBeUndefined()
       expect(env.GITHUB_TOKEN).toBeUndefined()
     } finally {
-      delete process.env.OPENROUTER_API_KEY
       delete process.env.GITHUB_TOKEN
     }
   })
@@ -235,7 +284,7 @@ describe('ClaudeCodeAiService.analyzePullRequest', () => {
     expect(call.options).not.toHaveProperty('effort')
   })
 
-  it('lanza un mensaje accionable si resolveCliPath no encuentra "claude" instalado, sin llamar a query()', async () => {
+  it('lanza un mensaje accionable si resolveCliPath no encuentra "claude" instalado, sin llamar a query() ni ensureSnapshot', async () => {
     resolveCliPathMock.mockReturnValue(null)
 
     const service = new ClaudeCodeAiService(makeGithubService())
@@ -243,6 +292,16 @@ describe('ClaudeCodeAiService.analyzePullRequest', () => {
       'No se encontró el CLI "claude" instalado',
     )
     expect(queryMock).not.toHaveBeenCalled()
+    expect(ensureSnapshotMock).not.toHaveBeenCalled()
+  })
+
+  it('el link accionable apunta a code.claude.com/docs/en/setup (no al docs.claude.com viejo)', async () => {
+    resolveCliPathMock.mockReturnValue(null)
+
+    const service = new ClaudeCodeAiService(makeGithubService())
+    await expect(service.analyzePullRequest({ repo, number: 482 })).rejects.toThrow(
+      'https://code.claude.com/docs/en/setup',
+    )
   })
 
   it('reconstruye una sección aunque el delta llegue partido en varios chunks', async () => {
@@ -294,6 +353,33 @@ describe('ClaudeCodeAiService.analyzePullRequest', () => {
     expect(progressCalls.slice(0, -1).every(([, meta]) => meta.done === false)).toBe(true)
   })
 
+  it('emite onProgress con phase:"exploring" ante actividad de tool-use ANTES del primer delta de texto (T60)', async () => {
+    fakeQuery([
+      // Evento crudo del stream que NO es un `text_delta` (mismo tipo que
+      // llega durante una vuelta de `Read`/`Grep`/`Glob`, ver el comentario
+      // del módulo): actividad de tool-use sin texto todavía.
+      thinkingDeltaMessage('explorando el snapshot del PR...'),
+      textDeltaMessage('@@@SECTION kind=summary\nok\n'),
+    ])
+
+    const progressCalls: Array<[DraftDidacticSection[], { done: boolean; phase?: 'exploring' | 'writing' }]> = []
+    const service = new ClaudeCodeAiService(makeGithubService())
+    const result = await service.analyzePullRequest(
+      { repo, number: 482 },
+      { onProgress: (sections, meta) => progressCalls.push([sections, meta]) },
+    )
+
+    // La PRIMERA llamada a onProgress (el throttle SIEMPRE deja pasar la
+    // primera) es la actividad de tool-use, ANTES de que llegue ningún delta
+    // de texto: fase "exploring" con secciones todavía vacías.
+    const [firstSections, firstMeta] = progressCalls[0]
+    expect(firstMeta).toEqual({ done: false, phase: 'exploring' })
+    expect(firstSections).toEqual([])
+
+    // El resultado final sí incluye el contenido del delta posterior.
+    expect(result.sections).toEqual([{ kind: 'summary', markdown: 'ok' }])
+  })
+
   it('lanza un mensaje accionable de login cuando el assistant reporta authentication_failed', async () => {
     fakeQuery([
       {
@@ -342,13 +428,30 @@ describe('ClaudeCodeAiService.analyzePullRequest', () => {
     )
   })
 
-  it('mapea el AbortError propio del SDK a un mensaje de timeout accionable', async () => {
+  it('mapea el AbortError propio del SDK a un mensaje de timeout accionable con el total AGÉNTICO (300s, T58)', async () => {
     fakeQueryThrows(new FakeAbortError('Claude Code process aborted by user'))
 
     const service = new ClaudeCodeAiService(makeGithubService())
     await expect(service.analyzePullRequest({ repo, number: 482 })).rejects.toThrow(
-      'Claude Code no respondió a tiempo',
+      'Claude Code no respondió a tiempo (timeout total de 300s)',
     )
+  })
+
+  it('un mensaje de tool-use (input_json_delta, sin texto) NO se empuja al parser pero SÍ mantiene vivo el análisis (T58)', async () => {
+    fakeQuery([
+      {
+        type: 'stream_event',
+        event: { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"path":"src/x.ts"}' } },
+        parent_tool_use_id: null,
+        uuid: 'u-tool',
+        session_id: 's1',
+      },
+      textDeltaMessage('@@@SECTION kind=summary\nok\n'),
+    ])
+
+    const service = new ClaudeCodeAiService(makeGithubService())
+    const result = await service.analyzePullRequest({ repo, number: 482 })
+    expect(result.sections).toEqual([{ kind: 'summary', markdown: 'ok' }])
   })
 
   it('lanza si el modelo no emite ningún delta de texto', async () => {

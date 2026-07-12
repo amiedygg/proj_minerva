@@ -14,7 +14,6 @@ import type {
   CommentThread,
   DidacticAnalysis,
   DiffFile,
-  OpenRouterKeyStatus,
   PrComment,
   PrStateFilter,
   PullRequestDetail,
@@ -102,24 +101,24 @@ export interface IpcContract {
   /**
    * Estado de login por proveedor de IA (T27), sin disparar ningún análisis:
    * un `Record` con los TRES proveedores del catálogo (`../shared/ai-providers.ts`),
-   * cada uno con su `AiProviderStatus` (`./types.ts`). OpenRouter se resuelve
-   * de forma síncrona (¿hay `OPENROUTER_API_KEY`?, `main/ai/env.ts`); Claude
-   * Code/Codex vía un probe de CLI con timeout corto y cache TTL, NUNCA
-   * bloqueante (`main/ai/providers/cli-probe.ts`) — ver
-   * `main/ai/providers/provider-status.ts` para el agregado. Nunca incluye
-   * tokens/keys, a lo sumo `account.email`/`account.plan` de exhibición.
+   * cada uno con su `AiProviderStatus` (`./types.ts`), resuelto vía un probe
+   * de CLI con timeout corto y cache TTL, NUNCA bloqueante
+   * (`main/ai/providers/cli-probe.ts`) — ver `main/ai/providers/provider-status.ts`
+   * para el agregado. Nunca incluye tokens/keys, a lo sumo
+   * `account.email`/`account.plan` de exhibición.
    */
   'ai:getProviderStatus': { req: void; res: Record<AiProviderId, AiProviderStatus> }
 
   /**
-   * Modelos disponibles para `provider` (T35, F8): estáticos (catálogo
-   * curado, T26/T34) para OpenRouter/Claude Code; DINÁMICOS vía la RPC
-   * `model/list` de `codex app-server` para Codex, con fallback al curado y
-   * cache TTL en main si el CLI falla/no hay sesión (ver
-   * `../main/ai/providers/provider-models.ts`). A propósito es un canal
-   * SEPARADO de `settings:get` (síncrono, T26): resolver los modelos de
-   * Codex puede tardar (o fallar) por spawnear un proceso externo, y eso NO
-   * debe bloquear ni romper la carga del resto de Settings.
+   * Modelos disponibles para `provider` (T35, F8): estático (catálogo
+   * curado, T26/T34) para Claude Code; DINÁMICOS vía la RPC `model/list` de
+   * `codex app-server` para Codex y vía `provider.list()` del server local
+   * para OpenCode (T57), con fallback al curado y cache TTL en main si el
+   * CLI falla/no hay sesión (ver `../main/ai/providers/provider-models.ts`).
+   * A propósito es un canal SEPARADO de `settings:get` (síncrono, T26):
+   * resolver los modelos de Codex/OpenCode puede tardar (o fallar) por
+   * spawnear un proceso externo, y eso NO debe bloquear ni romper la carga
+   * del resto de Settings.
    */
   'ai:getProviderModels': { req: { provider: AiProviderId }; res: readonly AiModelOption[] }
 
@@ -130,8 +129,6 @@ export interface IpcContract {
    * (`../main/ai/env.ts`).
    */
   'settings:get': { req: void; res: AiSettingsInfo }
-  /** Compat (pre-T26): persiste el modelo para OpenRouter sin tocar el proveedor activo. */
-  'settings:setAiModel': { req: { aiModel: string }; res: AiSettingsInfo }
   /** Cambia el proveedor ACTIVO (T26); no toca los modelos ya elegidos por cada proveedor. */
   'settings:setAiProvider': { req: { provider: AiProviderId }; res: AiSettingsInfo }
   /** Persiste el modelo elegido para `provider` (T26), sea o no el proveedor activo. */
@@ -154,25 +151,6 @@ export interface IpcContract {
     req: { provider: AiProviderId; optionId: string; value: string }
     res: AiSettingsInfo
   }
-  /**
-   * Guarda o borra la key de OpenRouter persistida con `safeStorage` (T32,
-   * `../main/ai/openrouter-key-store.ts`): `key` no vacía (tras `trim()`) se
-   * cifra y persiste (`saveApiKey`); `key` vacía o solo espacios borra lo
-   * persistido (`clearApiKey`) — el mismo canal sirve para las dos acciones,
-   * así la UI de Settings (T30) no necesita un canal aparte para "borrar".
-   * Responde el status actualizado (`getOpenRouterKeyStatus`, mismo tipo que
-   * `settings:getOpenRouterKeyStatus`) para que la UI refresque sin un
-   * roundtrip adicional. La key NUNCA viaja de vuelta al renderer.
-   */
-  'settings:setOpenRouterKey': { req: { key: string }; res: OpenRouterKeyStatus }
-  /**
-   * Estado de configuración de la key de OpenRouter (T32): `configured` +
-   * `source` (`'safeStorage' | 'env' | 'none'`, ver `OpenRouterKeyStatus` en
-   * `./types.ts`), NUNCA la key en claro. Lo consume la card de OpenRouter en
-   * Settings (T30) para pintar "Configurada (safeStorage) / Tomada de .env /
-   * No configurada".
-   */
-  'settings:getOpenRouterKeyStatus': { req: void; res: OpenRouterKeyStatus }
 
   /**
    * Abre (o enfoca, si ya hay una) la ventana didáctica desacoplada (T14,
@@ -215,12 +193,9 @@ export const IPC_CHANNELS = [
   'ai:getProviderStatus',
   'ai:getProviderModels',
   'settings:get',
-  'settings:setAiModel',
   'settings:setAiProvider',
   'settings:setProviderModel',
   'settings:setModelOption',
-  'settings:setOpenRouterKey',
-  'settings:getOpenRouterKeyStatus',
   'window:openDidactic',
 ] as const satisfies readonly IpcChannel[]
 

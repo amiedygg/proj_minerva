@@ -9,7 +9,9 @@
  * estado más reciente de la sesión sin que esta clase tenga que enterarse de
  * logins/logouts.
  */
+import { rm, writeFile } from 'node:fs/promises'
 import { Octokit } from 'octokit'
+import * as tar from 'tar'
 import type {
   CiStatus,
   DiffFileStatus,
@@ -26,6 +28,21 @@ import type { GithubService } from './service'
 
 /** Prefijo sintético para hilos generales (issue comments, sin línea): ver `mapIssueCommentToThread`. */
 const ISSUE_THREAD_PREFIX = 'issue-'
+
+/**
+ * Tope de tamaño del tarball de un snapshot (T54): un repo real puede pesar
+ * mucho más que un diff, y este tarball se guarda entero en memoria antes de
+ * escribirse a disco (`octokit.request` no expone streaming para binarios) —
+ * sin tope, un repo gigante podría agotar memoria del proceso `main`.
+ */
+export const MAX_TARBALL_BYTES = 150 * 1024 * 1024
+
+/**
+ * Tope del tamaño DESCOMPRIMIDO declarado por el índice del tarball (revisión
+ * de seguridad F11): sin esto, un tarball de <150 MB comprimido podía
+ * expandirse a varios GB (bomba de descompresión) — ver `writeSnapshot`.
+ */
+export const MAX_EXTRACTED_BYTES = 500 * 1024 * 1024
 
 // ---------------------------------------------------------------------------
 // Tipos propios para las respuestas de GraphQL (Octokit no genera tipos para
@@ -687,6 +704,91 @@ export class RealGithubService implements GithubService {
       return mapRestCommentToPrComment(comment)
     } catch (error) {
       throw mapGithubError(error, req.repo.fullName)
+    }
+  }
+
+  /**
+   * Descarga el tarball del repo AL COMMIT `headSha` (endpoint REST, no
+   * git — el snapshot es de un commit puntual, no un clon con historia) y lo
+   * extrae en `destDir`. El tar.gz temporal se escribe como archivo HERMANO
+   * de `destDir` (mismo padre, nombre `<destDir>.tar.gz`) porque node-tar
+   * necesita un `file` real en disco (no acepta el `ArrayBuffer` en
+   * memoria); se borra al final, tanto en éxito como en error.
+   *
+   * Los tarballs de GitHub traen un directorio raíz sintético
+   * (`owner-repo-sha7/`) envolviendo el contenido real: `strip: 1` lo pela
+   * para que `destDir` termine siendo la raíz del repo.
+   */
+  async writeSnapshot(req: { repo: RepoRef; headSha: string }, destDir: string): Promise<void> {
+    const token = this.requireToken()
+    const client = this.client(token)
+    const tmpTarPath = destDir + '.tar.gz'
+
+    try {
+      const response = await client.request('GET /repos/{owner}/{repo}/tarball/{ref}', {
+        owner: req.repo.owner,
+        repo: req.repo.name,
+        ref: req.headSha,
+      })
+      const buffer = Buffer.from(response.data as ArrayBuffer)
+      if (buffer.byteLength > MAX_TARBALL_BYTES) {
+        const maxMb = Math.floor(MAX_TARBALL_BYTES / (1024 * 1024))
+        throw new Error(
+          'El repositorio ' +
+            req.repo.fullName +
+            ' es demasiado grande para copiar localmente (tarball de más de ' +
+            maxMb +
+            ' MB). No se puede generar un análisis agéntico para este PR.',
+        )
+      }
+
+      await writeFile(tmpTarPath, buffer)
+
+      // Bomba de descompresión (revisión de seguridad F11, hallazgo #1): el
+      // tope de arriba es sobre el tarball COMPRIMIDO — un repo hostil puede
+      // meter archivos altamente compresibles que quepan en 150 MB pero se
+      // expandan a varios GB al extraer, llenando el disco antes de que el
+      // barrido LRU de snapshot-store corra. Pre-scan barato del índice del
+      // tarball (sin escribir nada) sumando los tamaños declarados; si el
+      // total DESCOMPRIMIDO excede el tope, se aborta ANTES de extraer.
+      let declaredBytes = 0
+      await tar.list({
+        file: tmpTarPath,
+        onReadEntry: (entry) => {
+          declaredBytes += entry.size ?? 0
+        },
+      })
+      if (declaredBytes > MAX_EXTRACTED_BYTES) {
+        const maxMb = Math.floor(MAX_EXTRACTED_BYTES / (1024 * 1024))
+        throw new Error(
+          'El repositorio ' +
+            req.repo.fullName +
+            ' es demasiado grande para copiar localmente (más de ' +
+            maxMb +
+            ' MB descomprimido). No se puede generar un análisis agéntico para este PR.',
+        )
+      }
+
+      // Solo archivos y directorios: un repo hostil puede traer SYMLINKS
+      // apuntando fuera del snapshot (p. ej. a `~/.ssh`), y las herramientas
+      // read-only de los proveedores agénticos los seguirían al leer —
+      // escaparían del jail sin "escribir" nada. Se omiten en la extracción
+      // (hardlinks incluidos), no se falla: el resto del árbol sigue siendo
+      // analizable.
+      await tar.extract({
+        file: tmpTarPath,
+        cwd: destDir,
+        strip: 1,
+        // El tipo del filter une `Stats | ReadEntry` (node-tar lo comparte
+        // con `tar.create`); en extract siempre llega `ReadEntry` (tiene
+        // `type`) — cualquier otra cosa se deniega por defecto.
+        filter: (_path, entry) =>
+          'type' in entry && (entry.type === 'File' || entry.type === 'Directory'),
+      })
+    } catch (error) {
+      throw mapGithubError(error, req.repo.fullName)
+    } finally {
+      await rm(tmpTarPath, { force: true })
     }
   }
 }

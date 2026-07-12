@@ -3,37 +3,27 @@ import type { GithubService } from '../github/service'
 
 /**
  * `createAiService` (T27, factory multi-proveedor; ASYNC desde T28 — ver el
- * comentario de `./index.ts`) delega en `getEffectiveAiSelection`/`getAiEnv`
- * (`./env.ts`) para elegir implementación, y en `getCliProviderStatus`
- * (`./providers/cli-probe.ts`) para saber si el proveedor `cli` activo
- * (Claude Code/Codex) tiene sesión. Se mockean esas funciones más las clases
- * `OpenRouterAiService`/`ClaudeCodeAiService`/`CodexAiService`/`MockAiService`
- * (constructores espiados, sin lógica real) para verificar SOLO la lógica de
- * selección del factory, sin pagar ninguna llamada real ni depender del
- * entorno (`OPENROUTER_API_KEY`, sesión de `claude`) de quien corre los tests.
- * `MINERVA_MOCK` se controla por test: sin él el factory LANZA cuando el
- * proveedor activo no puede inicializarse; con `MINERVA_MOCK=1` cae al mock
- * de IA (modo demo) — ver el comentario de `createAiServiceForProvider`.
+ * comentario de `./index.ts`) delega en `getEffectiveAiSelection` (`./env.ts`)
+ * para elegir proveedor+modelo, y en `getCliProviderStatus`
+ * (`./providers/cli-probe.ts`) para saber si el proveedor activo (los TRES
+ * son `cli` desde T59: Claude Code/Codex/OpenCode) tiene sesión. Se mockean
+ * esas funciones más las clases `ClaudeCodeAiService`/`CodexAiService`/
+ * `OpenCodeAiService`/`MockAiService` (constructores espiados, sin lógica
+ * real) para verificar SOLO la lógica de selección del factory, sin pagar
+ * ninguna llamada real ni depender del entorno (sesión de `claude`/`codex`/
+ * `opencode`) de quien corre los tests. `MINERVA_MOCK` se controla por test:
+ * sin él el factory LANZA cuando el proveedor activo no puede inicializarse;
+ * con `MINERVA_MOCK=1` cae al mock de IA (modo demo) — ver el comentario de
+ * `createAiServiceForProvider`.
  */
-const getAiEnvMock = vi.fn()
 const getEffectiveAiSelectionMock = vi.fn()
 vi.mock('./env', () => ({
-  getAiEnv: (...args: unknown[]) => getAiEnvMock(...args),
   getEffectiveAiSelection: (...args: unknown[]) => getEffectiveAiSelectionMock(...args),
 }))
 
 const getCliProviderStatusMock = vi.fn()
 vi.mock('./providers/cli-probe', () => ({
   getCliProviderStatus: (...args: unknown[]) => getCliProviderStatusMock(...args),
-}))
-
-const openRouterCtor = vi.fn()
-vi.mock('./openrouter-service', () => ({
-  OpenRouterAiService: class {
-    constructor(...args: unknown[]) {
-      openRouterCtor(...args)
-    }
-  },
 }))
 
 const claudeCodeCtor = vi.fn()
@@ -50,6 +40,15 @@ vi.mock('./providers/codex-service', () => ({
   CodexAiService: class {
     constructor(...args: unknown[]) {
       codexCtor(...args)
+    }
+  },
+}))
+
+const opencodeCtor = vi.fn()
+vi.mock('./providers/opencode-service', () => ({
+  OpenCodeAiService: class {
+    constructor(...args: unknown[]) {
+      opencodeCtor(...args)
     }
   },
 }))
@@ -86,38 +85,16 @@ describe('createAiService (T27, factory multi-proveedor; async desde T28)', () =
     else process.env.MINERVA_MOCK = originalMinervaMock
   })
 
-  it('openrouter activo + key: instancia OpenRouterAiService (comportamiento idéntico al pre-T27)', async () => {
-    getEffectiveAiSelectionMock.mockReturnValue({ provider: 'openrouter', model: 'z-ai/glm-5.2' })
-    getAiEnvMock.mockReturnValue({ openRouterApiKey: 'sk-x', aiModel: 'z-ai/glm-5.2' })
-    const github = makeGithub()
-
-    await createAiService(github)
-
-    expect(openRouterCtor).toHaveBeenCalledExactlyOnceWith(github)
-    expect(mockServiceCtor).not.toHaveBeenCalled()
-    expect(getCliProviderStatusMock).not.toHaveBeenCalled()
-  })
-
-  it('openrouter activo sin key + GitHub real: LANZA con la causa y el remedio (no cae al mock)', async () => {
-    getEffectiveAiSelectionMock.mockReturnValue({ provider: 'openrouter', model: 'z-ai/glm-5.2' })
-    getAiEnvMock.mockReturnValue({ openRouterApiKey: null, aiModel: 'z-ai/glm-5.2' })
-
-    await expect(createAiService(makeGithub())).rejects.toThrow(
-      /OpenRouter.*API key.*Settings/s,
-    )
-    expect(mockServiceCtor).not.toHaveBeenCalled()
-    expect(openRouterCtor).not.toHaveBeenCalled()
-  })
-
-  it('openrouter activo sin key + MINERVA_MOCK=1: cae a MockAiService (demo sin credenciales)', async () => {
-    process.env.MINERVA_MOCK = '1'
-    getEffectiveAiSelectionMock.mockReturnValue({ provider: 'openrouter', model: 'z-ai/glm-5.2' })
-    getAiEnvMock.mockReturnValue({ openRouterApiKey: null, aiModel: 'z-ai/glm-5.2' })
-
-    await createAiService(makeGithub())
-
-    expect(mockServiceCtor).toHaveBeenCalledTimes(1)
-    expect(openRouterCtor).not.toHaveBeenCalled()
+  it('MINERVA_MOCK_AI=1 fuerza MockAiService sin consultar proveedor ni probe (F11)', async () => {
+    process.env.MINERVA_MOCK_AI = '1'
+    try {
+      await createAiService(makeGithub())
+      expect(mockServiceCtor).toHaveBeenCalledOnce()
+      expect(getEffectiveAiSelectionMock).not.toHaveBeenCalled()
+      expect(getCliProviderStatusMock).not.toHaveBeenCalled()
+    } finally {
+      delete process.env.MINERVA_MOCK_AI
+    }
   })
 
   it('claude-code activo + CLI autenticado: instancia ClaudeCodeAiService (T28)', async () => {
@@ -130,9 +107,6 @@ describe('createAiService (T27, factory multi-proveedor; async desde T28)', () =
     expect(claudeCodeCtor).toHaveBeenCalledExactlyOnceWith(github)
     expect(mockServiceCtor).not.toHaveBeenCalled()
     expect(getCliProviderStatusMock).toHaveBeenCalledExactlyOnceWith('claude-code')
-    // `getAiEnv` (chequeo de key de OpenRouter) no debería ni consultarse
-    // para un proveedor que no es OpenRouter.
-    expect(getAiEnvMock).not.toHaveBeenCalled()
   })
 
   it('claude-code activo + CLI instalado sin sesión + GitHub real: LANZA sugiriendo «claude login»', async () => {
@@ -183,5 +157,46 @@ describe('createAiService (T27, factory multi-proveedor; async desde T28)', () =
     await expect(createAiService(makeGithub())).rejects.toThrow(/No se encontró el CLI «codex»/)
     expect(mockServiceCtor).not.toHaveBeenCalled()
     expect(codexCtor).not.toHaveBeenCalled()
+  })
+
+  it('opencode activo + server con upstream conectado: instancia OpenCodeAiService (T57)', async () => {
+    getEffectiveAiSelectionMock.mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' })
+    getCliProviderStatusMock.mockResolvedValue({ status: 'authenticated' })
+    const github = makeGithub()
+
+    await createAiService(github)
+
+    expect(opencodeCtor).toHaveBeenCalledExactlyOnceWith(github)
+    expect(mockServiceCtor).not.toHaveBeenCalled()
+    expect(getCliProviderStatusMock).toHaveBeenCalledExactlyOnceWith('opencode')
+  })
+
+  it('opencode activo + binario instalado sin upstream conectado + GitHub real: LANZA sugiriendo «opencode auth login»', async () => {
+    getEffectiveAiSelectionMock.mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' })
+    getCliProviderStatusMock.mockResolvedValue({ status: 'installed' })
+
+    await expect(createAiService(makeGithub())).rejects.toThrow(/opencode auth login/)
+    expect(mockServiceCtor).not.toHaveBeenCalled()
+    expect(opencodeCtor).not.toHaveBeenCalled()
+  })
+
+  it('opencode activo + binario no disponible + GitHub real: LANZA diciendo que no se encontró el CLI', async () => {
+    getEffectiveAiSelectionMock.mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' })
+    getCliProviderStatusMock.mockResolvedValue({ status: 'unavailable' })
+
+    await expect(createAiService(makeGithub())).rejects.toThrow(/No se encontró el CLI «opencode»/)
+    expect(mockServiceCtor).not.toHaveBeenCalled()
+    expect(opencodeCtor).not.toHaveBeenCalled()
+  })
+
+  it('opencode activo + binario no disponible + MINERVA_MOCK=1: cae a MockAiService (demo)', async () => {
+    process.env.MINERVA_MOCK = '1'
+    getEffectiveAiSelectionMock.mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' })
+    getCliProviderStatusMock.mockResolvedValue({ status: 'unavailable' })
+
+    await createAiService(makeGithub())
+
+    expect(mockServiceCtor).toHaveBeenCalledTimes(1)
+    expect(opencodeCtor).not.toHaveBeenCalled()
   })
 })

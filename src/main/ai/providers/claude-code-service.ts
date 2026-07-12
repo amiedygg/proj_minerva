@@ -6,43 +6,71 @@
  * solo, leyendo la misma sesión que usa el CLI (ver `.agents/TASKS.md` § F7,
  * "Decisión de arquitectura clave").
  *
- * Pipeline de `analyzePullRequest` (mismo contrato que `OpenRouterAiService`,
- * ver `../service.ts`):
+ * Pipeline de `analyzePullRequest` (mismo contrato que el resto de los
+ * proveedores de IA, ver `../service.ts`):
  * 1. Pide el detalle y los archivos del PR al `GithubService` ACTIVO
  *    (inyectado por constructor, igual que el resto de proveedores).
- * 2. Arma el mismo prompt de usuario que OpenRouter (`../analysis-prompt.ts`,
- *    compartido desde T28) y el mismo system prompt de producto
+ * 2. AGÉNTICO (F11/T58): `ensureSnapshot(this.github, req.repo, detail.headSha)`
+ *    (`../../github/snapshot-store.ts`, T54) materializa una copia local del
+ *    repo AL COMMIT del PR — ese directorio es el `cwd` que se le pasa a
+ *    `query()`, y el mensaje de usuario (`buildAgenticUserMessage`, en vez de
+ *    `buildUserMessage`) le pide explícitamente que lo explore.
+ * 3. Arma el mismo system prompt de producto que el resto de proveedores
  *    (`../prompts/analyze-pr.ts`, `ANALYZE_PR_SYSTEM_PROMPT`) — el SDK lo
  *    recibe por `options.systemPrompt` como STRING CUSTOM (no el preset
  *    `claude_code`): eso reemplaza por completo el prompt de sistema por
  *    defecto de Claude Code en vez de "aparentar ser" el cliente oficial.
- * 3. Llama a `query({ prompt, options })` de una SOLA vuelta de generación,
- *    sin herramientas (`options.tools: []` — deshabilita TODAS las
- *    herramientas built-in; no es un loop de agente) ni persistencia de
- *    sesión (`persistSession: false`) ni fuentes de settings del filesystem
- *    (`settingSources: []`, para no heredar hooks/CLAUDE.md de lo que sea
- *    que `process.cwd()` resuelva a en el proceso de Electron — un análisis
- *    headless no debe disparar hooks arbitrarios de `~/.claude/settings.json`
- *    ni de un `.claude/settings.json` de proyecto ajeno).
- * 4. `query()` devuelve un `AsyncGenerator<SDKMessage>` (T13-compatible:
+ * 4. Llama a `query({ prompt, options })` en modo AGENTE de varias vueltas
+ *    (`maxTurns: 30`) con herramientas de SOLO LECTURA (`options.tools:
+ *    ['Read', 'Grep', 'Glob']` — nombres verificados contra `sdk.d.ts` del
+ *    paquete instalado; NADA de `Write`/`Edit`/`Bash`/`WebFetch`/`WebSearch`/
+ *    `Task`. El `.d.ts` no ofrece una tool de listado separada de `Glob`
+ *    — `Glob` cubre listar). `options.allowedTools` repite la misma lista y
+ *    `options.permissionMode: 'dontAsk'` ("no prompt for permissions, deny
+ *    if not pre-approved"): un proceso headless de main NUNCA puede responder
+ *    un prompt de permiso interactivo, así que cualquier modo que pueda
+ *    quedarse esperando uno (`'default'`, `'plan'`) colgaría hasta el timeout
+ *    total; `'dontAsk'` con `allowedTools` acotado a las 3 tools de lectura
+ *    es el más restrictivo que sigue siendo utilizable sin humano en el loop
+ *    (se prefirió a `'bypassPermissions'`, que exige
+ *    `allowDangerouslySkipPermissions: true` y salta TODO permiso en vez de
+ *    solo auto-aprobar una whitelist ya acotada por `tools`).
+ *    Sigue sin persistir sesión (`persistSession: false`) NI cargar fuentes
+ *    de settings del filesystem (`settingSources: []`) — CRÍTICO acá porque
+ *    el `cwd` ahora es un snapshot de código de un PR ajeno: sin
+ *    `settingSources: []` un `CLAUDE.md`/`.claude/settings.json` hostil
+ *    dentro del snapshot podría inyectar instrucciones o disparar hooks
+ *    (prompt injection vía contenido no confiable, ver la frontera de
+ *    seguridad en `CLAUDE.md` del repo). Verificado con un snapshot de
+ *    prueba con un `CLAUDE.md` trampa (T58, ver bitácora en TASKS.md): NO se
+ *    carga.
+ * 5. `query()` devuelve un `AsyncGenerator<SDKMessage>` (T13-compatible:
  *    streaming real, no un único objeto al final). Con
  *    `includePartialMessages: true` el SDK emite `SDKPartialAssistantMessage`
  *    (`type: 'stream_event'`) por cada evento crudo de la Messages API
  *    (`BetaRawMessageStreamEvent`) — de ahí se extraen SOLO los
  *    `content_block_delta` cuyo `delta.type === 'text_delta'` (se ignoran
- *    `thinking_delta`/`input_json_delta`/etc., y cualquier mensaje que no
- *    sea de texto: `system` de init, `stream_event` de tool-use si algo se
- *    colara, etc.) y se empujan a un `StreamSectionParser`
- *    (`../stream-parser.ts`), exactamente como los deltas SSE de OpenRouter.
- * 5. Mismos timeouts que OpenRouter (`../analysis-timeouts.ts`): total 120s /
- *    inactividad 20s, con el `AbortController` que el SDK acepta en
+ *    `thinking_delta`/`input_json_delta` de tool-use/etc.). Con tools
+ *    habilitadas llegan mensajes `assistant`/`stream_event` intermedios por
+ *    cada vuelta de tool-use (turnos que solo invocan `Read`/`Grep`/`Glob`
+ *    sin emitir texto) — el `for await` ya resetea el timer de inactividad
+ *    con CUALQUIER mensaje del stream (`timeouts.resetInactivityTimer()` al
+ *    tope del loop, antes del `switch` por tipo), así que esas vueltas
+ *    silenciosas no disparan el timeout de inactividad. El `result` final
+ *    (`message.type === 'result'`) sigue siendo la única fuente de verdad
+ *    para errores de nivel-turno (incluido `subtype: 'error_max_turns'` si
+ *    el agente agota las 30 vueltas).
+ * 6. Timeouts AGÉNTICOS (`../analysis-timeouts.ts`, T56): total 300s /
+ *    inactividad 60s — más altos que los de generación directa porque
+ *    explorar el snapshot con herramientas toma varias vueltas antes de la
+ *    primera sección — con el `AbortController` que el SDK acepta en
  *    `options.abortController`.
- * 6. Errores mapeados a mensajes accionables: sesión no autenticada
+ * 7. Errores mapeados a mensajes accionables: sesión no autenticada
  *    (`SDKAssistantMessage.error === 'authentication_failed'` o
  *    `'oauth_org_not_allowed'`) → "corré `claude login`"; binario del SDK no
  *    encontrado/no pudo lanzarse → mensaje claro sin tecnicismos internos;
- *    timeout total/inactividad → mismo mensaje que OpenRouter pero con el
- *    nombre de este proveedor.
+ *    timeout total/inactividad → mismo mensaje que los demás proveedores
+ *    pero con el nombre de este.
  *
  * Nunca se loguea contenido de la sesión ni tokens: el SDK los maneja
  * internamente (viven en `~/.claude/`, fuera del alcance de Minerva).
@@ -67,22 +95,29 @@ import type { IpcRequest } from '../../../shared/ipc'
 import type { GeneratedAnalysis } from '../../../shared/types'
 import { getEffectiveAiSelection } from '../env'
 import { ANALYZE_PR_SYSTEM_PROMPT } from '../prompts/analyze-pr'
-import { buildUserMessage, prId } from '../analysis-prompt'
+import { buildAgenticUserMessage, prId } from '../analysis-prompt'
 import { StreamSectionParser } from '../stream-parser'
 import { createThrottle } from '../throttle'
 import { resolveCliPath } from './resolve-cli'
 import { buildSanitizedSpawnEnv } from './spawn-env'
+import { ensureSnapshot } from '../../github/snapshot-store'
 import {
+  AGENTIC_INACTIVITY_TIMEOUT_MS,
+  AGENTIC_REQUEST_TIMEOUT_MS,
   createAnalysisTimeouts,
-  INACTIVITY_TIMEOUT_MS,
   PROGRESS_THROTTLE_MS,
-  REQUEST_TIMEOUT_MS,
 } from '../analysis-timeouts'
+
+/** Nombres EXACTOS de las tools read-only del Agent SDK (`sdk.d.ts` de `@anthropic-ai/claude-agent-sdk`, verificados contra el paquete instalado en T58): sin `Write`/`Edit`/`Bash`/`WebFetch`/`WebSearch`/`Task`. No existe una tool de listado separada de `Glob` en este SDK. */
+const READ_ONLY_TOOLS = ['Read', 'Grep', 'Glob']
+
+/** Cuántas vueltas de tool-use + generación se permiten como máximo antes de que el SDK corte con `result.subtype: 'error_max_turns'` (F11/T58: exploración del snapshot con herramientas, no una sola generación). */
+const AGENTIC_MAX_TURNS = 30
 
 /** Mensaje accionable cuando `resolveCliPath('claude')` no encuentra el binario en ninguna ubicación conocida. */
 const CLAUDE_CLI_NOT_FOUND_MESSAGE =
   'No se encontró el CLI "claude" instalado: instalá Claude Code (ver ' +
-  'https://docs.claude.com/en/docs/claude-code/overview) y corré «claude login» antes de ' +
+  'https://code.claude.com/docs/en/setup) y corré «claude login» antes de ' +
   'analizar con este proveedor.'
 
 /** Mismo union que `EffortLevel` del Agent SDK (`sdk.d.ts`), repetido acá para no importar un tipo interno solo para esto. */
@@ -156,31 +191,52 @@ export class ClaudeCodeAiService implements AiService {
       this.github.getPullRequestFiles(req),
     ])
 
-    const userMessage = buildUserMessage(detail, files)
+    // AGÉNTICO (F11/T58): copia local del repo al commit del PR — el `cwd`
+    // que `query()` explora con `Read`/`Grep`/`Glob` (ver el comentario del
+    // módulo). Dedupeado/cacheado en disco por `ensureSnapshot` (T54): un
+    // segundo análisis del mismo repo+sha no vuelve a pagar la descarga.
+    const snapshotDir = await ensureSnapshot(this.github, req.repo, detail.headSha)
+
+    const userMessage = buildAgenticUserMessage(detail, files)
 
     const controller = new AbortController()
-    const timeouts = createAnalysisTimeouts(controller)
+    const timeouts = createAnalysisTimeouts(controller, {
+      totalMs: AGENTIC_REQUEST_TIMEOUT_MS,
+      inactivityMs: AGENTIC_INACTIVITY_TIMEOUT_MS,
+    })
 
-    // Mismo espíritu que `OpenRouterAiService.abortErrorMessage`: `AbortError`
-    // es la clase que exporta el propio SDK (no una `DOMException` nativa),
-    // así que se distingue por `instanceof`, no por `.name` (el SDK no le
-    // pone un `.name` custom).
+    // `AbortError` es la clase que exporta el propio SDK (no una
+    // `DOMException` nativa), así que se distingue por `instanceof`, no por
+    // `.name` (el SDK no le pone un `.name` custom).
     const abortErrorMessage = (error: unknown): string | null => {
       if (!(error instanceof AbortError)) return null
       if (timeouts.getAbortReason() === 'inactivity-timeout') {
         return (
           'Claude Code dejó de enviar datos: sin ningún fragmento nuevo por más de ' +
-          INACTIVITY_TIMEOUT_MS / 1000 +
+          AGENTIC_INACTIVITY_TIMEOUT_MS / 1000 +
           's (timeout de inactividad).'
         )
       }
-      return 'Claude Code no respondió a tiempo (timeout total de ' + REQUEST_TIMEOUT_MS / 1000 + 's).'
+      return (
+        'Claude Code no respondió a tiempo (timeout total de ' + AGENTIC_REQUEST_TIMEOUT_MS / 1000 + 's).'
+      )
     }
 
     const parser = new StreamSectionParser()
     const throttle = createThrottle(PROGRESS_THROTTLE_MS)
     const onProgress = options?.onProgress
     let sawAnyDelta = false
+    // Fase del streaming (F11/T60, ver `AnalyzeProgressMeta` en `../service.ts`):
+    // arranca "exploring" (el agente todavía no escribió texto, solo puede
+    // estar usando `Read`/`Grep`/`Glob`) y pasa a "writing" en el PRIMER
+    // `text_delta` aceptado, sin volver atrás.
+    let phase: 'exploring' | 'writing' = 'exploring'
+    /** Progreso de actividad SIN delta de texto (tool-use) mientras seguimos "exploring": throttleado, nunca cambia `sections`. */
+    const pingExploring = (): void => {
+      if (phase === 'exploring' && onProgress && throttle.shouldRun()) {
+        onProgress(parser.snapshot(), { done: false, phase })
+      }
+    }
 
     timeouts.resetInactivityTimer()
 
@@ -193,6 +249,9 @@ export class ClaudeCodeAiService implements AiService {
           // plataforma del SDK no se empaqueta, así que sin esto `query()`
           // intentaría lanzar un binario que no existe en producción.
           pathToClaudeCodeExecutable: claudeCliPath,
+          // AGÉNTICO (F11/T58): el agente explora el snapshot local del PR,
+          // NO el `process.cwd()` de Electron.
+          cwd: snapshotDir,
           // Entorno saneado del proceso hijo que el SDK spawnea: no hereda
           // secretos de OTROS proveedores (mismo criterio que
           // `./codex-app-server-client.ts`, ver `./spawn-env.ts`). El SDK
@@ -204,12 +263,22 @@ export class ClaudeCodeAiService implements AiService {
           // nunca usar el preset `claude_code` con `append` acá, eso sería
           // "aparentar" ser el cliente oficial).
           systemPrompt: ANALYZE_PR_SYSTEM_PROMPT,
-          // Una sola vuelta de generación: sin herramientas (no un loop de
-          // agente) y sin más de un turno aunque el modelo insista.
-          tools: [],
-          maxTurns: 1,
+          // Solo lectura: `Read`/`Grep`/`Glob` (ver el comentario del módulo
+          // y `READ_ONLY_TOOLS` arriba) — NADA de Write/Edit/Bash/WebFetch/
+          // WebSearch/Task. `allowedTools` + `permissionMode: 'dontAsk'`
+          // auto-aprueban esas 3 sin poder colgarse esperando un prompt de
+          // permiso que nadie puede responder en un proceso headless.
+          tools: READ_ONLY_TOOLS,
+          allowedTools: READ_ONLY_TOOLS,
+          permissionMode: 'dontAsk',
+          // Loop de agente de varias vueltas (explorar con tools antes de
+          // escribir secciones), no una sola generación.
+          maxTurns: AGENTIC_MAX_TURNS,
           // Nunca persistir esta sesión efímera en `~/.claude/projects/` ni
-          // heredar settings/hooks del filesystem (ver comentario de arriba).
+          // heredar settings/hooks del filesystem — CRÍTICO ahora que el
+          // `cwd` es un snapshot de código de un PR ajeno (ver comentario del
+          // módulo: puede traer un `CLAUDE.md`/`.claude/settings.json`
+          // hostil).
           persistSession: false,
           settingSources: [],
           includePartialMessages: true,
@@ -227,16 +296,28 @@ export class ClaudeCodeAiService implements AiService {
       })
 
       for await (const message of stream) {
+        // Se resetea con CUALQUIER mensaje del stream, no solo con deltas de
+        // texto: en modo agéntico llegan vueltas enteras de tool-use
+        // (`Read`/`Grep`/`Glob` explorando el snapshot) sin emitir texto —
+        // esas vueltas siguen contando como "el agente está vivo" y no deben
+        // disparar el timeout de inactividad.
         timeouts.resetInactivityTimer()
 
         if (message.type === 'stream_event') {
           const event = message.event
           if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+            if (phase === 'exploring') phase = 'writing'
             sawAnyDelta = true
             parser.push(event.delta.text)
             if (onProgress && throttle.shouldRun()) {
-              onProgress(parser.snapshot(), { done: false })
+              onProgress(parser.snapshot(), { done: false, phase })
             }
+          } else {
+            // Cualquier otro evento crudo del stream (tool_use en
+            // construcción, thinking_delta, etc., T60): mientras seguimos
+            // "exploring" es la señal de actividad de herramientas que la UI
+            // pinta como "Explorando el repositorio…".
+            pingExploring()
           }
           continue
         }
@@ -245,10 +326,19 @@ export class ClaudeCodeAiService implements AiService {
           if (message.error) {
             throw new Error(mapAssistantError(message.error))
           }
+          // Turno de asistente completo sin `stream_event` de texto todavía
+          // (p. ej. una vuelta que solo usó `Read`/`Grep`/`Glob`, T60): misma
+          // señal de actividad de tool-use que arriba.
+          pingExploring()
           continue
         }
 
         if (message.type === 'result') {
+          // El `result` FINAL (uno por análisis, tras la última vuelta) es la
+          // única fuente de verdad para errores de nivel-turno, incluido
+          // `subtype: 'error_max_turns'` si el agente agota `maxTurns` sin
+          // terminar. Los `assistant`/`stream_event` intermedios de cada
+          // vuelta de tool-use ya se manejaron arriba (o se ignoraron).
           if (message.is_error) {
             const detailText = message.subtype === 'success' ? message.result : message.errors.join('; ')
             throw new Error('Claude Code devolvió un error: ' + detailText)
@@ -256,8 +346,8 @@ export class ClaudeCodeAiService implements AiService {
           continue
         }
 
-        // Cualquier otro tipo (system/init, task_*, hook_*, etc.): irrelevante
-        // para este análisis de una sola vuelta sin herramientas, se ignora.
+        // Cualquier otro tipo (system/init, task_*, hook_*, tool_use interno
+        // del SDK, etc.): irrelevante para el parseo de secciones, se ignora.
       }
     } catch (error) {
       timeouts.clearAll()

@@ -1,26 +1,19 @@
 import { RefreshCw } from 'lucide-react'
 import type { AiProviderStatus } from '../../../../shared/types'
+import { CLI_META, type CliProvider } from '../../lib/cli-meta'
 
-type CliProvider = 'claude-code' | 'codex'
-
-interface CliMeta {
-  binary: string
-  loginCmd: string
-  installHint: string
-}
-
-/** Metadata puramente de UI (comando a mostrar): la lógica real de detección vive en `main` (T27). */
-const CLI_META: Record<CliProvider, CliMeta> = {
-  'claude-code': {
-    binary: 'claude',
-    loginCmd: 'claude login',
-    installHint: 'Instalá el CLI de Claude Code (paquete @anthropic-ai/claude-code) y volvé a intentar.',
-  },
-  codex: {
-    binary: 'codex',
-    loginCmd: 'codex login',
-    installHint: 'Instalá el CLI de Codex y volvé a intentar.',
-  },
+/** Enlace externo consistente con el resto del design system (`Markdown.tsx`/`TitleBar.tsx`): `target="_blank"` lo intercepta `external-link-guard` en main y lo abre en el navegador del sistema. */
+function ExternalLink({ href, children }: { href: string; children: React.ReactNode }): React.JSX.Element {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="text-accent underline underline-offset-2 hover:text-accent/80"
+    >
+      {children}
+    </a>
+  )
 }
 
 interface CliLoginGuideProps {
@@ -31,12 +24,21 @@ interface CliLoginGuideProps {
 }
 
 /**
- * Guía de login para proveedores que se autentican vía CLI externo
- * (`claude`/`codex`, T27/T30): el login sucede FUERA de Minerva (el
- * renderer no puede spawnear procesos ni el main puede leer la sesión sin
- * el handshake real de T28/T29), así que acá solo se muestra el comando a
- * correr y un botón que vuelve a pedir `ai:getProviderStatus`
- * (`use-provider-status.ts`) para reflejar el resultado.
+ * Guía de login para proveedores que se autentican vía CLI externo (los
+ * TRES desde T57/T60: `claude`/`codex`/`opencode`): el login sucede FUERA de
+ * Minerva (el renderer no puede spawnear procesos ni el main puede leer la
+ * sesión sin el handshake real de T28/T29/T56), así que acá solo se muestra
+ * el comando a correr + un enlace real de instalación (`installUrl`, T60) y
+ * un botón que vuelve a pedir `ai:getProviderStatus` (`use-provider-status.ts`)
+ * para reflejar el resultado.
+ *
+ * Copy de `installed` DISTINTO para `opencode` (T60, decisión de Edilson): a
+ * diferencia de Claude Code/Codex (donde `installed` = "CLI ahí pero sin
+ * sesión"), en OpenCode ese estado significa "el server local respondió pero
+ * NINGÚN upstream de modelos está conectado" (ver `provider-status.ts`) — el
+ * comando `opencode auth login` conecta un PROVEEDOR DE MODELOS (Anthropic,
+ * OpenAI, un gateway, etc.), no "inicia sesión del CLI" en el sentido en que
+ * lo hacen `claude login`/`codex login`.
  */
 export function CliLoginGuide({
   provider,
@@ -52,10 +54,20 @@ export function CliLoginGuide({
       {value === 'unavailable' && (
         <p className="text-xs text-muted">
           No se encontró el CLI <span className="font-mono text-text">{meta.binary}</span> en tu
-          PATH. {meta.installHint}
+          PATH. Instalalo desde <ExternalLink href={meta.installUrl}>la documentación oficial</ExternalLink>{' '}
+          y volvé a intentar.
         </p>
       )}
-      {value === 'installed' && (
+      {value === 'installed' && provider === 'opencode' && (
+        <p className="text-xs text-muted">
+          OpenCode está instalado pero no tiene ningún proveedor de modelos conectado. Corré{' '}
+          <span className="font-mono text-text">{meta.loginCmd}</span> en una terminal para conectar
+          uno (no es un login del CLI: agrega credenciales de un proveedor de IA, ver{' '}
+          <ExternalLink href={meta.installUrl}>la documentación oficial</ExternalLink>) y volvé a
+          comprobar acá.
+        </p>
+      )}
+      {value === 'installed' && provider !== 'opencode' && (
         <p className="text-xs text-muted">
           El CLI está instalado pero no detectamos una sesión iniciada. Corré{' '}
           <span className="font-mono text-text">{meta.loginCmd}</span> en una terminal y volvé a

@@ -35,9 +35,10 @@ El objetivo: que quien aprueba un PR lo haga **entendiendo** lo que aprueba.
 - 📚 **Resumen didáctico**: qué cambió, por qué importa, riesgos y qué mirar de cerca.
 - ⚡ **Streaming**: el análisis aparece en vivo, sección a sección, con los diagramas
   renderizándose en cuanto su bloque Mermaid se completa.
-- 🤖 **Multi-LLM**: modelo configurable desde Settings (⚙️) vía OpenRouter — GLM 5.2
-  por defecto; Kimi K2.7 Code, Gemini 3.5 Flash, GPT-5.5, Claude Opus 4.8 / Sonnet 5,
-  o cualquier ID de openrouter.ai/models.
+- 🤖 **Multi-proveedor**: proveedor y modelo configurables desde Settings (⚙️) — Claude
+  Code, Codex y OpenCode (con acceso, dentro de OpenCode, a upstreams como OpenRouter,
+  Anthropic u OpenAI vía `opencode auth login`). Minerva no gestiona ninguna API key:
+  usa la sesión que ya autenticaste con el CLI de cada proveedor.
 - 🪟 **Ventana desacoplable**: el análisis se abre en su propia ventana amplia (sin
   re-pagar el LLM: cache en main) con botón **Re-analizar** para comparar modelos.
 - 🔍 **Visor de recursos**: cualquier diagrama se expande a un lightbox con zoom
@@ -53,7 +54,7 @@ El objetivo: que quien aprueba un PR lo haga **entendiendo** lo que aprueba.
 | UI | React 19 + TypeScript estricto + Tailwind CSS v4 |
 | Estado | Zustand |
 | GitHub API | [Octokit](https://github.com/octokit) (GraphQL para listados, REST para acciones) — OAuth Device Flow, token cifrado con safeStorage |
-| IA | [OpenRouter](https://openrouter.ai/) (API OpenAI-compatible) — multi-LLM, modelo configurable desde la UI, streaming SSE con protocolo de secciones tagged |
+| IA | Claude Code / Codex / [OpenCode](https://opencode.ai/) — CLIs oficiales, proveedor+modelo configurables desde la UI, streaming con protocolo de secciones tagged |
 | Diagramas | [Mermaid](https://mermaid.js.org/) (C4, `erDiagram`, flowchart) — import lazy, `securityLevel: strict` |
 | Diff | parser de patches propio + resaltado con Shiki |
 | Tests | vitest (229 unit) + suites e2e vía Chrome DevTools Protocol |
@@ -67,13 +68,15 @@ El objetivo: que quien aprueba un PR lo haga **entendiendo** lo que aprueba.
 npm install
 # (si el binario de Electron no se descargó: node node_modules/electron/install.js)
 
-# 2. Configurar la key de IA (opcional — sin key, el panel didáctico usa un mock)
-cp .env.example .env
-#   OPENROUTER_API_KEY=...      # panel didáctico con IA real (multi-LLM vía OpenRouter)
+# 2. IA real (opcional — sin ningún CLI logueado, el panel didáctico usa un mock):
+#    corré el login del proveedor que prefieras en una terminal.
+claude login      # Claude Code (cuenta Pro/Max)
+codex login       # Codex (cuenta ChatGPT Plus/Pro)
+opencode auth login   # OpenCode (gateway propio + upstreams como OpenRouter/Anthropic/OpenAI)
 
 # 3. Desarrollo (hot reload)
 npm run dev              # GitHub real: login por Device Flow desde la app
-MINERVA_MOCK=1 npm run dev   # modo demo: PRs mock ("shopwave") + IA real si hay key
+MINERVA_MOCK=1 npm run dev   # modo demo: PRs mock ("shopwave") + IA real si hay CLI logueado
 
 # 4. Calidad
 npm run typecheck && npm run lint && npm test
@@ -82,8 +85,10 @@ npm run typecheck && npm run lint && npm test
 npm run build
 ```
 
-- El **modelo de IA** se cambia en la app (⚙️ Settings); default `z-ai/glm-5.2`.
-  Precedencia: settings > env `MINERVA_AI_MODEL` > default.
+- El **proveedor y modelo de IA** se cambian en la app (⚙️ Settings); default OpenCode
+  (`opencode/big-pickle`). Precedencia: settings > env `MINERVA_AI_PROVIDER`/
+  `MINERVA_AI_MODEL` > default. Minerva no gestiona ninguna API key: cada proveedor se
+  autentica solo, leyendo la sesión de su propio CLI.
 - La sesión de GitHub **persiste** entre arranques (token cifrado vía safeStorage).
   En desktops Wayland no reconocidos por Chromium (Hyprland/sway) la app fuerza el
   backend `gnome-libsecret`; override con `MINERVA_PASSWORD_STORE` si tu setup usa otro.
@@ -107,18 +112,19 @@ npm run build
 
 - `npm run dist` — build + AppImage en `dist/Minerva-<versión>.AppImage`
   (`npm run dist:dir` genera solo `dist/linux-unpacked/`, más rápido para probar).
-- El `.env` queda **excluido** del paquete a propósito (la key de OpenRouter no
-  viaja en el binario); en producción la key llega por variable de entorno o
-  por el campo cifrado (safeStorage) de Settings.
-- **Proveedores Claude Code y Codex: requieren los CLIs oficiales instalados y
-  logueados en la máquina donde corre Minerva.** La app NO los bundlea ni
-  reimplementa su OAuth: usa la sesión que ya autenticaste con `claude login`
-  (Claude Pro/Max) o `codex login` (ChatGPT Plus/Pro). Sin el CLI instalado el
-  selector de proveedor en Settings muestra "No disponible"; instalado pero sin
-  sesión, muestra "Instalado, sin sesión". OpenRouter no necesita nada de esto
-  (va por API key). El paquete `@anthropic-ai/claude-agent-sdk` trae un binario
-  nativo por plataforma (~250MB) que tampoco se bundlea — `electron-builder.yml`
-  lo excluye explícitamente (`!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**`)
+- **Los tres proveedores de IA (Claude Code, Codex, OpenCode) requieren su CLI
+  oficial instalado y logueado en la máquina donde corre Minerva** — Minerva ya
+  no gestiona ninguna API key propia (eliminado en T59: hasta entonces existía
+  un cuarto proveedor, OpenRouter, con key propia vía `.env`/safeStorage; hoy
+  quien quiera esos modelos los conecta DENTRO de OpenCode con `opencode auth
+  login`). La app NO bundlea los CLIs ni reimplementa su OAuth: usa la sesión
+  que ya autenticaste con `claude login` (Claude Pro/Max), `codex login`
+  (ChatGPT Plus/Pro) u `opencode auth login`. Sin el CLI instalado el selector
+  de proveedor en Settings muestra "No disponible"; instalado pero sin sesión
+  (o, en OpenCode, sin ningún upstream conectado), muestra "Instalado, sin
+  sesión". El paquete `@anthropic-ai/claude-agent-sdk` trae un binario nativo
+  por plataforma (~250MB) que tampoco se bundlea — `electron-builder.yml` lo
+  excluye explícitamente (`!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**`)
   porque Minerva siempre apunta al `claude` del sistema vía
   `pathToClaudeCodeExecutable` (resuelto por `src/main/ai/providers/resolve-cli.ts`,
   que busca en `PATH` y en ubicaciones comunes como `~/.local/bin` — necesario
@@ -160,11 +166,11 @@ npm run build
 - [x] Listado de repos y PRs abiertos _(Octokit real; `MINERVA_MOCK=1` para el modo demo)_
 - [x] Vista de diff estilo GitKraken (split/inline, árbol de archivos, Shiki)
 - [x] Comentarios: leer y publicar (generales y por línea), **renderizados como Markdown**
-- [x] Panel de IA: resumen didáctico _(OpenRouter real si hay `OPENROUTER_API_KEY`; mock como fallback)_
+- [x] Panel de IA: resumen didáctico _(Claude Code/Codex/OpenCode reales vía CLI logueado; mock como fallback)_
 - [x] Panel de IA: diagramas C4 de impacto arquitectónico _(render Mermaid e2e)_
 - [x] Panel de IA: detección de endpoints + doc + probador local
 - [x] Panel de IA: detección de cambios de esquema + diagrama ER
-- [x] Settings UI: selector de modelo multi-LLM (default GLM 5.2)
+- [x] Settings UI: selector de proveedor+modelo (default OpenCode)
 - [x] Streaming del análisis (SSE + protocolo de secciones tagged)
 - [x] Ventana didáctica desacoplable + cache de análisis (sin re-pagar el LLM)
 - [x] Visor de recursos: lightbox con zoom/pan para diagramas, vista amplia para tablas/snippets
@@ -175,7 +181,8 @@ npm run build
 - [x] Lista de PRs v0.3.0: filtro de estado (Abiertos/Cerrados/Todos, badges `merged`/`closed`)
 - [x] Lista de PRs v0.3.0: refresh manual + watcher de cambios (polling 60s en main, evento push `prListChanged`)
 - [x] Lista de PRs v0.3.0: leído/no-leído por PR (dots rojos, contador de comentarios, persistido en userData)
-- [ ] `OPENROUTER_API_KEY` vía safeStorage + campo en Settings (hoy: `.env`)
+- [x] Análisis agéntico v0.4.0: snapshot local del commit del PR + exploración read-only (los hallazgos cruzan diff y árbol real)
+- [x] Proveedor OpenCode v0.4.0 (reemplaza a OpenRouter directo; sus modelos van DENTRO de OpenCode) + card guía si no hay CLIs
 - [ ] Comentar en un PR real de prueba (verificación con cuenta real)
 
 > Estado detallado, bitácora de gotchas y control de tareas: `.agents/TASKS.md`.

@@ -22,8 +22,8 @@ interface ActiveModelHintProps {
  * Compartido por los dos caminos de `ActiveModelHint`: config vigente
  * (sin `generatedWith`) y sello del análisis (`generatedWith`, T41).
  *
- * Si el modelo ya no está en el catálogo (id viejo, o tecleado a mano en
- * un proveedor "avanzado" como OpenRouter) `getModelOption` devuelve
+ * Si el modelo ya no está en el catálogo (id viejo, o un slug tecleado a
+ * mano en el modo "avanzado" de OpenCode) `getModelOption` devuelve
  * `undefined` — degradamos mostrando el id crudo sin effort, sin romper.
  */
 function resolveModelHintLabels(

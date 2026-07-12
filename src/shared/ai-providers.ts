@@ -1,16 +1,18 @@
 /**
- * Catálogo de proveedores de IA (T26): OpenRouter, Claude Code y Codex, cada
- * uno con su propia lista curada de modelos. Antes de esta tarea solo existía
- * OpenRouter y su lista vivía plana en `ai-models.ts`; esos IDs de OpenRouter
- * (`z-ai/glm-5.2`, etc.) aplican SOLO a OpenRouter — Claude Code y Codex no
- * llaman a una API HTTP con un id de modelo libre, usan los CLIs/SDK
- * oficiales (T27/T28/T29), así que su catálogo es curado a mano.
- *
- * `ai-models.ts` ahora re-exporta el slice de OpenRouter desde acá para no
- * romper imports existentes (`ModelPicker.tsx`, `main/ai/env.ts`) — no
- * agregar nada nuevo en `ai-models.ts`, el catálogo real vive acá.
+ * Catálogo de proveedores de IA (T26): Claude Code, Codex y OpenCode (T57),
+ * cada uno con su propia lista curada de modelos. Hasta T59 existía un cuarto
+ * proveedor, OpenRouter, que hablaba HTTP directo con `openrouter.ai` (API
+ * OpenAI-compatible) y gestionaba su propia API key en Settings; decisión de
+ * Edilson (T59): Minerva deja de hablar con OpenRouter directamente — quien
+ * quiera esos modelos los usa DENTRO de OpenCode (`opencode auth login` con
+ * el upstream `openrouter`, ver `OPENCODE_MODELS` más abajo y el slug
+ * `openrouter/<id>` que produce la migración de `main/settings/store.ts`).
+ * Claude Code, Codex y OpenCode no llaman a una API HTTP con un id de modelo
+ * libre, usan los CLIs/SDK oficiales (T27/T28/T29/T55-T57), así que su
+ * catálogo curado es el FALLBACK cuando no hay lista dinámica (T35, T57:
+ * `main/ai/providers/{codex,opencode}-model-catalog.ts`).
  */
-export type AiProviderId = 'openrouter' | 'claude-code' | 'codex'
+export type AiProviderId = 'claude-code' | 'codex' | 'opencode'
 
 /**
  * Una opción concreta dentro de un `ModelOptionDescriptor` (T34, F8): p. ej.
@@ -113,59 +115,9 @@ const CLAUDE_CODE_FULL_EFFORT = effortDescriptor(['low', 'medium', 'high', 'xhig
 const CLAUDE_CODE_HAIKU_EFFORT = effortDescriptor(['low', 'medium', 'high'], 'high')
 
 /**
- * `effort` para los modelos de OpenRouter claramente capaces de reasoning
- * (T34, conservador a propósito): el resto del catálogo (`glm`, `kimi`,
- * `gemini-flash`) queda SIN descriptor por ahora — T36 valida el formato/
- * soporte fino contra la API real antes de ampliar esta lista.
- */
-const OPENROUTER_REASONING_EFFORT = effortDescriptor(['low', 'medium', 'high'], 'medium')
-
-/**
- * IDs verificados contra la API pública de OpenRouter (openrouter.ai/models)
- * — no cambiar sin volver a verificar. Migrado tal cual desde el
- * `ai-models.ts` pre-T26 (T12).
- */
-const OPENROUTER_MODELS = [
-  { id: 'z-ai/glm-5.2', label: 'GLM 5.2', vendor: 'Z.ai' },
-  { id: 'moonshotai/kimi-k2.7-code', label: 'Kimi K2.7 Code', vendor: 'MoonshotAI' },
-  { id: 'google/gemini-3.5-flash', label: 'Gemini 3.5 Flash', vendor: 'Google' },
-  { id: 'openai/gpt-5.5', label: 'GPT-5.5', vendor: 'OpenAI', options: [OPENROUTER_REASONING_EFFORT] },
-  {
-    id: 'openai/gpt-5.6-sol',
-    label: 'GPT-5.6 Sol',
-    vendor: 'OpenAI',
-    options: [OPENROUTER_REASONING_EFFORT],
-  },
-  {
-    id: 'openai/gpt-5.6-terra',
-    label: 'GPT-5.6 Terra',
-    vendor: 'OpenAI',
-    options: [OPENROUTER_REASONING_EFFORT],
-  },
-  {
-    id: 'openai/gpt-5.6-luna',
-    label: 'GPT-5.6 Luna',
-    vendor: 'OpenAI',
-    options: [OPENROUTER_REASONING_EFFORT],
-  },
-  {
-    id: 'anthropic/claude-opus-4.8',
-    label: 'Claude Opus 4.8',
-    vendor: 'Anthropic',
-    options: [OPENROUTER_REASONING_EFFORT],
-  },
-  {
-    id: 'anthropic/claude-sonnet-5',
-    label: 'Claude Sonnet 5',
-    vendor: 'Anthropic',
-    options: [OPENROUTER_REASONING_EFFORT],
-  },
-] as const satisfies readonly AiModelOption[]
-
-/**
  * Alias de modelo que entiende `@anthropic-ai/claude-agent-sdk` (T28) vía
  * `query({ options: { model } })` — no son ids de vendor/model estilo
- * OpenRouter, son los nombres que el SDK/CLI de Claude Code resuelve.
+ * `openrouter.ai`, son los nombres que el SDK/CLI de Claude Code resuelve.
  */
 const CLAUDE_CODE_MODELS = [
   { id: 'claude-fable-5', label: 'Fable 5', vendor: 'Anthropic', options: [CLAUDE_CODE_FULL_EFFORT] },
@@ -218,16 +170,39 @@ const CODEX_MODELS = [
   },
 ] as const satisfies readonly AiModelOption[]
 
+/**
+ * Catálogo curado MÍNIMO de OpenCode (T57): fallback cuando el catálogo
+ * DINÁMICO (`main/ai/providers/opencode-model-catalog.ts`, vía
+ * `provider.list()` del server local) no está disponible — binario ausente,
+ * server que no arranca, o sin ningún upstream `connected` todavía. Verificado
+ * EMPÍRICAMENTE contra `opencode` 1.17.18 (`opencode models`, gateway
+ * `opencode/*` visible sin ningún upstream configurado): `big-pickle` es el
+ * modelo por default del gateway (sin costo, sin necesidad de credenciales
+ * propias) y el resto son los `*-free` del mismo gateway. Estos ids NO
+ * requieren autenticación adicional (a diferencia de `anthropic/*`,
+ * `openai/*`, etc., que solo aparecen tras `opencode auth login` y viven en el
+ * catálogo DINÁMICO, nunca en este fallback estático). Sin descriptor
+ * `effort`/`variant` a propósito: el catálogo dinámico trae las variantes
+ * reales por modelo, y este fallback deliberadamente minimalista solo cubre
+ * el caso "no hay nada más que mostrar".
+ */
+const OPENCODE_MODELS = [
+  { id: 'opencode/big-pickle', label: 'Big Pickle', vendor: 'OpenCode' },
+  { id: 'opencode/deepseek-v4-flash-free', label: 'DeepSeek V4 Flash Free', vendor: 'OpenCode' },
+  { id: 'opencode/hy3-free', label: 'Hy3 Free', vendor: 'OpenCode' },
+  { id: 'opencode/mimo-v2.5-free', label: 'MiMo V2.5 Free', vendor: 'OpenCode' },
+] as const satisfies readonly AiModelOption[]
+
 export const AI_PROVIDER_CATALOG: Record<AiProviderId, AiProviderCatalogEntry> = {
-  openrouter: { provider: 'openrouter', label: 'OpenRouter', models: OPENROUTER_MODELS },
   'claude-code': { provider: 'claude-code', label: 'Claude Code', models: CLAUDE_CODE_MODELS },
   codex: { provider: 'codex', label: 'Codex', models: CODEX_MODELS },
+  opencode: { provider: 'opencode', label: 'OpenCode', models: OPENCODE_MODELS },
 }
 
 export const AI_PROVIDER_IDS = [
-  'openrouter',
   'claude-code',
   'codex',
+  'opencode',
 ] as const satisfies readonly AiProviderId[]
 
 /** Guard de runtime: valida un `unknown` (payload IPC, JSON persistido, env var) como `AiProviderId`. */
@@ -236,13 +211,13 @@ export function isAiProviderId(value: unknown): value is AiProviderId {
 }
 
 /** Proveedor activo cuando no hay nada persistido en `settings.json` ni `MINERVA_AI_PROVIDER` en el entorno. */
-export const DEFAULT_AI_PROVIDER: AiProviderId = 'openrouter'
+export const DEFAULT_AI_PROVIDER: AiProviderId = 'opencode'
 
 /** Modelo default por proveedor, usado cuando no hay nada persistido ni `MINERVA_AI_MODEL` para ESE proveedor. */
 export const DEFAULT_MODEL_BY_PROVIDER: Record<AiProviderId, string> = {
-  openrouter: 'z-ai/glm-5.2',
   'claude-code': 'claude-sonnet-5',
   codex: 'gpt-5.5',
+  opencode: 'opencode/big-pickle',
 }
 
 /**
@@ -251,7 +226,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<AiProviderId, string> = {
  * `getEffectiveAiSelection`/`getAiSettingsInfo` (`main/ai/env.ts`) para saber
  * qué descriptores de opción aplican al modelo ACTIVO, y la UI (T37) para
  * pintar el selector de opciones del modelo seleccionado. `undefined` si el
- * modelo no está en el catálogo curado (p. ej. un id "avanzado" de OpenRouter
+ * modelo no está en el catálogo curado (p. ej. un slug "avanzado" de OpenCode
  * tecleado a mano, que no tiene opciones configurables).
  */
 export function getModelOption(

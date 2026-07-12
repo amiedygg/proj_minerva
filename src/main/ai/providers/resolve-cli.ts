@@ -35,8 +35,8 @@ import { accessSync, constants as fsConstants, readdirSync } from 'node:fs'
 import { homedir, platform } from 'node:os'
 import { delimiter, join } from 'node:path'
 
-/** Los dos únicos binarios que Minerva necesita resolver (T28/T29). */
-export type CliBinaryName = 'claude' | 'codex'
+/** Los binarios que Minerva necesita resolver (T28/T29/T55: `opencode`, mismas ubicaciones). */
+export type CliBinaryName = 'claude' | 'codex' | 'opencode'
 
 const cache = new Map<CliBinaryName, string | null>()
 

@@ -8,7 +8,7 @@ function analysis(headSha: string): DidacticAnalysis {
     sections: [],
     generatedAt: '2026-07-07T00:00:00.000Z',
     headSha,
-    generatedWith: { provider: 'openrouter', model: 'z-ai/glm-5.2', options: {} },
+    generatedWith: { provider: 'opencode', model: 'opencode/big-pickle', options: {} },
   }
 }
 

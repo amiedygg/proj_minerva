@@ -2,9 +2,8 @@ import { useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { AI_PROVIDER_IDS } from '../../../../shared/ai-providers'
 import type { AiProviderId } from '../../../../shared/ai-providers'
-import type { AiProviderStatus, AiSettingsInfo, OpenRouterKeyStatus } from '../../../../shared/types'
+import type { AiProviderStatus, AiSettingsInfo } from '../../../../shared/types'
 import { Badge } from '../ui/Badge'
-import { OpenRouterKeyForm } from './OpenRouterKeyForm'
 import { CliLoginGuide } from './CliLoginGuide'
 
 interface ProviderPickerProps {
@@ -13,12 +12,6 @@ interface ProviderPickerProps {
   statusLoading: boolean
   statusError: string | null
   onRefetchStatus: () => void
-  openRouterKeyStatus: OpenRouterKeyStatus | null
-  openRouterKeyLoading: boolean
-  openRouterKeyError: string | null
-  openRouterKeySaving: boolean
-  onSaveOpenRouterKey: (key: string) => Promise<boolean>
-  onClearOpenRouterKey: () => Promise<boolean>
   onSelectProvider: (provider: AiProviderId) => Promise<boolean>
 }
 
@@ -41,11 +34,13 @@ const STATUS_TONE: Record<AiProviderStatus['status'], 'neutral' | 'warning' | 's
  * (persistencia inmediata vía `setAiProvider` — a diferencia del selector de
  * modelo, que mantiene el flujo de "Guardar" explícito, ver `ModelPicker`).
  *
- * Debajo de la lista se muestra la acción contextual del proveedor
- * ACTIVO (`info.provider`) en vez de una por card: OpenRouter necesita un
- * campo de key; los CLIs solo necesitan guía + "Volver a comprobar" — meterlo
- * dentro de cada `<label>` de card habría hecho que clicks en esos controles
- * también dispararan el `onChange` del radio que envuelve la card.
+ * Debajo de la lista se muestra la guía de login del proveedor ACTIVO
+ * (`info.provider`, `CliLoginGuide`) en vez de una por card: meterlo dentro
+ * de cada `<label>` de card habría hecho que clicks en esos controles
+ * también dispararan el `onChange` del radio que envuelve la card. Hasta
+ * T59 existía un cuarto caso acá (OpenRouter, con un campo de API key en vez
+ * de guía de CLI) — eliminado junto con el proveedor: los TRES proveedores
+ * actuales son `cli`.
  */
 export function ProviderPicker({
   info,
@@ -53,12 +48,6 @@ export function ProviderPicker({
   statusLoading,
   statusError,
   onRefetchStatus,
-  openRouterKeyStatus,
-  openRouterKeyLoading,
-  openRouterKeyError,
-  openRouterKeySaving,
-  onSaveOpenRouterKey,
-  onClearOpenRouterKey,
   onSelectProvider,
 }: ProviderPickerProps): React.JSX.Element {
   const [switching, setSwitching] = useState<AiProviderId | null>(null)
@@ -138,24 +127,12 @@ export function ProviderPicker({
 
       {switchError && <p className="mt-2 text-xs text-danger">{switchError}</p>}
 
-      {info.provider === 'openrouter' && (
-        <OpenRouterKeyForm
-          status={openRouterKeyStatus}
-          loading={openRouterKeyLoading}
-          error={openRouterKeyError}
-          saving={openRouterKeySaving}
-          onSave={onSaveOpenRouterKey}
-          onClear={onClearOpenRouterKey}
-        />
-      )}
-      {(info.provider === 'claude-code' || info.provider === 'codex') && (
-        <CliLoginGuide
-          provider={info.provider}
-          status={statuses?.[info.provider]}
-          loading={statusLoading}
-          onRecheck={onRefetchStatus}
-        />
-      )}
+      <CliLoginGuide
+        provider={info.provider}
+        status={statuses?.[info.provider]}
+        loading={statusLoading}
+        onRecheck={onRefetchStatus}
+      />
     </div>
   )
 }
