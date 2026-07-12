@@ -158,6 +158,17 @@ async function createAiServiceForProvider(
 }
 
 export async function createAiService(github: GithubService): Promise<AiService> {
+  // Override explícito para e2e/demo determinista (F11): hasta T59 las suites
+  // forzaban el mock de IA dejando al proveedor default (openrouter) sin API
+  // key; con los tres proveedores actuales siendo CLIs — que en una máquina de
+  // desarrollo suelen estar instalados Y autenticados — ya no existía ninguna
+  // forma de pedir el mock a propósito. `MINERVA_MOCK_AI=1` lo fuerza sin
+  // importar el proveedor seleccionado ni el modo de GitHub (documentado en
+  // CLAUDE.md § comandos/e2e).
+  if (process.env.MINERVA_MOCK_AI === '1') {
+    console.warn('[ai] MINERVA_MOCK_AI=1: usando MockAiService (override explícito).')
+    return new MockAiService()
+  }
   const { provider } = getEffectiveAiSelection()
   return createAiServiceForProvider(provider, github)
 }

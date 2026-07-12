@@ -85,6 +85,18 @@ describe('createAiService (T27, factory multi-proveedor; async desde T28)', () =
     else process.env.MINERVA_MOCK = originalMinervaMock
   })
 
+  it('MINERVA_MOCK_AI=1 fuerza MockAiService sin consultar proveedor ni probe (F11)', async () => {
+    process.env.MINERVA_MOCK_AI = '1'
+    try {
+      await createAiService(makeGithub())
+      expect(mockServiceCtor).toHaveBeenCalledOnce()
+      expect(getEffectiveAiSelectionMock).not.toHaveBeenCalled()
+      expect(getCliProviderStatusMock).not.toHaveBeenCalled()
+    } finally {
+      delete process.env.MINERVA_MOCK_AI
+    }
+  })
+
   it('claude-code activo + CLI autenticado: instancia ClaudeCodeAiService (T28)', async () => {
     getEffectiveAiSelectionMock.mockReturnValue({ provider: 'claude-code', model: 'claude-sonnet-5' })
     getCliProviderStatusMock.mockResolvedValue({ status: 'authenticated', account: { plan: 'max' } })
