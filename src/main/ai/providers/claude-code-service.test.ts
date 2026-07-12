@@ -8,8 +8,7 @@ import { AGENTIC_INACTIVITY_TIMEOUT_MS, AGENTIC_REQUEST_TIMEOUT_MS } from '../an
  * `ClaudeCodeAiService` (T28) habla con `@anthropic-ai/claude-agent-sdk`
  * (`query()`), NUNCA con una sesión real de Claude — se mockea el paquete
  * completo para simular el `AsyncGenerator<SDKMessage>` que devuelve `query()`
- * sin depender de que quien corre los tests tenga `claude` instalado/logueado
- * (mismo espíritu que `../openrouter-service.test.ts` mockeando `fetch`).
+ * sin depender de que quien corre los tests tenga `claude` instalado/logueado.
  *
  * También se mockea `../env` (`getEffectiveAiSelection`) para no pasar por
  * `settingsStore`/Electron real, igual que `../index.test.ts`.
@@ -198,7 +197,6 @@ describe('ClaudeCodeAiService.analyzePullRequest', () => {
   })
 
   it('mapea un stream de deltas de texto a DidacticAnalysis', async () => {
-    process.env.OPENROUTER_API_KEY = 'sk-secret'
     process.env.GITHUB_TOKEN = 'gh-secret'
     try {
       fakeQuery([
@@ -250,10 +248,8 @@ describe('ClaudeCodeAiService.analyzePullRequest', () => {
       // El entorno del subproceso que arma el SDK internamente no debe traer
       // secretos de otros proveedores (frontera de seguridad, T31).
       const env = call.options.env as NodeJS.ProcessEnv
-      expect(env.OPENROUTER_API_KEY).toBeUndefined()
       expect(env.GITHUB_TOKEN).toBeUndefined()
     } finally {
-      delete process.env.OPENROUTER_API_KEY
       delete process.env.GITHUB_TOKEN
     }
   })

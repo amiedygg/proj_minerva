@@ -17,8 +17,9 @@ interface ModelOptionPickerProps {
  * seleccionado, pinta un grupo por cada `ModelOptionDescriptor` de
  * `model.options` (hoy solo `effort`, pensado para sumar service tier/
  * thinking después sin reescribir esta UI). Si el modelo no tiene `options`
- * (p. ej. un modelo Codex sin efforts, o `glm`/`kimi` de OpenRouter), el
- * llamador simplemente no monta este componente (ver `ModelPicker`).
+ * (p. ej. un modelo Codex sin efforts, o los modelos fallback curados de
+ * OpenCode), el llamador simplemente no monta este componente (ver
+ * `ModelPicker`).
  *
  * El valor activo de cada descriptor sale de `resolveOptionValue`
  * (`shared/ai-providers.ts`, T34): la misma "resolución robusta" que usa

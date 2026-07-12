@@ -28,6 +28,10 @@ function settingsFilePath(): string {
   return join(userDataDir, 'settings.json')
 }
 
+function orphanedOpenRouterKeyFilePath(): string {
+  return join(userDataDir, 'openrouter-key.bin')
+}
+
 describe('SettingsStore', () => {
   beforeEach(() => {
     userDataDir = mkdtempSync(join(tmpdir(), 'minerva-settings-test-'))
@@ -39,36 +43,36 @@ describe('SettingsStore', () => {
 
   it('devuelve null si no hay settings.json (defaults, sin crashear)', () => {
     const store = new SettingsStore()
-    expect(store.getPersistedAiModel()).toBeNull()
     expect(store.getPersistedSettings()).toBeNull()
+    expect(store.getPersistedModel('opencode')).toBeNull()
   })
 
   it('devuelve null si el archivo tiene JSON inválido (corrupto, sin crashear)', () => {
     writeFileSync(settingsFilePath(), '{ esto no es json', 'utf-8')
     const store = new SettingsStore()
-    expect(store.getPersistedAiModel()).toBeNull()
+    expect(store.getPersistedSettings()).toBeNull()
   })
 
   it('devuelve null si el JSON es válido pero no tiene ni aiModel ni aiProvider/models', () => {
     writeFileSync(settingsFilePath(), JSON.stringify({}), 'utf-8')
     const store = new SettingsStore()
-    expect(store.getPersistedAiModel()).toBeNull()
+    expect(store.getPersistedSettings()).toBeNull()
   })
 
   it('devuelve null si aiModel (forma vieja) no es un string no vacío', () => {
     writeFileSync(settingsFilePath(), JSON.stringify({ aiModel: 42 }), 'utf-8')
-    expect(new SettingsStore().getPersistedAiModel()).toBeNull()
+    expect(new SettingsStore().getPersistedSettings()).toBeNull()
 
     writeFileSync(settingsFilePath(), JSON.stringify({ aiModel: '' }), 'utf-8')
-    expect(new SettingsStore().getPersistedAiModel()).toBeNull()
+    expect(new SettingsStore().getPersistedSettings()).toBeNull()
   })
 
   it('devuelve null si el contenido es un array o un primitivo (no objeto)', () => {
     writeFileSync(settingsFilePath(), JSON.stringify(['aiModel']), 'utf-8')
-    expect(new SettingsStore().getPersistedAiModel()).toBeNull()
+    expect(new SettingsStore().getPersistedSettings()).toBeNull()
 
     writeFileSync(settingsFilePath(), JSON.stringify('z-ai/glm-5.2'), 'utf-8')
-    expect(new SettingsStore().getPersistedAiModel()).toBeNull()
+    expect(new SettingsStore().getPersistedSettings()).toBeNull()
   })
 
   it('devuelve null si aiProvider (forma nueva) no es un proveedor conocido', () => {
@@ -83,119 +87,196 @@ describe('SettingsStore', () => {
   it('devuelve null si "models" (forma nueva) tiene una clave que no es un proveedor conocido', () => {
     writeFileSync(
       settingsFilePath(),
-      JSON.stringify({ aiProvider: 'openrouter', models: { 'not-a-provider': 'x' } }),
+      JSON.stringify({ aiProvider: 'codex', models: { 'not-a-provider': 'x' } }),
       'utf-8',
     )
     expect(new SettingsStore().getPersistedSettings()).toBeNull()
   })
 
-  it('roundtrip: setAiModel + getPersistedAiModel en la misma instancia (cache)', () => {
+  it('roundtrip: setProviderModel + getPersistedModel en la misma instancia (cache)', () => {
     const store = new SettingsStore()
-    expect(store.getPersistedAiModel()).toBeNull()
+    expect(store.getPersistedModel('opencode')).toBeNull()
 
-    store.setAiModel('anthropic/claude-opus-4.8')
-    expect(store.getPersistedAiModel()).toBe('anthropic/claude-opus-4.8')
+    store.setProviderModel('opencode', 'anthropic/claude-opus-4-8')
+    expect(store.getPersistedModel('opencode')).toBe('anthropic/claude-opus-4-8')
   })
 
   it('roundtrip: una instancia nueva (simulando reinicio de la app) lee lo persistido en disco', () => {
-    new SettingsStore().setAiModel('google/gemini-3.5-flash')
+    new SettingsStore().setProviderModel('opencode', 'google/gemini-3.5-flash')
 
     const restarted = new SettingsStore()
-    expect(restarted.getPersistedAiModel()).toBe('google/gemini-3.5-flash')
+    expect(restarted.getPersistedModel('opencode')).toBe('google/gemini-3.5-flash')
   })
 
-  it('setAiModel sobreescribe un valor persistido previamente (último guardado gana)', () => {
+  it('setProviderModel sobreescribe un valor persistido previamente para el mismo proveedor (último guardado gana)', () => {
     const store = new SettingsStore()
-    store.setAiModel('openai/gpt-5.5')
-    store.setAiModel('moonshotai/kimi-k2.7-code')
-    expect(store.getPersistedAiModel()).toBe('moonshotai/kimi-k2.7-code')
+    store.setProviderModel('opencode', 'openai/gpt-5.5')
+    store.setProviderModel('opencode', 'moonshotai/kimi-k2.7-code')
+    expect(store.getPersistedModel('opencode')).toBe('moonshotai/kimi-k2.7-code')
 
     const restarted = new SettingsStore()
-    expect(restarted.getPersistedAiModel()).toBe('moonshotai/kimi-k2.7-code')
+    expect(restarted.getPersistedModel('opencode')).toBe('moonshotai/kimi-k2.7-code')
   })
 
   it('escribe settings.json en la forma nueva (aiProvider + models), plano/pretty, sin dejar el archivo .tmp', () => {
-    new SettingsStore().setAiModel('z-ai/glm-5.2')
+    new SettingsStore().setProviderModel('opencode', 'opencode/big-pickle')
 
     const raw = readFileSync(settingsFilePath(), 'utf-8')
     expect(JSON.parse(raw)).toEqual({
-      aiProvider: 'openrouter',
-      models: { openrouter: 'z-ai/glm-5.2' },
+      aiProvider: 'opencode',
+      models: { opencode: 'opencode/big-pickle' },
     })
     expect(raw).toContain('\n') // pretty-printed, no todo en una línea
     expect(existsSync(settingsFilePath() + '.tmp')).toBe(false)
   })
 
-  describe('migración de la forma vieja ({ aiModel }, pre-T26)', () => {
-    it('lee un settings.json viejo como OpenRouter + ese modelo, sin perder la selección', () => {
+  describe('migración: OpenRouter eliminado como proveedor (T59)', () => {
+    it('settings.json viejo ({ aiModel }, pre-T26) migra a OpenCode con el slug de upstream openrouter, y PERSISTE el resultado', () => {
       writeFileSync(settingsFilePath(), JSON.stringify({ aiModel: 'z-ai/glm-5.2' }), 'utf-8')
 
       const store = new SettingsStore()
       expect(store.getPersistedSettings()).toEqual({
-        aiProvider: 'openrouter',
-        models: { openrouter: 'z-ai/glm-5.2' },
+        aiProvider: 'opencode',
+        models: { opencode: 'openrouter/z-ai/glm-5.2' },
       })
-      expect(store.getPersistedAiModel()).toBe('z-ai/glm-5.2')
-      expect(store.getPersistedModel('openrouter')).toBe('z-ai/glm-5.2')
+      expect(store.getPersistedModel('opencode')).toBe('openrouter/z-ai/glm-5.2')
       expect(store.getPersistedModel('claude-code')).toBeNull()
+
+      // A diferencia de la migración pre-T26 (que quedaba solo en memoria),
+      // T59 SÍ reescribe settings.json de inmediato.
+      const raw = readFileSync(settingsFilePath(), 'utf-8')
+      expect(JSON.parse(raw)).toEqual({
+        aiProvider: 'opencode',
+        models: { opencode: 'openrouter/z-ai/glm-5.2' },
+      })
     })
 
-    it('la migración es solo in-memory: no reescribe el settings.json viejo en disco hasta el próximo set*', () => {
-      writeFileSync(settingsFilePath(), JSON.stringify({ aiModel: 'openai/gpt-5.5' }), 'utf-8')
+    it('settings.json con aiProvider "openrouter" (forma T26) migra a OpenCode, preservando modelos de otros proveedores, y PERSISTE', () => {
+      writeFileSync(
+        settingsFilePath(),
+        JSON.stringify({
+          aiProvider: 'openrouter',
+          models: { openrouter: 'openai/gpt-5.5', 'claude-code': 'claude-sonnet-5' },
+        }),
+        'utf-8',
+      )
 
       const store = new SettingsStore()
-      store.getPersistedSettings() // fuerza la carga/migración in-memory
+      expect(store.getPersistedSettings()).toEqual({
+        aiProvider: 'opencode',
+        models: { opencode: 'openrouter/openai/gpt-5.5', 'claude-code': 'claude-sonnet-5' },
+      })
 
       const raw = readFileSync(settingsFilePath(), 'utf-8')
-      expect(JSON.parse(raw)).toEqual({ aiModel: 'openai/gpt-5.5' })
+      expect(JSON.parse(raw)).toEqual({
+        aiProvider: 'opencode',
+        models: { opencode: 'openrouter/openai/gpt-5.5', 'claude-code': 'claude-sonnet-5' },
+      })
     })
 
-    it('tras leer la forma vieja, setProviderModel para otro proveedor conserva el modelo migrado de OpenRouter', () => {
-      writeFileSync(settingsFilePath(), JSON.stringify({ aiModel: 'openai/gpt-5.5' }), 'utf-8')
+    it('si ya hay un modelo real de OpenCode guardado, la migración NO lo pisa con el de OpenRouter', () => {
+      writeFileSync(
+        settingsFilePath(),
+        JSON.stringify({
+          aiProvider: 'openrouter',
+          models: { openrouter: 'z-ai/glm-5.2', opencode: 'anthropic/claude-sonnet-5' },
+        }),
+        'utf-8',
+      )
 
       const store = new SettingsStore()
-      store.setProviderModel('claude-code', 'claude-sonnet-5')
+      expect(store.getPersistedModel('opencode')).toBe('anthropic/claude-sonnet-5')
+    })
 
-      expect(store.getPersistedSettings()).toEqual({
-        aiProvider: 'openrouter',
-        models: { openrouter: 'openai/gpt-5.5', 'claude-code': 'claude-sonnet-5' },
+    it('modelOptions.openrouter se descarta (no se migra), sin tocar modelOptions de otros proveedores', () => {
+      writeFileSync(
+        settingsFilePath(),
+        JSON.stringify({
+          aiProvider: 'openrouter',
+          models: { openrouter: 'openai/gpt-5.5' },
+          modelOptions: { openrouter: { effort: 'medium' }, codex: { effort: 'high' } },
+        }),
+        'utf-8',
+      )
+
+      const store = new SettingsStore()
+      expect(store.getPersistedModelOptions('opencode')).toEqual({})
+      expect(store.getPersistedModelOptions('codex')).toEqual({ effort: 'high' })
+    })
+
+    it('un settings.json YA migrado (sin ningún rastro de openrouter) es un no-op: no se reescribe', () => {
+      const original = JSON.stringify({
+        aiProvider: 'opencode',
+        models: { opencode: 'opencode/big-pickle' },
       })
+      writeFileSync(settingsFilePath(), original, 'utf-8')
+
+      const store = new SettingsStore()
+      expect(store.getPersistedSettings()).toEqual({
+        aiProvider: 'opencode',
+        models: { opencode: 'opencode/big-pickle' },
+      })
+
+      // El archivo en disco no cambió de forma (mismo contenido lógico) —
+      // no se disparó una reescritura innecesaria.
+      const raw = readFileSync(settingsFilePath(), 'utf-8')
+      expect(JSON.parse(raw)).toEqual(JSON.parse(original))
+    })
+
+    it('sin settings.json en absoluto, no hay nada que migrar: getPersistedSettings sigue devolviendo null (defaults los resuelve ../ai/env.ts)', () => {
+      const store = new SettingsStore()
+      expect(store.getPersistedSettings()).toBeNull()
+      expect(existsSync(settingsFilePath())).toBe(false)
+    })
+
+    it('borra (best-effort) el archivo huérfano de key cifrada de OpenRouter si existe', () => {
+      writeFileSync(orphanedOpenRouterKeyFilePath(), Buffer.from([1, 2, 3]))
+      expect(existsSync(orphanedOpenRouterKeyFilePath())).toBe(true)
+
+      new SettingsStore().getPersistedSettings()
+
+      expect(existsSync(orphanedOpenRouterKeyFilePath())).toBe(false)
+    })
+
+    it('no lanza si no hay archivo huérfano de key que borrar', () => {
+      expect(existsSync(orphanedOpenRouterKeyFilePath())).toBe(false)
+      expect(() => new SettingsStore().getPersistedSettings()).not.toThrow()
     })
   })
 
   describe('setAiProvider / setProviderModel (T26)', () => {
     it('setAiProvider cambia el proveedor activo sin tocar los modelos ya elegidos', () => {
       const store = new SettingsStore()
-      store.setProviderModel('openrouter', 'z-ai/glm-5.2')
+      store.setProviderModel('opencode', 'opencode/big-pickle')
       store.setProviderModel('claude-code', 'claude-sonnet-5')
       store.setAiProvider('claude-code')
 
       expect(store.getPersistedSettings()).toEqual({
         aiProvider: 'claude-code',
-        models: { openrouter: 'z-ai/glm-5.2', 'claude-code': 'claude-sonnet-5' },
+        models: { opencode: 'opencode/big-pickle', 'claude-code': 'claude-sonnet-5' },
       })
     })
 
     it('setProviderModel para un proveedor no activo no cambia el proveedor activo', () => {
       const store = new SettingsStore()
-      store.setAiProvider('openrouter')
+      store.setAiProvider('opencode')
       store.setProviderModel('codex', 'gpt-5.5-codex')
 
       expect(store.getPersistedSettings()).toEqual({
-        aiProvider: 'openrouter',
+        aiProvider: 'opencode',
         models: { codex: 'gpt-5.5-codex' },
       })
     })
 
     it('setProviderModel sobreescribe solo el modelo de ESE proveedor (último guardado gana por proveedor)', () => {
       const store = new SettingsStore()
-      store.setProviderModel('openrouter', 'openai/gpt-5.5')
-      store.setProviderModel('openrouter', 'z-ai/glm-5.2')
+      store.setProviderModel('opencode', 'openai/gpt-5.5')
+      store.setProviderModel('opencode', 'z-ai/glm-5.2')
       store.setProviderModel('claude-code', 'claude-opus-4-8')
 
       expect(store.getPersistedSettings()).toEqual({
-        aiProvider: 'openrouter',
-        models: { openrouter: 'z-ai/glm-5.2', 'claude-code': 'claude-opus-4-8' },
+        aiProvider: 'opencode',
+        models: { opencode: 'z-ai/glm-5.2', 'claude-code': 'claude-opus-4-8' },
       })
     })
 
@@ -216,16 +297,16 @@ describe('SettingsStore', () => {
     it('un settings.json de la forma T26 (sin "modelOptions") se lee OK, sin opciones (default = {})', () => {
       writeFileSync(
         settingsFilePath(),
-        JSON.stringify({ aiProvider: 'openrouter', models: { openrouter: 'z-ai/glm-5.2' } }),
+        JSON.stringify({ aiProvider: 'opencode', models: { opencode: 'opencode/big-pickle' } }),
         'utf-8',
       )
 
       const store = new SettingsStore()
       expect(store.getPersistedSettings()).toEqual({
-        aiProvider: 'openrouter',
-        models: { openrouter: 'z-ai/glm-5.2' },
+        aiProvider: 'opencode',
+        models: { opencode: 'opencode/big-pickle' },
       })
-      expect(store.getPersistedModelOptions('openrouter')).toEqual({})
+      expect(store.getPersistedModelOptions('opencode')).toEqual({})
     })
 
     it('la migración legacy ({ aiModel }, pre-T26) sigue funcionando igual con el guard extendido para "modelOptions"', () => {
@@ -233,17 +314,17 @@ describe('SettingsStore', () => {
 
       const store = new SettingsStore()
       expect(store.getPersistedSettings()).toEqual({
-        aiProvider: 'openrouter',
-        models: { openrouter: 'z-ai/glm-5.2' },
+        aiProvider: 'opencode',
+        models: { opencode: 'openrouter/z-ai/glm-5.2' },
       })
-      expect(store.getPersistedModelOptions('openrouter')).toEqual({})
+      expect(store.getPersistedModelOptions('opencode')).toEqual({})
     })
 
     it('devuelve null si "modelOptions" tiene una clave de proveedor desconocida', () => {
       writeFileSync(
         settingsFilePath(),
         JSON.stringify({
-          aiProvider: 'openrouter',
+          aiProvider: 'codex',
           models: {},
           modelOptions: { 'not-a-provider': { effort: 'high' } },
         }),
@@ -299,8 +380,8 @@ describe('SettingsStore', () => {
     it('setAiProvider/setProviderModel preservan modelOptions ya guardadas', () => {
       const store = new SettingsStore()
       store.setModelOption('codex', 'effort', 'high')
-      store.setProviderModel('openrouter', 'z-ai/glm-5.2')
-      store.setAiProvider('openrouter')
+      store.setProviderModel('opencode', 'z-ai/glm-5.2')
+      store.setAiProvider('opencode')
 
       expect(store.getPersistedModelOptions('codex')).toEqual({ effort: 'high' })
     })

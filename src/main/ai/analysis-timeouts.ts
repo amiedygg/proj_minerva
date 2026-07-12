@@ -1,17 +1,18 @@
 /**
  * Lógica de doble timeout compartida entre los proveedores de IA que
- * streamean una respuesta larga desde un backend externo (`OpenRouterAiService`
- * vía SSE; `ClaudeCodeAiService`, T28, vía el Agent SDK oficial): un timeout
- * TOTAL desde que arranca el análisis y un timeout de INACTIVIDAD que se
- * reinicia con cada delta recibido. Cualquiera de los dos aborta el
- * `AbortController` que el proveedor ya le pasa a su transporte (fetch con
- * `signal`, o `Options.abortController` del Agent SDK).
+ * streamean una respuesta larga desde un backend externo (`ClaudeCodeAiService`,
+ * T28, vía el Agent SDK oficial; `CodexAiService`, T29, vía JSON-RPC;
+ * `OpenCodeAiService`, T56, vía el server local): un timeout TOTAL desde que
+ * arranca el análisis y un timeout de INACTIVIDAD que se reinicia con cada
+ * delta recibido. Cualquiera de los dos aborta el `AbortController` que el
+ * proveedor ya le pasa a su transporte (fetch con `signal`, o
+ * `Options.abortController` del Agent SDK).
  *
  * `getAbortReason()` le dice a quien llama CUÁL de los dos disparó el abort
  * (o `null` si el controller nunca fue abortado por este helper — p. ej. lo
  * abortó el usuario cancelando desde la UI, si eso existiera hoy) para que
  * cada proveedor arme su propio mensaje final con su propio nombre ("timeout
- * total de OpenRouter" vs. "timeout total de Claude Code").
+ * total de Codex" vs. "timeout total de Claude Code").
  */
 
 /** Timeout total del análisis completo (desde que arranca hasta el último delta). */

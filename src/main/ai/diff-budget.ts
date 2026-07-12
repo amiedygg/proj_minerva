@@ -1,10 +1,10 @@
 /**
  * Presupuesto de tamaño para los diffs que se mandan al modelo. Un PR grande
  * puede tener patches de cientos de miles de caracteres — mandarlos enteros
- * revienta el contexto (y el costo) de la llamada a OpenRouter. Este módulo
- * arma, por archivo, un bloque de texto para el prompt, respetando un
- * presupuesto total: trunca el patch del archivo que lo agota y omite del
- * todo los archivos que ya no entran.
+ * revienta el contexto (y el costo) de la llamada al proveedor de IA activo.
+ * Este módulo arma, por archivo, un bloque de texto para el prompt,
+ * respetando un presupuesto total: trunca el patch del archivo que lo agota
+ * y omite del todo los archivos que ya no entran.
  */
 import type { DiffFile } from '../../shared/types'
 

@@ -2,10 +2,10 @@
  * Agregado de "modelos disponibles" por proveedor de IA (T35, F8; OpenCode
  * en T57), consumido por el canal IPC `ai:getProviderModels`
  * (`../../ipc/handlers.ts`):
- * - OpenRouter / Claude Code: catálogo ESTÁTICO curado
- *   (`AI_PROVIDER_CATALOG`, T26/T34) — no hay nada que refrescar, se devuelve
- *   tal cual, envuelto en una promesa ya resuelta para que el canal sea
- *   uniformemente async sin importar el proveedor.
+ * - Claude Code: catálogo ESTÁTICO curado (`AI_PROVIDER_CATALOG`, T26/T34) —
+ *   no hay nada que refrescar, se devuelve tal cual, envuelto en una promesa
+ *   ya resuelta para que el canal sea uniformemente async sin importar el
+ *   proveedor.
  * - Codex: catálogo DINÁMICO vía `fetchCodexModelCatalog`
  *   (`./codex-model-catalog.ts`), que spawnea un `codex app-server` efímero y
  *   pagina `model/list`.

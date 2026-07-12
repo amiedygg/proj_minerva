@@ -3,10 +3,12 @@
  * comentario "Forma exacta de salida" de `./prompts/analyze-pr.ts` por el
  * formato exacto que produce el modelo). Puro: sin I/O, sin `fetch`, sin
  * temporizadores — solo recibe texto y expone estado derivado. Quien hace de
- * verdad el streaming (`./openrouter-service.ts`) le va empujando los deltas
- * SSE con `push()`; `./mock-service.ts` lo reutiliza también, alimentándolo
- * con el texto reconstruido de sus fixtures estáticas (`stringifySections`,
- * más abajo) para simular streaming real sin key ni costo.
+ * verdad el streaming (`./providers/opencode-service.ts`,
+ * `./providers/claude-code-service.ts`, `./providers/codex-service.ts`) le
+ * va empujando los deltas de texto con `push()`; `./mock-service.ts` lo
+ * reutiliza también, alimentándolo con el texto reconstruido de sus fixtures
+ * estáticas (`stringifySections`, más abajo) para simular streaming real sin
+ * ningún proveedor configurado ni costo.
  *
  * Protocolo (resumen; el ejemplo completo vive en el prompt):
  * - Cada marcador va SOLO en su línea y empieza con `@@@`.

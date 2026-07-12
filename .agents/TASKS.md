@@ -1972,8 +1972,11 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   status opencode authenticated "3 upstreams: openai, github-copilot, opencode",
   56 modelos dinámicos, selección persiste. NOTA: abrir Settings arranca el server
   de OpenCode en frío para el probe (paridad t3code; singleton T55 + TTL lo
-  amortiguan). Captura mirada de Settings PENDIENTE (pantalla con lock/screensaver
-  al verificar — el DOM sí muestra OpenCode en el modal); se cubre en T61._
+  amortiguan). Captura mirada de Settings HECHA (2026-07-11,
+  tras desbloqueo de pantalla, app desde worktree limpio en e385d73): los 4
+  proveedores con chips correctos — OpenRouter "No disponible", Claude Code
+  "Conectado · max", Codex "Conectado", OpenCode "Conectado · 3 upstreams:
+  openai, github-copilot, opencode". VERIFICADA COMPLETA._
   Contexto: cablear `opencode` como proveedor de PRIMERA clase. `openrouter` NO se toca
   acá (se elimina en T59 — orden importa). Depende de T55.
   Entregables: `AiProviderId` gana `'opencode'` (`shared/ai-providers.ts`: catálogo con
@@ -2035,7 +2038,26 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   sobre un snapshot fixture: el análisis usa herramientas (visible en los mensajes del
   stream) y produce secciones; el CLAUDE.md trampa no se carga.
 
-- [ ] **T59. Eliminar OpenRouter como proveedor directo + migración de settings**
+- [x] **T59. Eliminar OpenRouter como proveedor directo + migración de settings**
+  _Hecha (2026-07-11, subagente Sonnet) y VERIFICADA por el orquestador: typecheck 0
+  errores, lint limpio, 532/532 tests; revisión de la migración y del grep de
+  limpieza (solo quedan menciones históricas y el slug `openrouter/<id>` de upstream).
+  Borrados: openrouter-service(+test), openrouter-key-store(+test), ai-models.ts,
+  OpenRouterKeyForm, use-openrouter-key; los tests de buildUserMessage migraron a
+  `analysis-prompt.test.ts` (nunca fueron de OpenRouter). `DEFAULT_AI_PROVIDER =
+  'opencode'`; también se eliminó el shim legacy `settings:setAiModel` (cero
+  consumidores). MIGRACIÓN (settings/store.ts): corre sobre el JSON CRUDO ANTES de
+  los guards de forma (clave: `isAiProviderId('openrouter')` ya es false — después
+  de los guards el archivo ENTERO se descartaría), `aiProvider openrouter→opencode`,
+  `models.openrouter: X → models.opencode: 'openrouter/X'` (una elección real de
+  OpenCode gana), `modelOptions.openrouter` se descarta (efforts no equivalentes),
+  se PERSISTE de inmediato y borra best-effort el `openrouter-key.bin` huérfano.
+  DECISIONES: loader de .env se mantiene (MINERVA_AI_*; parsea sin mutar process.env)
+  y `OPENROUTER_API_KEY` sale de ENV_KEYS_TO_STRIP (Minerva ya no la gestiona; no hay
+  fuente propia que sanear, y estriparla rompería la auth por env del propio opencode).
+  `MINERVA_AI_PROVIDER` inválido (incl. openrouter) → console.warn + default.
+  provider-status.ts simplificado (todos los proveedores son cli). Las suites e2e de
+  scripts/ que mencionan OpenRouter se ajustan en T61._
   Contexto: decisión de Edilson — OpenRouter ahora se usa DENTRO de OpenCode. Depende
   de T57. Borrar con confianza; git recuerda.
   Entregables: eliminar `openrouter-service.ts`, `openrouter-key-store.ts`,

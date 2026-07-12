@@ -6,8 +6,8 @@
  * solo, leyendo la misma sesión que usa el CLI (ver `.agents/TASKS.md` § F7,
  * "Decisión de arquitectura clave").
  *
- * Pipeline de `analyzePullRequest` (mismo contrato que `OpenRouterAiService`,
- * ver `../service.ts`):
+ * Pipeline de `analyzePullRequest` (mismo contrato que el resto de los
+ * proveedores de IA, ver `../service.ts`):
  * 1. Pide el detalle y los archivos del PR al `GithubService` ACTIVO
  *    (inyectado por constructor, igual que el resto de proveedores).
  * 2. AGÉNTICO (F11/T58): `ensureSnapshot(this.github, req.repo, detail.headSha)`
@@ -69,8 +69,8 @@
  *    (`SDKAssistantMessage.error === 'authentication_failed'` o
  *    `'oauth_org_not_allowed'`) → "corré `claude login`"; binario del SDK no
  *    encontrado/no pudo lanzarse → mensaje claro sin tecnicismos internos;
- *    timeout total/inactividad → mismo mensaje que OpenRouter pero con el
- *    nombre de este proveedor.
+ *    timeout total/inactividad → mismo mensaje que los demás proveedores
+ *    pero con el nombre de este.
  *
  * Nunca se loguea contenido de la sesión ni tokens: el SDK los maneja
  * internamente (viven en `~/.claude/`, fuera del alcance de Minerva).
@@ -205,10 +205,9 @@ export class ClaudeCodeAiService implements AiService {
       inactivityMs: AGENTIC_INACTIVITY_TIMEOUT_MS,
     })
 
-    // Mismo espíritu que `OpenRouterAiService.abortErrorMessage`: `AbortError`
-    // es la clase que exporta el propio SDK (no una `DOMException` nativa),
-    // así que se distingue por `instanceof`, no por `.name` (el SDK no le
-    // pone un `.name` custom).
+    // `AbortError` es la clase que exporta el propio SDK (no una
+    // `DOMException` nativa), así que se distingue por `instanceof`, no por
+    // `.name` (el SDK no le pone un `.name` custom).
     const abortErrorMessage = (error: unknown): string | null => {
       if (!(error instanceof AbortError)) return null
       if (timeouts.getAbortReason() === 'inactivity-timeout') {

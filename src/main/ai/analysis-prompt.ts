@@ -1,8 +1,9 @@
 /**
  * Piezas compartidas del pipeline "analizar PR" entre TODOS los proveedores
- * de IA (T13: `OpenRouterAiService`; T28: `ClaudeCodeAiService`; T29 sumará
- * `CodexAiService`). Se extrajo de `./openrouter-service.ts` (donde vivía
- * hasta T28) para que ningún proveedor nuevo tenga que reimplementar ni el
+ * de IA (T28: `ClaudeCodeAiService`; T29: `CodexAiService`; T56:
+ * `OpenCodeAiService`). Hasta T28 vivía dentro del servicio de OpenRouter
+ * (`./openrouter-service.ts`, borrado en T59 junto con el proveedor); se
+ * extrajo acá para que ningún proveedor nuevo tenga que reimplementar ni el
  * armado del mensaje de usuario ni el id de PR usado como clave de cache —
  * el prompt de sistema (`ANALYZE_PR_SYSTEM_PROMPT`, `./prompts/analyze-pr.ts`)
  * y el protocolo `@@@SECTION` (`./stream-parser.ts`) YA eran compartidos desde

@@ -11,9 +11,8 @@ const SOURCE_HINT: Record<AiModelSource, string | null> = {
   default: 'Todavía no hay nada configurado para este proveedor: se está usando su default.',
 }
 
-/** Placeholder del campo "Otro (avanzado)" por proveedor con id libre habilitado (T57: se suma OpenCode). */
+/** Placeholder del campo "Otro (avanzado)" por proveedor con id libre habilitado (T57: OpenCode; T59: único que queda tras eliminar OpenRouter). */
 const CUSTOM_MODEL_PLACEHOLDER: Partial<Record<AiProviderId, string>> = {
-  openrouter: 'id de openrouter.ai/models, p. ej. mistralai/mistral-large-2411',
   opencode: 'slug <provider>/<modelo> de tu opencode, p. ej. anthropic/claude-sonnet-5',
 }
 
@@ -32,17 +31,16 @@ interface ModelPickerProps {
  * `options.effort` propio de cada uno), estáticos (`info.catalog`, T26) para
  * el resto — con el catálogo estático como fallback inicial/ante error para
  * que el picker nunca quede vacío mientras carga. "Otro (avanzado)" se
- * mantiene SOLO para OpenRouter: los CLIs (`claude-code`/`codex`) solo
- * aceptan los ids curados que el SDK/RPC de cada uno resuelve, un id libre no
- * significa nada para ellos.
- *
- * "Otro (avanzado)" también se habilita para OpenCode (T57): a diferencia de
- * Claude Code/Codex (que solo aceptan los ids curados que el SDK/RPC de cada
- * uno resuelve), OpenCode acepta CUALQUIER slug `<provider>/<modelo>` que su
- * `provider.list()` conozca — el catálogo dinámico (`opencode-model-catalog.ts`)
- * ya lo cubre casi siempre, pero un slug tecleado a mano (p. ej. un modelo
- * agregado recién vía `opencode auth login` que todavía no refrescó la cache
- * de 60s) sigue siendo válido para el server.
+ * habilita SOLO para OpenCode (T57): a diferencia de Claude Code/Codex (que
+ * solo aceptan los ids curados que el SDK/RPC de cada uno resuelve, un id
+ * libre no significa nada para ellos), OpenCode acepta CUALQUIER slug
+ * `<provider>/<modelo>` que su `provider.list()` conozca — el catálogo
+ * dinámico (`opencode-model-catalog.ts`) ya lo cubre casi siempre, pero un
+ * slug tecleado a mano (p. ej. un modelo agregado recién vía `opencode auth
+ * login` que todavía no refrescó la cache de 60s) sigue siendo válido para
+ * el server. Hasta T59 "Otro (avanzado)" también se habilitaba para
+ * OpenRouter (cualquier id de `openrouter.ai/models`) — eliminado junto con
+ * el proveedor.
  *
  * Debajo de la lista de modelos se monta `ModelOptionPicker` con las
  * opciones (hoy `effort`/`variant`) del modelo actualmente SELECCIONADO en el
@@ -118,7 +116,7 @@ function ModelPickerForm({
   onSave,
   onSetModelOption,
 }: ModelPickerFormProps): React.JSX.Element {
-  const allowCustom = info.provider === 'openrouter' || info.provider === 'opencode'
+  const allowCustom = info.provider === 'opencode'
   const curated = models.find((m) => m.id === info.model)
 
   const [selectedId, setSelectedId] = useState(curated?.id ?? models[0]?.id ?? '')

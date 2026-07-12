@@ -129,7 +129,7 @@ export type DidacticSection =
  * Lo que produce un `AiService.analyzePullRequest` (T39): el contenido puro
  * del análisis, sin metadata de generación. Forma idéntica a la vieja
  * `DidacticAnalysis` (pre-T39) — el split existe para que los servicios
- * (`openrouter-service.ts`, `providers/claude-code-service.ts`,
+ * (`providers/opencode-service.ts`, `providers/claude-code-service.ts`,
  * `providers/codex-service.ts`, `mock-service.ts`) no necesiten conocer
  * `headSha`/`generatedWith`, que solo el handler (`ipc/handlers.ts`) sella
  * (T40) antes de cachear/persistir/devolver al renderer.
@@ -188,28 +188,19 @@ export type AnalysisState =
   | { status: 'cached'; analysis: DidacticAnalysis }
 
 /**
- * Settings persistentes (T12). `aiModelSource` indica de dónde vino el valor
- * `aiModel` actual, con esta precedencia (ver `main/ai/env.ts`,
- * `getEffectiveAiModel`): `settings` (guardado desde la UI, gana siempre) >
- * `env` (`MINERVA_AI_MODEL` del proceso o del `.env` de raíz en dev) >
- * `default` (`DEFAULT_AI_MODEL` en `shared/ai-models.ts`).
+ * Fuente de un valor de modelo resuelto (T12; generalizado a multi-proveedor
+ * en T26, ver `AiSettingsInfo` más abajo): `settings` (guardado desde la UI,
+ * gana siempre) > `env` (`MINERVA_AI_MODEL` del proceso o del `.env` de raíz
+ * en dev) > `default` (`DEFAULT_MODEL_BY_PROVIDER` en `shared/ai-providers.ts`).
  */
 export type AiModelSource = 'settings' | 'env' | 'default'
 
-export interface EffectiveAiModelInfo {
-  aiModel: string
-  aiModelSource: AiModelSource
-}
-
 /**
  * Respuesta de `settings:get`/`settings:setAiProvider`/`settings:setProviderModel`
- * desde T26 (multi-proveedor): reemplaza a `EffectiveAiModelInfo` como tipo de
- * respuesta IPC (ese tipo se conserva como shim interno de `main/ai/env.ts`,
- * `getEffectiveAiModel`, asumiendo OpenRouter). `provider`/`model` es la
- * selección EFECTIVA (con la misma precedencia settings > env > default que
- * antes, ver `getEffectiveAiSelection` en `main/ai/env.ts`); `modelSource`
- * indica de dónde vino `model` (mismo significado que `AiModelSource`, pero
- * evaluado para el `provider` resuelto, no solo para OpenRouter);
+ * (T26, multi-proveedor). `provider`/`model` es la selección EFECTIVA (con la
+ * misma precedencia settings > env > default, ver `getEffectiveAiSelection`
+ * en `main/ai/env.ts`); `modelSource` indica de dónde vino `model` (mismo
+ * significado que `AiModelSource`, evaluado para el `provider` resuelto);
  * `perProviderModel` es el mapa persistido completo (para que la UI, aunque
  * cambie de proveedor sin guardar, pueda recordar el último modelo elegido de
  * cada uno); `catalog` es el catálogo completo de proveedores+modelos
@@ -232,15 +223,17 @@ export interface AiSettingsInfo {
 }
 
 /**
- * Estado de login por proveedor de IA (T27, canal `ai:getProviderStatus`):
- * - `unavailable`: OpenRouter sin `OPENROUTER_API_KEY` configurada, o un CLI
- *   (`claude`/`codex`) que no se encontró en PATH (o cuya detección expiró
- *   por timeout — ver `main/ai/providers/cli-probe.ts`).
+ * Estado de login por proveedor de IA (T27, canal `ai:getProviderStatus`;
+ * los tres proveedores son `cli` desde T59 — hasta entonces OpenRouter
+ * resolvía `unavailable`/`authenticated` de forma síncrona según hubiera o
+ * no `OPENROUTER_API_KEY` configurada):
+ * - `unavailable`: el CLI (`claude`/`codex`/`opencode`) no se encontró en
+ *   PATH (o cuya detección expiró por timeout — ver
+ *   `main/ai/providers/cli-probe.ts`).
  * - `installed`: el CLI existe y responde, pero no se pudo confirmar sesión
- *   iniciada (best-effort en T27; T28/T29 lo reemplazan por el handshake real
- *   del SDK/RPC de cada proveedor).
- * - `authenticated`: OpenRouter con key configurada, o un CLI con indicios de
- *   sesión iniciada.
+ *   iniciada (best-effort en T27; T28/T29/T57 lo reemplazan por el handshake
+ *   real del SDK/RPC de cada proveedor).
+ * - `authenticated`: un CLI con indicios de sesión iniciada.
  *
  * `account` NUNCA lleva tokens/keys — a lo sumo un email/plan de exhibición.
  */
@@ -254,21 +247,4 @@ export interface AiAccountInfo {
 export interface AiProviderStatus {
   status: AiProviderStatusValue
   account?: AiAccountInfo
-}
-
-/**
- * Estado de configuración de `OPENROUTER_API_KEY` (T32, canales
- * `settings:setOpenRouterKey`/`settings:getOpenRouterKeyStatus`,
- * `main/ai/env.ts` `getOpenRouterKeyStatus`). NUNCA lleva la key en claro —
- * la key vive solo en `main`, cifrada con `safeStorage`
- * (`main/ai/openrouter-key-store.ts`) o en `process.env`/`.env` de dev.
- * `source`: `'safeStorage'` si el usuario la guardó desde la UI de Settings
- * (gana siempre que exista), `'env'` si viene de `process.env`/`.env` de
- * desarrollo, `'none'` si no hay ninguna configurada.
- */
-export type OpenRouterKeySource = 'safeStorage' | 'env' | 'none'
-
-export interface OpenRouterKeyStatus {
-  configured: boolean
-  source: OpenRouterKeySource
 }

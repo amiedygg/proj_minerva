@@ -4,11 +4,15 @@
  * `IpcRequest` de ahí para no duplicar la forma); su `res` YA NO es
  * `IpcResponse<'ai:analyzePullRequest'>` (T39, ver más abajo).
  *
- * Dos implementaciones conviven detrás de esta interfaz:
+ * Varias implementaciones conviven detrás de esta interfaz:
  * - `MockAiService` (`./mock-service.ts`), disponible desde T9(mock)/T10.
- * - `OpenRouterAiService` (`./openrouter-service.ts`, T9-final): pipeline
- *   real contra OpenRouter (prompt versionado en `./prompts/analyze-pr.ts`),
- *   activo cuando hay `OPENROUTER_API_KEY` (ver `./env.ts`).
+ * - `ClaudeCodeAiService`/`CodexAiService`/`OpenCodeAiService`
+ *   (`./providers/*-service.ts`, T28/T29/T56): pipeline real contra el CLI
+ *   oficial de cada proveedor (prompt versionado en `./prompts/analyze-pr.ts`),
+ *   activo cuando `./providers/cli-probe.ts` confirma sesión iniciada (ver
+ *   `./index.ts`). Hasta T59 había una cuarta, `OpenRouterAiService`, que
+ *   hablaba HTTP directo con `openrouter.ai` — eliminada por decisión de
+ *   Edilson (esos modelos se usan ahora DENTRO de OpenCode).
  *
  * `src/main/ipc/handlers.ts` delega el canal `ai:analyzePullRequest` a una
  * única instancia creada por `createAiService(githubService)` (`./index.ts`).

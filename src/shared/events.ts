@@ -61,9 +61,9 @@ export interface AnalysisProgressEvent {
    * escucha el streaming sin haber disparado el análisis (p. ej. una ventana
    * desacoplada que se enganchó a un análisis ya en curso, ver
    * `ai:getAnalysisState` en `src/shared/ipc.ts`): sin este campo esa ventana
-   * se quedaría mostrando "streaming" para siempre ante un error, porque
-   * `OpenRouterAiService`/`MockAiService` nunca llaman a `onProgress` en el
-   * camino de error — el evento terminal con `error` lo arma el handler
+   * se quedaría mostrando "streaming" para siempre ante un error, porque los
+   * `AiService` reales/mock nunca llaman a `onProgress` en el camino de
+   * error — el evento terminal con `error` lo arma el handler
    * (`src/main/ipc/handlers.ts`), no el `AiService`.
    */
   error?: string

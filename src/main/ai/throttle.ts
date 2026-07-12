@@ -1,8 +1,10 @@
 /**
- * Throttle mínimo basado en tiempo transcurrido, sin dependencias. Lo usa
- * `openrouter-service.ts` para no llamar a `onProgress` (que termina en un
- * `webContents.send` a todas las ventanas) en cada delta SSE que llega del
- * modelo — solo como mucho una vez por `intervalMs`.
+ * Throttle mínimo basado en tiempo transcurrido, sin dependencias. Lo usan
+ * los servicios de IA reales (`providers/opencode-service.ts`,
+ * `providers/claude-code-service.ts`, `providers/codex-service.ts`) para no
+ * llamar a `onProgress` (que termina en un `webContents.send` a todas las
+ * ventanas) en cada delta que llega del modelo — solo como mucho una vez por
+ * `intervalMs`.
  *
  * Puro y testeable sin temporizadores reales: el reloj (`now`) es inyectable
  * (por defecto `Date.now`), así los tests pueden avanzarlo a mano.

@@ -3,16 +3,18 @@
  * fijas (`./fixtures.ts`), pero SÍ simula streaming real (T13) en vez de
  * resolver todo de una vez, para poder verificar el panel didáctico en vivo
  * (texto fluyendo, diagramas apareciendo al cerrar su bloque) sin necesitar
- * `OPENROUTER_API_KEY` ni pagar una llamada real.
+ * ningún proveedor de IA configurado ni pagar una llamada real.
  *
  * Cómo simula el streaming: serializa el `DidacticSection[]` final de la
  * fixture de vuelta al protocolo de texto tagueado que produciría el modelo
  * (`stringifySections`, inverso de `../stream-parser.ts`), lo trocea en
  * `STREAM_CHUNKS` pedazos y los va empujando a un `StreamSectionParser` real
- * (el MISMO que usa `OpenRouterAiService`) con `STREAM_CHUNK_DELAY_MS` entre
- * cada uno, llamando a `onProgress` con cada snapshot. Esto no es solo un
- * atajo: ejercita el parser incremental de punta a punta con datos reales,
- * así que un mock funcionando es evidencia de que el parser funciona.
+ * (el MISMO que usan los servicios reales — `providers/opencode-service.ts`,
+ * `providers/claude-code-service.ts`, `providers/codex-service.ts`) con
+ * `STREAM_CHUNK_DELAY_MS` entre cada uno, llamando a `onProgress` con cada
+ * snapshot. Esto no es solo un atajo: ejercita el parser incremental de
+ * punta a punta con datos reales, así que un mock funcionando es evidencia
+ * de que el parser funciona.
  *
  * Reutiliza `prFixtures` de `../github/fixtures` (mismo universo mock
  * "shopwave") para poder armar un resumen genérico con datos reales del PR

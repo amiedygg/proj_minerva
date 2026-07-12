@@ -1,7 +1,9 @@
 /**
- * System prompt del pipeline "analizar PR" (`OpenRouterAiService`). Ver
- * `./README.md` para por qué vive como un `.ts` que exporta un string en vez
- * de un archivo `.md` leído con `fs.readFileSync` en runtime.
+ * System prompt del pipeline "analizar PR", compartido por los servicios de
+ * IA reales (`../providers/opencode-service.ts`, `../providers/claude-code-service.ts`,
+ * `../providers/codex-service.ts`). Ver `./README.md` para por qué vive como
+ * un `.ts` que exporta un string en vez de un archivo `.md` leído con
+ * `fs.readFileSync` en runtime.
  *
  * Adaptado del contrato del subagente `.claude/agents/pr-didactic-analyzer.md`
  * (mismo rol, mismas reglas de clasificación y de Mermaid válido).
@@ -12,8 +14,8 @@
  * Motivo: un JSON no se puede renderizar de forma incremental sin re-parsear
  * el objeto completo en cada delta (un string a medio escapar no es JSON
  * válido hasta que cierra), mientras que un protocolo de líneas se puede leer
- * de a una línea completa a la vez según van llegando los deltas SSE de
- * OpenRouter — el parser incremental que lo consume vive en
+ * de a una línea completa a la vez según van llegando los deltas del proveedor
+ * de IA activo — el parser incremental que lo consume vive en
  * `../stream-parser.ts` (`StreamSectionParser`), que reutiliza la misma
  * validación de forma que antes vivía en `../section-mapper.ts`
  * (`mapRawSection`/`mapSnippet`).

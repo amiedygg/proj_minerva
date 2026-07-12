@@ -71,7 +71,7 @@ interface ModelListResponse {
 
 /**
  * Etiquetas humanas para los niveles de esfuerzo más comunes — mismo texto
- * que usan los descriptores `effort` curados de Claude Code/OpenRouter
+ * que usan los descriptores `effort` curados de Claude Code
  * (`../../../shared/ai-providers.ts`, T34), para que la UI (T37) no muestre
  * una palabra distinta para el mismo nivel según el proveedor. Un nivel que
  * la cuenta exponga y no esté en este mapa (p. ej. uno nuevo del lado de

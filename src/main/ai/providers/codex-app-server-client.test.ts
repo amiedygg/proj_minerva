@@ -77,8 +77,7 @@ afterEach(() => {
 })
 
 describe('CodexAppServerClient', () => {
-  it('resuelve "codex" con resolveCliPath y spawnea la ruta absoluta, saneando OPENROUTER_API_KEY/tokens de GitHub del entorno del hijo', () => {
-    process.env.OPENROUTER_API_KEY = 'sk-secret'
+  it('resuelve "codex" con resolveCliPath y spawnea la ruta absoluta, saneando tokens de GitHub del entorno del hijo', () => {
     process.env.GITHUB_TOKEN = 'gh-secret'
     try {
       new CodexAppServerClient()
@@ -89,10 +88,8 @@ describe('CodexAppServerClient', () => {
         expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] }),
       )
       const [, , spawnOptions] = spawnMock.mock.calls[0] as [string, string[], { env: NodeJS.ProcessEnv }]
-      expect(spawnOptions.env.OPENROUTER_API_KEY).toBeUndefined()
       expect(spawnOptions.env.GITHUB_TOKEN).toBeUndefined()
     } finally {
-      delete process.env.OPENROUTER_API_KEY
       delete process.env.GITHUB_TOKEN
     }
   })

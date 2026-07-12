@@ -31,7 +31,7 @@ function analysis(prId: string): DidacticAnalysis {
     sections: [{ kind: 'summary', markdown: prId }],
     generatedAt: '2026-07-06T00:00:00.000Z',
     headSha: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
-    generatedWith: { provider: 'openrouter', model: 'z-ai/glm-5.2', options: {} },
+    generatedWith: { provider: 'opencode', model: 'opencode/big-pickle', options: {} },
   }
 }
 

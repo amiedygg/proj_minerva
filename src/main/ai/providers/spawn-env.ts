@@ -8,10 +8,18 @@
  * heredarlos sin necesidad ensancha la superficie de fuga si ese binario (o
  * algo que invoque) llegara a loguear su entorno.
  *
+ * Hasta T59 esta lista también incluía `OPENROUTER_API_KEY` (Minerva podía
+ * leerla de `process.env`/`.env` para su propio `OpenRouterAiService`, ver
+ * `../env.ts`); se quita porque Minerva ya no gestiona esa variable en
+ * absoluto (eliminada como proveedor directo) — nada del proceso `main` la
+ * lee ni la propaga, así que no hay nada suyo que sanear acá. Si el usuario
+ * la tiene exportada en su shell por otro motivo (p. ej. otra herramienta),
+ * eso es asunto de esa herramienta, no de Minerva.
+ *
  * Extraído a un módulo propio para no duplicar el criterio entre los dos
  * puntos de spawn (antes solo vivía en `codex-app-server-client.ts`).
  */
-export const ENV_KEYS_TO_STRIP = ['OPENROUTER_API_KEY', 'GITHUB_TOKEN', 'GH_TOKEN']
+export const ENV_KEYS_TO_STRIP = ['GITHUB_TOKEN', 'GH_TOKEN']
 
 /** Copia de `process.env` sin las keys de `ENV_KEYS_TO_STRIP`. */
 export function buildSanitizedSpawnEnv(): NodeJS.ProcessEnv {

@@ -137,12 +137,11 @@ function readAccountFor(provider: AiProviderId): AiAccountInfo | null {
       return readClaudeAccount()
     case 'codex':
       return readCodexAccount()
-    case 'openrouter':
     case 'opencode':
-      // OpenRouter no es un CLI (no pasa por acá). OpenCode SÍ es un CLI pero
-      // su probe (`probeOpencode`) nunca llega a `readAccountFor` — no hay
-      // archivo de credenciales que leer, el criterio es el server local (ver
-      // el comentario del módulo). Este caso queda solo por exhaustividad.
+      // OpenCode SÍ es un CLI pero su probe (`probeOpencode`) nunca llega a
+      // `readAccountFor` — no hay archivo de credenciales que leer, el
+      // criterio es el server local (ver el comentario del módulo). Este
+      // caso queda solo por exhaustividad.
       return null
   }
 }

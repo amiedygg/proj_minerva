@@ -8,8 +8,9 @@
  * arquitectura clave"): el proceso hijo se autentica solo, leyendo la misma
  * sesión que usa el CLI.
  *
- * Pipeline de `analyzePullRequest` (mismo contrato que `OpenRouterAiService`/
- * `ClaudeCodeAiService`, ver `../service.ts`):
+ * Pipeline de `analyzePullRequest` (mismo contrato que el resto de los
+ * proveedores de IA — `ClaudeCodeAiService`, `OpenCodeAiService` — ver
+ * `../service.ts`):
  * 1. Pide el detalle y los archivos del PR al `GithubService` ACTIVO
  *    (inyectado por constructor).
  * 2. AGÉNTICO (F11/T58): `ensureSnapshot(this.github, req.repo, detail.headSha)`

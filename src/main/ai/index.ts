@@ -2,26 +2,27 @@ import type { AiService } from './service'
 import type { GithubService } from '../github/service'
 import type { AiProviderId } from '../../shared/ai-providers'
 import { MockAiService } from './mock-service'
-import { OpenRouterAiService } from './openrouter-service'
 import { ClaudeCodeAiService } from './providers/claude-code-service'
 import { CodexAiService } from './providers/codex-service'
 import { OpenCodeAiService } from './providers/opencode-service'
 import { getCliProviderStatus } from './providers/cli-probe'
-import { getAiEnv, getEffectiveAiSelection } from './env'
+import { getEffectiveAiSelection } from './env'
 
 export type { AiService } from './service'
 
 /**
  * Punto único de selección de implementación de `AiService` (T9-final;
  * generalizado a multi-proveedor en T27, ver `../../shared/ai-providers.ts` y
- * `getEffectiveAiSelection` en `./env.ts`).
+ * `getEffectiveAiSelection` en `./env.ts`). Hasta T59 existía un cuarto caso,
+ * `openrouter` (`OpenRouterAiService`, HTTP directo con `openrouter.ai`),
+ * resuelto síncrono según hubiera o no `OPENROUTER_API_KEY` — eliminado por
+ * decisión de Edilson: quien quiera esos modelos los usa DENTRO de OpenCode.
  *
  * `createAiService` lee el proveedor ACTIVO (settings > env >
  * default, ver `getEffectiveAiSelection`) y delega en
- * `createAiServiceForProvider` para instanciar la implementación concreta:
- * - `openrouter`: `OpenRouterAiService` si hay `OPENROUTER_API_KEY`
- *   disponible (safeStorage vía Settings, `process.env`, o el `.env` de la
- *   raíz del proyecto en dev — ver `./env.ts`).
+ * `createAiServiceForProvider` para instanciar la implementación concreta;
+ * los TRES proveedores son `cli` (`./providers/registry.ts`) y comparten el
+ * mismo criterio:
  * - `claude-code` (T28): `ClaudeCodeAiService` (`./providers/claude-code-service.ts`,
  *   Agent SDK oficial) SOLO si `./providers/cli-probe.ts` reporta
  *   `'authenticated'` (CLI instalado Y con sesión — best-effort, ver ese
@@ -34,9 +35,13 @@ export type { AiService } from './service'
  *   `claude-code` de arriba (el probe sigue siendo el heurístico best-effort
  *   de `./providers/cli-probe.ts`, sin handshake real; T29 decidió, igual
  *   que T28, no encarecer ese hot path).
+ * - `opencode` (T57): `OpenCodeAiService` (`./providers/opencode-service.ts`,
+ *   server local hablado por SDK oficial) SOLO si `getCliProviderStatus('opencode')`
+ *   reporta `'authenticated'` (binario+versión OK Y al menos un upstream
+ *   `connected`, ver el comentario de `./providers/cli-probe.ts`).
  *
- * Cuando el proveedor activo NO puede inicializarse (sin key de OpenRouter,
- * CLI ausente o sin sesión), el comportamiento depende del modo de GitHub:
+ * Cuando el proveedor activo NO puede inicializarse (CLI ausente o sin
+ * sesión), el comportamiento depende del modo de GitHub:
  * - Con `MINERVA_MOCK=1` (GitHub mock, mismo criterio que
  *   `../github/index.ts`): cae a `MockAiService` con un `console.warn` — la
  *   demo/e2e sin credenciales sigue funcionando como siempre.
@@ -110,16 +115,6 @@ async function createAiServiceForProvider(
   github: GithubService,
 ): Promise<AiService> {
   switch (provider) {
-    case 'openrouter': {
-      const { openRouterApiKey } = getAiEnv()
-      if (openRouterApiKey) {
-        return new OpenRouterAiService(github)
-      }
-      return mockFallbackOrThrow(
-        'El proveedor de IA activo (OpenRouter) no tiene API key configurada en esta máquina. ' +
-          'Agregala en Settings (engrane de la barra de título), o elegí otro proveedor.',
-      )
-    }
     case 'claude-code': {
       const status = await getCliProviderStatus('claude-code')
       if (status.status === 'authenticated') {

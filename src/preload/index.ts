@@ -74,12 +74,9 @@ const minervaApi = {
   },
   settings: {
     get: invoke('settings:get'),
-    setAiModel: invoke('settings:setAiModel'),
     setAiProvider: invoke('settings:setAiProvider'),
     setProviderModel: invoke('settings:setProviderModel'),
     setModelOption: invoke('settings:setModelOption'),
-    setOpenRouterKey: invoke('settings:setOpenRouterKey'),
-    getOpenRouterKeyStatus: invoke('settings:getOpenRouterKeyStatus'),
   },
   window: {
     openDidactic: invoke('window:openDidactic'),

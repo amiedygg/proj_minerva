@@ -31,11 +31,9 @@ describe('getProviderModels', () => {
     vi.useRealTimers()
   })
 
-  it('devuelve el catálogo curado ESTÁTICO para openrouter/claude-code sin llamar a fetchCodexModelCatalog/fetchOpencodeModelCatalog', async () => {
-    const openrouter = await getProviderModels('openrouter')
+  it('devuelve el catálogo curado ESTÁTICO para claude-code sin llamar a fetchCodexModelCatalog/fetchOpencodeModelCatalog', async () => {
     const claudeCode = await getProviderModels('claude-code')
 
-    expect(openrouter).toEqual(AI_PROVIDER_CATALOG.openrouter.models)
     expect(claudeCode).toEqual(AI_PROVIDER_CATALOG['claude-code'].models)
     expect(fetchCodexModelCatalogMock).not.toHaveBeenCalled()
     expect(fetchOpencodeModelCatalogMock).not.toHaveBeenCalled()

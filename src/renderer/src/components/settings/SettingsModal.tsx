@@ -3,7 +3,6 @@ import { X } from 'lucide-react'
 import { useAppStore } from '../../stores/app-store'
 import { useSettings } from '../../hooks/use-settings'
 import { useProviderStatus } from '../../hooks/use-provider-status'
-import { useOpenRouterKey } from '../../hooks/use-openrouter-key'
 import { IconButton } from '../ui/IconButton'
 import { ModelPicker } from './ModelPicker'
 import { ProviderPicker } from './ProviderPicker'
@@ -19,9 +18,8 @@ import { ProviderPicker } from './ProviderPicker'
  * completo, lo que resetea cualquier estado local (de este componente o de
  * sus hijos) de forma automática la próxima vez que se abra — el mismo
  * patrón de "resetear vía remount" que usa `DidacticPanel` con
- * `useDidacticAnalysis`. Los tres fetches iniciales (`settings:get`,
- * `ai:getProviderStatus`, `settings:getOpenRouterKeyStatus`) se piden en
- * paralelo, uno por hook.
+ * `useDidacticAnalysis`. Los dos fetches iniciales (`settings:get`,
+ * `ai:getProviderStatus`) se piden en paralelo, uno por hook.
  *
  * Cierra con Esc o con un clic fuera de la card (el overlay tiene el
  * `onClick`; la card detiene la propagación). El borrador de modelo vive en
@@ -45,7 +43,6 @@ export function SettingsModal(): React.JSX.Element {
   const closeSettings = useAppStore((s) => s.closeSettings)
   const { info, error, selectProvider, saveModel, setModelOption } = useSettings()
   const providerStatus = useProviderStatus()
-  const openRouterKey = useOpenRouterKey()
   const cardRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -87,12 +84,6 @@ export function SettingsModal(): React.JSX.Element {
               statusLoading={providerStatus.loading}
               statusError={providerStatus.error}
               onRefetchStatus={providerStatus.refetch}
-              openRouterKeyStatus={openRouterKey.status}
-              openRouterKeyLoading={openRouterKey.loading}
-              openRouterKeyError={openRouterKey.error}
-              openRouterKeySaving={openRouterKey.saving}
-              onSaveOpenRouterKey={openRouterKey.save}
-              onClearOpenRouterKey={openRouterKey.clear}
               onSelectProvider={selectProvider}
             />
             <div className="border-t border-border pt-4">
