@@ -2368,3 +2368,84 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
   en preload), links externos solo los 3 oficiales hardcodeados vía external-link-guard,
   migración de settings con guards estrictos sobre JSON crudo.
 
+## F12 — Rediseño del panel de Settings: tabs por proveedor + "En uso" (2026-07-11)
+
+> Pedido de Edilson: el panel debe enunciar claramente qué CLI/modelo/esfuerzo están
+> activos; los radios de proveedor sobran (funcionan como tabs para VER los modelos
+> de cada proveedor); rediseño general de UX. Aprobado también el resumen compacto
+> en la TitleBar. Diseño completo en PLAN.md (F12). Solo renderer (+ helper de
+> labels si hace falta): CERO cambios en main/preload/IPC.
+
+- [x] **T62. Rediseño del modal de Settings (tabs + "En uso" + cards activables)**
+  Nuevo `ActiveConfigSummary` (strip fijo bajo el header: proveedor activo + badge
+  de estado, modelo mono + esfuerzo resuelto, badge de origen si `modelSource !==
+  'settings'`); tabs por proveedor (`role=tablist`, estado local `viewedProvider`
+  iniciado en `info.provider`, punto de estado + check de "activo" por tab); cards
+  de modelo SIN radios ni "Guardar": click = activar proveedor+modelo vía los
+  canales existentes (`setProviderModel` y luego `setAiProvider` si el tab visto no
+  es el activo), spinner en vuelo, badge "Activo"; "Otro (avanzado)" (solo
+  OpenCode) con botón "Usar" explícito; `ModelOptionPicker` intacto pero pintado
+  SOLO para el modelo ACTIVO cuando el tab visto es el proveedor activo (lista
+  dinámica). Extraer `resolveModelHintLabels` de `ActiveModelHint.tsx` a
+  `renderer/src/lib/model-labels.ts`. Muere el estado borrador y sus remounts;
+  `key={viewedProvider}` en el panel del tab para que `useProviderModels`
+  re-fetchee sin efectos de sincronización.
+  _Gotchas:_ lint react-hooks (nada de setState-en-efecto; derivar o remount por
+  key); TS estricto; a11y tablist/tab/tabpanel + teclado; Esc/overlay siguen
+  cerrando; no romper las señales de `smoke-settings.mjs` (`svg.lucide-settings`,
+  los 3 labels de proveedor en el texto del modal).
+  _Aceptación:_ typecheck/lint/test verdes; con la app en MINERVA_MOCK=1 el modal
+  muestra "En uso" correcto, cambiar de tab NO cambia el proveedor activo, click en
+  una card de otro proveedor activa proveedor+modelo (visible en el strip), y el
+  esfuerzo solo aparece en el tab del proveedor activo.
+
+- [x] **T63. TitleBar: chip resumen "Proveedor · Modelo" en el engrane**
+  El engrane pasa a chip `icono + label` (mantener `svg.lucide-settings` DENTRO del
+  botón), tooltip con detalle completo (proveedor, modelo, esfuerzo, origen), click
+  = abrir settings. Labels vía `lib/model-labels.ts` (T62). Degradar con gracia
+  mientras `info` es null (solo el icono).
+  _Aceptación:_ typecheck/lint verdes; el chip refleja al instante un cambio hecho
+  en el modal (mismo store zustand).
+
+- [x] **T64. Suite `smoke-settings` del nuevo diseño + verificación integral F12**
+  Del orquestador: actualizar `scripts/smoke-settings.mjs` con checks UI del nuevo
+  mundo (tabs presentes, strip "En uso", activación por click de card cruzando
+  proveedor, restauración en finally); correr typecheck/lint/test + suites e2e
+  afectadas + captura MIRADA del modal y la TitleBar.
+
+### Cierre F12 (2026-07-11, orquestador)
+
+- **T62/T63** implementadas por subagente Sonnet (una entrega): creados
+  `ActiveConfigSummary.tsx`, `ProviderTabs.tsx`, `ProviderModelPanel.tsx`,
+  `lib/model-labels.ts` (extraccion de `resolveModelHintLabels`, ahora compartida
+  por ActiveModelHint + strip "En uso" + chip TitleBar); reescritos
+  `SettingsModal.tsx` (viewedProvider en `SettingsModalBody`, montado solo con
+  `info !== null` para lazy-init sin efectos) y `TitleBar.tsx` (`SettingsChip`);
+  borrados `ProviderPicker.tsx`/`ModelPicker.tsx`. Ajuste del orquestador en
+  revision: las tabs quedaron DENTRO del area con scroll; movidas junto al strip
+  fijo (con paneles largos, p. ej. OpenCode dinamico con ~50 modelos Copilot, se
+  iban de vista).
+- **T64 / verificacion (orquestador)**: typecheck/lint verdes, 585/585 tests.
+  smoke-settings 13/13 con app real (MINERVA_MOCK=1, opencode autenticado: el paso
+  de modelo invalido corrio de verdad y rechazo con "Model not found" accionable);
+  incluye los checks nuevos: 3 `role="tab"`, click de tab NO cambia el proveedor
+  activo, click de card activa claude-code/claude-fable-5 cruzando proveedor, strip
+  + badge "Activo" reflejan la activacion. Regresion: smoke-search y smoke-f9-ui
+  (sellado del banner) en verde. Capturas MIRADAS: modal con "EN USO Claude Code ·
+  claude-fable-5 · Razonamiento: Medio" + badge Activo + chips de razonamiento, tab
+  OpenCode mostrando el catalogo dinamico SIN tocar el proveedor activo, y chip
+  "Claude Code · Fable 5" en la TitleBar. **F12 COMPLETA.**
+
+### Bitacora F12 — gotchas
+
+- **`innerText` devuelve el texto YA transformado por CSS**: el "En uso" del strip
+  se pinta con `uppercase` de Tailwind, asi que `document.body.innerText` trae
+  "EN USO" y un `includes('En uso')` en la suite falla aunque la UI este perfecta
+  (primer run 12/13 por esto). Fix: comparar case-insensitive (`/en uso/i`).
+  Moraleja repetida de la bitacora: cuando un smoke falla, primero sospechar del
+  test.
+- **`smoke-f9-ui` deja residuo en settings.json real**: cambia el proveedor activo
+  a claude-code y su modelo a claude-sonnet-5 y NO restaura (a diferencia de
+  smoke-settings, que snapshotea y restaura en `finally`). Detectado al verificar
+  el estado final de la sesion; restaurado a mano. Deuda: darle a esa suite el
+  mismo patron snapshot+finally.

@@ -2,7 +2,66 @@ import { GraduationCap, Search, Settings } from 'lucide-react'
 import { useAppStore } from '../../stores/app-store'
 import { useConnectionStatus } from '../../hooks/use-connection-status'
 import { useAuth } from '../../hooks/use-auth'
+import { useSettings } from '../../hooks/use-settings'
+import { getModelOption } from '../../../../shared/ai-providers'
+import { resolveModelHintLabels } from '../../lib/model-labels'
 import { IconButton } from '../ui/IconButton'
+
+/**
+ * Chip resumen "Proveedor · Modelo" en el engrane de Settings (T63, F12):
+ * reemplaza el botón cuadrado de solo-icono para que la config vigente sea
+ * visible SIN abrir el modal (pedido de Edilson, ver `PLAN.md` § F12).
+ * SIEMPRE mantiene el icono `Settings` de `lucide-react` DENTRO del botón —
+ * `smoke-settings.mjs` localiza el engrane por `svg.lucide-settings`, no
+ * puede sacarse de acá — y agrega el texto recién cuando `useSettings().info`
+ * ya cargó (antes de eso solo el icono, igual que el `IconButton` viejo).
+ *
+ * Los labels salen de `resolveModelHintLabels` (extraída a
+ * `lib/model-labels.ts` en T62 para que este chip, `ActiveConfigSummary` del
+ * modal y `ActiveModelHint` del panel didáctico nunca diverjan) y de
+ * `getModelOption` para el label humano del modelo (`info.model` crudo si no
+ * está en el catálogo, p. ej. un slug "avanzado" de OpenCode).
+ *
+ * `useSettings()` ya cachea la selección en el store zustand compartido con
+ * `SettingsModal` — abrir/cerrar el modal no dispara un fetch nuevo, y un
+ * cambio hecho ahí se refleja acá al instante (mismo estado).
+ */
+function SettingsChip(): React.JSX.Element {
+  const openSettings = useAppStore((s) => s.openSettings)
+  const { info } = useSettings()
+
+  if (!info) {
+    return <IconButton icon={<Settings size={16} />} label="Configuración" onClick={openSettings} />
+  }
+
+  const modelLabel = getModelOption(info.catalog, info.provider, info.model)?.label ?? info.model
+  const effortValue = info.selectedOptions?.[info.provider]?.effort
+  const { providerLabel, effortLabel } = resolveModelHintLabels(info.catalog, info.provider, info.model, effortValue)
+
+  const title =
+    'Configuración — ' +
+    providerLabel +
+    ' · ' +
+    info.model +
+    (effortLabel ? ' · Razonamiento: ' + effortLabel : '') +
+    ' · origen ' +
+    info.modelSource
+
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={openSettings}
+      className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-muted transition-colors duration-150 hover:border-accent hover:text-text"
+    >
+      <Settings size={16} />
+      <span className="text-xs">
+        {providerLabel} · {modelLabel}
+      </span>
+    </button>
+  )
+}
 
 const CONNECTION_LABEL: Record<ReturnType<typeof useConnectionStatus>, string> = {
   connected: 'Conectado',
@@ -81,7 +140,6 @@ export function TitleBar(): React.JSX.Element {
   const setSearchQuery = useAppStore((s) => s.setSearchQuery)
   const didacticPanelOpen = useAppStore((s) => s.didacticPanelOpen)
   const toggleDidacticPanel = useAppStore((s) => s.toggleDidacticPanel)
-  const openSettings = useAppStore((s) => s.openSettings)
   const connectionStatus = useConnectionStatus()
 
   return (
@@ -106,7 +164,7 @@ export function TitleBar(): React.JSX.Element {
       </div>
 
       <div className="ml-auto flex items-center gap-3">
-        <IconButton icon={<Settings size={16} />} label="Configuración" onClick={openSettings} />
+        <SettingsChip />
 
         <AuthControls />
 

@@ -1,7 +1,6 @@
-import { getModelOption } from '../../../../shared/ai-providers'
-import type { AiProviderCatalogEntry, AiProviderId } from '../../../../shared/ai-providers'
 import type { AnalysisGenerationInfo } from '../../../../shared/types'
 import { useSettings } from '../../hooks/use-settings'
+import { resolveModelHintLabels } from '../../lib/model-labels'
 
 interface ActiveModelHintProps {
   /**
@@ -13,32 +12,6 @@ interface ActiveModelHintProps {
    * final), cae al comportamiento de siempre: la config vigente.
    */
   generatedWith?: AnalysisGenerationInfo
-}
-
-/**
- * Resuelve los labels humanos (proveedor, effort) para un
- * `(provider, model, effortValue)` dado, contra el catálogo ESTÁTICO
- * (`AiSettingsInfo.catalog` — no cambia con la selección del usuario).
- * Compartido por los dos caminos de `ActiveModelHint`: config vigente
- * (sin `generatedWith`) y sello del análisis (`generatedWith`, T41).
- *
- * Si el modelo ya no está en el catálogo (id viejo, o un slug tecleado a
- * mano en el modo "avanzado" de OpenCode) `getModelOption` devuelve
- * `undefined` — degradamos mostrando el id crudo sin effort, sin romper.
- */
-function resolveModelHintLabels(
-  catalog: Record<AiProviderId, AiProviderCatalogEntry>,
-  provider: AiProviderId,
-  model: string,
-  effortValue: string | undefined,
-): { providerLabel: string; effortLabel: string | undefined } {
-  const providerLabel = catalog[provider].label
-  const effortDescriptor = getModelOption(catalog, provider, model)?.options?.find(
-    (descriptor) => descriptor.id === 'effort',
-  )
-  const effortLabel = effortDescriptor?.choices.find((choice) => choice.value === effortValue)?.label
-
-  return { providerLabel, effortLabel }
 }
 
 /**

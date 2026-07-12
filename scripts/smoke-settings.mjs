@@ -9,10 +9,12 @@
  * clave de catálogo), que el catálogo de `opencode` trae `opencode/big-pickle`,
  * que `setAiProvider` cambia y persiste el proveedor activo entre los 3,
  * que `setProviderModel` acepta un slug libre para opencode (campo "Otro
- * (avanzado)" del nuevo mundo, `ModelPicker.tsx`) y lo refleja en
- * `settings:get`, y — SOLO si `opencode` está `authenticated`
- * (`ai:getProviderStatus`) — que un modelo claramente inexistente hace
- * RECHAZAR el análisis con un mensaje accionable no vacío.
+ * (avanzado)", `SettingsModal`) y lo refleja en `settings:get`, — SOLO si
+ * `opencode` está `authenticated` (`ai:getProviderStatus`) — que un modelo
+ * claramente inexistente hace RECHAZAR el análisis con un mensaje accionable
+ * no vacío, y la UI REDISEÑADA del modal (F12, T62): strip "En uso", 3 tabs
+ * de proveedor (`role="tab"`) donde cambiar de tab NO toca el proveedor
+ * activo, y click en una card de modelo que ACTIVA proveedor+modelo juntos.
  *
  * Estado global: la suite NO asume el proveedor/modelo activo — snapshotea la
  * selección al arrancar (proveedor activo + modelo persistido de CADA uno de
@@ -198,8 +200,9 @@ try {
     console.log('   error recibido:', String(err).slice(0, 200))
   }
 
-  // UI: el engrane abre el modal y lista los 3 proveedores (estático,
-  // ProviderPicker.tsx no depende del catálogo dinámico) sin OpenRouter.
+  // UI (F12, T62/T64): el engrane abre el modal REDISEÑADO — strip "En uso",
+  // tabs por proveedor (role="tab", ver solo cambia la vista) y activación de
+  // proveedor+modelo por click de card (sin radios ni botón Guardar).
   await evaluate(`
     (() => {
       const btn = Array.from(document.querySelectorAll('button')).find((b) =>
@@ -211,14 +214,74 @@ try {
   `)
   await sleep(800)
   const modalText = await evaluate('document.body.innerText')
+  // OJO: el "En uso" del strip se renderiza con `uppercase` de Tailwind y
+  // document.body.innerText devuelve el texto YA transformado ("EN USO") —
+  // comparar case-insensitive o el check miente (gotcha F12).
   check(
-    'modal de settings abre y lista los 3 proveedores (sin OpenRouter)',
+    'modal abre con strip "En uso" y los 3 proveedores (sin OpenRouter)',
     typeof modalText === 'string' &&
+      /en uso/i.test(modalText) &&
       modalText.includes('OpenCode') &&
       modalText.includes('Claude Code') &&
       modalText.includes('Codex') &&
       !modalText.includes('OpenRouter'),
     modalText?.slice(0, 200),
+  )
+
+  const tabCount = await evaluate(`document.querySelectorAll('[role="tab"]').length`)
+  check('hay exactamente 3 tabs de proveedor (role="tab")', tabCount === 3, tabCount)
+
+  // Cambiar de tab es SOLO ver: el proveedor activo no se toca.
+  const beforeTab = await evaluate('window.minerva.settings.get()')
+  const tabClicked = await evaluate(`
+    (() => {
+      const tab = Array.from(document.querySelectorAll('[role="tab"]')).find((t) =>
+        t.textContent.includes('Claude Code'),
+      )
+      if (tab) tab.click()
+      return tab ? 'OK' : 'NO_TAB'
+    })()
+  `)
+  await sleep(400)
+  const afterTabView = await evaluate('window.minerva.settings.get()')
+  check(
+    'click en el tab "Claude Code" solo cambia la vista (proveedor activo intacto)',
+    tabClicked === 'OK' && afterTabView?.provider === beforeTab?.provider,
+    { tabClicked, before: beforeTab?.provider, after: afterTabView?.provider },
+  )
+
+  // Click en una card de modelo del tab visto = ACTIVAR ese proveedor+modelo
+  // (setProviderModel + setAiProvider en un gesto — el nuevo contrato T62).
+  const targetModel = snapshot.catalog?.['claude-code']?.models?.[0]?.id
+  const cardClicked = await evaluate(`
+    (() => {
+      const panel = document.querySelector('[role="tabpanel"]')
+      const btn =
+        panel &&
+        Array.from(panel.querySelectorAll('button')).find((b) =>
+          b.textContent.includes(${JSON.stringify(targetModel ?? '__sin_catalogo__')}),
+        )
+      if (btn) btn.click()
+      return btn ? 'OK' : 'NO_CARD'
+    })()
+  `)
+  let activated = null
+  for (let i = 0; i < 12; i++) {
+    await sleep(400)
+    activated = await evaluate('window.minerva.settings.get()')
+    if (activated?.provider === 'claude-code' && activated?.model === targetModel) break
+  }
+  check(
+    'click en la card activa proveedor+modelo (claude-code/' + targetModel + ')',
+    cardClicked === 'OK' && activated?.provider === 'claude-code' && activated?.model === targetModel,
+    { cardClicked, provider: activated?.provider, model: activated?.model },
+  )
+
+  const modalText2 = await evaluate('document.body.innerText')
+  check(
+    'el strip "En uso" y el badge "Activo" reflejan la activación',
+    typeof modalText2 === 'string' && modalText2.includes(targetModel ?? '') && modalText2.includes('Activo'),
+    modalText2?.slice(0, 300),
   )
 } finally {
   // Restaurar SIEMPRE (también si un evaluate lanzó): cerrar el modal si quedó
