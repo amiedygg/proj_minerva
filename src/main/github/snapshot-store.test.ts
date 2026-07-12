@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RepoRef } from '../../shared/types'
 import type { GithubService } from './service'
@@ -163,10 +163,11 @@ describe('ensureSnapshot', () => {
     const result = await ensureSnapshot(github, evilRepo, '../../passwd')
 
     // El resultado sigue viviendo DENTRO de snapshots/, como un único
-    // directorio hijo directo (nunca escaló niveles vía `..`).
-    expect(result.startsWith(snapshotsRoot() + '/')).toBe(true)
-    const relative = result.slice(snapshotsRoot().length + 1)
-    expect(relative.includes('/')).toBe(false)
+    // directorio hijo directo (nunca escaló niveles vía `..`). Aserción con
+    // dirname/basename, NO con `+ '/'`: en Windows `join` separa con `\` y
+    // la comparación por string rompía el build de CI (bug de test, no de app).
+    expect(dirname(result)).toBe(snapshotsRoot())
+    const relative = basename(result)
     expect(relative).not.toBe('..')
     expect(existsSync(result)).toBe(true)
     // Nada se escribió fuera de userDataDir (la traversal no funcionó).
