@@ -193,7 +193,8 @@ export function getEffectiveAiSelection(): EffectiveAiSelection {
 
   const persistedModel = persisted?.models[provider]
   const envModel = (process.env.MINERVA_AI_MODEL ?? dotEnv.MINERVA_AI_MODEL ?? '').trim()
-  const model = persistedModel || (envModel.length > 0 ? envModel : DEFAULT_MODEL_BY_PROVIDER[provider])
+  const model =
+    persistedModel || (envModel.length > 0 ? envModel : DEFAULT_MODEL_BY_PROVIDER[provider])
 
   return { provider, model, options: resolveModelOptions(provider, model) }
 }
@@ -235,5 +236,7 @@ export function getAiSettingsInfo(): AiSettingsInfo {
     // el estado de la IA — ver el comentario de `mockGithub` en
     // `../../shared/types.ts`.
     mockGithub: process.env.MINERVA_MOCK === '1',
+    // F14: modo de acceso a GitHub persistido (o el default 'oauth').
+    githubAccessMode: settingsStore.getGithubAccessMode(),
   }
 }

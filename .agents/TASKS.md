@@ -2539,3 +2539,142 @@ permanente de github.com, para poder referenciar el comentario en otros agentes.
 - **El screensaver de omarchy tapa las capturas**: `screenshot-app.sh` sale 0
   pero el PNG es negro. `hyprctl clients` lo delata
   (`org.omarchy.screensaver` encima); cerrarlo y recapturar.
+
+## F14 — Modo de acceso a GitHub: OAuth o GitHub CLI (v0.5.0, 2026-07-12)
+
+> Rama `feature/github-access-mode`. Motivación: orgs enterprise con *OAuth app
+> access restrictions* bloquean la OAuth App de Minerva pero permiten GitHub CLI.
+> Mecanismo: PUENTE DE TOKEN — auth delegada a `gh` (`gh auth token` vía execFile),
+> datos por el `RealGithubService` actual sin cambios de ruta. Diseño completo en
+> `PLAN.md`. Verificado empíricamente que el token de gh usado crudo (curl/Octokit)
+> accede a orgs privadas, GraphQL y tarballs.
+
+- [x] **T67. Tipos compartidos + settings store + canal IPC del modo**
+  - `shared/types.ts`: `GithubAccessMode = 'oauth' | 'gh-cli'`; `AuthState` gana
+    `cli_unavailable | cli_unauthenticated`; `AuthStatus.mode` REQUERIDO;
+    `AiSettingsInfo.githubAccessMode`.
+  - `main/settings/store.ts`: campo OPCIONAL `githubAccessMode?` en
+    `PersistedSettings` (ausente = 'oauth', patrón `modelOptions`), guard en
+    `isNewPersistedSettings`, `getGithubAccessMode()`/`setGithubAccessMode()`.
+    GOTCHA CRÍTICO: `setAiProvider`/`setProviderModel`/`setModelOption` construyen
+    el objeto persistido a mano — los TRES deben arrastrar `githubAccessMode`.
+  - `main/ai/env.ts` (`getAiSettingsInfo`): incluir `githubAccessMode`.
+  - `shared/ipc.ts`: canal `settings:setGithubAccessMode` req `{ mode }` res
+    `AiSettingsInfo` + entrada en `IPC_CHANNELS`; validador con
+    `hasOnlyKeys(['mode'])` + whitelist literal en `main/ipc/validators.ts`;
+    método en `preload/index.ts`.
+  - Tests: settings store (roundtrip, default 'oauth', setters no pisan el modo,
+    valor inválido en disco rechazado) y validators (válido / clave extra / modo
+    fuera de whitelist).
+  Aceptación: typecheck+lint+test verdes; `settings.json` con y sin el campo carga.
+
+- [x] **T68. `gh-cli-auth.ts`: probe + token + usuario (núcleo del modo gh)**
+  - `main/ai/providers/resolve-cli.ts`: `'gh'` en `CliBinaryName` (comentario: gh
+    no es CLI de IA, solo reutiliza el resolver de rutas).
+  - Nuevo `main/auth/github-user.ts`: extraer `fetchGithubUser` de
+    `auth-manager.ts` (línea ~52) tal cual; auth-manager la importa de ahí.
+  - `main/auth/config.ts`: `export const GH_HOSTNAME = 'github.com'`.
+  - Nuevo `main/auth/gh-cli-auth.ts` (clase `GhCliAuth`, singleton `ghCliAuth`):
+    `getStatus(): Promise<AuthStatus>` con cache TTL 5s + single-flight (patrón
+    `cli-probe.ts`): `resolveCliPath('gh')` → `execFile(ruta, ['auth','token',
+    '--hostname', GH_HOSTNAME], { timeout: 3000, windowsHide: true })` → validar
+    token con `fetchGithubUser`. Mapeo: gh no resuelto ⇒ `cli_unavailable`;
+    exit≠0/timeout/stdout vacío ⇒ `cli_unauthenticated`; `/user` falla ⇒
+    `cli_unauthenticated` (token descartado); OK ⇒ `signed_in` + user. NUNCA
+    lanza; siempre `mode: 'gh-cli'`; el token JAMÁS en el AuthStatus ni en logs.
+    `getTokenSync(): string | null` (snapshot del último probe).
+    `refetchTokenAfter401(): Promise<string | null>` (re-ejecuta solo
+    `gh auth token`, sin TTL, invalida cache del probe). `reset()` para tests.
+    Env del execFile: `process.env` CRUDO (NO `buildSanitizedSpawnEnv` — borra
+    GH_TOKEN/GITHUB_TOKEN, es solo para CLIs de IA).
+  - Tests (`gh-cli-auth.test.ts`, execFile/resolveCliPath/fetch mockeados): los 4
+    estados, trim de stdout, TTL/single-flight (2 getStatus concurrentes = 1
+    spawn), refetchTokenAfter401 actualiza e invalida, args exactos y ausencia de
+    opción `shell`.
+  GOTCHAS repo: sin backticks en strings largos de main; `import.meta.dirname`.
+  Aceptación: typecheck+lint+test verdes.
+
+- [x] **T69. AuthManager consciente del modo + handler del canal + arranque**
+  - `main/auth/auth-manager.ts`: builders OAuth agregan `mode: 'oauth'`;
+    `getStatus()` pasa a ASYNC y delega a `ghCliAuth.getStatus()` cuando
+    `settingsStore.getGithubAccessMode() === 'gh-cli'` (el `handle()` de IPC ya
+    soporta promesas); `getToken()` SIGUE SÍNCRONO y delega a `getTokenSync()`;
+    `signOut()`/`startDeviceFlow()` no-op en modo gh (devuelven el status gh;
+    JAMÁS `gh auth logout`, JAMÁS `clearToken()` del token OAuth persistido);
+    nuevo `cancelDeviceFlowIfPending()` (clearTimeout + `signed_out`, SIN
+    clearToken — volver a oauth restaura la sesión persistida).
+  - `main/index.ts` (~87-89): si el modo persistido es gh, calentar
+    `ghCliAuth.getStatus()` tras `authManager.init()` (su timeout interno de 3s
+    garantiza no bloquear el arranque).
+  - `main/ipc/handlers.ts`: handler `settings:setGithubAccessMode` — persiste,
+    `cancelDeviceFlowIfPending()` al pasar a gh, calienta el probe (`await
+    ghCliAuth.getStatus()`), responde `getAiSettingsInfo()`.
+  Aceptación: typecheck+lint+test verdes; tests existentes de auth-manager
+  adaptados a la firma async sin perder cobertura.
+
+- [x] **T70. Retry-401 en la ruta de datos + factory**
+  - `main/github/real-service.ts`: adjuntar `code: 'GITHUB_UNAUTHORIZED'`
+    (constante exportada `GITHUB_AUTH_ERROR_CODE`) al error 401 de
+    `mapGithubError` y al de `requireToken()`. CONSERVAR el prefijo
+    "No autenticado" — es marker en `pr-watcher.ts:53` (skip silencioso) y
+    `Sidebar.tsx:18`.
+  - Nuevo `main/github/gh-retry.ts`: `withGhCliTokenRetry(inner: GithubService)`
+    — envuelve los 6 métodos con un helper `guarded(fn)`; modo ≠ gh ⇒ passthrough
+    puro; en gh, ante error con ese code: `refetchTokenAfter401()` → reintento
+    ÚNICO → si vuelve a fallar auth: Error "No autenticado con GitHub CLI:
+    ejecuta 'gh auth login' en una terminal y reintenta." (prefijo-marker
+    intacto).
+  - `main/github/index.ts`: factory envuelve el real service con el decorador
+    (mock corta antes, sin cambios).
+  - Tests (`gh-retry.test.ts`, fake GithubService): passthrough en oauth; 401 →
+    refetch → retry con éxito; 401 → refetch null → error gh; 401 en el retry NO
+    re-reintenta; errores no-auth pasan intactos.
+  Aceptación: typecheck+lint+test verdes (incl. pr-watcher.test.ts intacto).
+
+- [ ] **T71. Renderer: auth UI consciente del modo**
+  - `stores/app-store.ts` (~152): initial `authStatus: { mode: 'oauth', state:
+    'signed_out' }`.
+  - `hooks/use-auth.ts`: polling DECLARATIVO — un efecto sobre `[state, mode]`
+    que arma/limpia el intervalo cuando `shouldPoll(s)` = `device_pending` ||
+    (`mode==='gh-cli'` && `state!=='signed_in'`). Correr `gh auth login` en una
+    terminal debe reflejarse solo (≤3s + TTL 5s del probe).
+  - `components/layout/TitleBar.tsx` (AuthControls): rama `signed_in` + gh =
+    login + badge "vía GitHub CLI", SIN "Cerrar sesión", botón sutil a Settings;
+    `cli_unavailable` = "GitHub CLI no encontrado" + abrir Settings;
+    `cli_unauthenticated` = chip copiable `gh auth login` (patrón del chip de
+    device code). Ramas oauth INTACTAS.
+  - `components/layout/Sidebar.tsx`: con `needsLogin` y modo gh, el CTA cambia a
+    "ejecuta gh auth login" + "Abrir configuración" (NO `signIn()`); pasar clave
+    compuesta `mode + ':' + state` como `authState` a `usePullRequests` →
+    cambiar de modo refetchea la lista.
+  GOTCHA: el linter react-hooks prohíbe setState-en-efecto/refs-en-render; para
+  reset por entidad usar remount por `key`.
+  Aceptación: typecheck+lint+test verdes.
+
+- [ ] **T72. Settings UI: sección "Acceso a GitHub"**
+  - `hooks/use-settings.ts`: `setGithubAccessMode(mode): Promise<boolean>`
+    (patrón `selectProvider`) + refresco inmediato de `auth:getStatus` al store
+    (que TitleBar/Sidebar reaccionen sin esperar al polling).
+  - Nuevo `components/settings/GithubAccessSection.tsx`: primera sección no-IA
+    del modal — dos opciones tipo card/radio (`oauth` device flow / `gh-cli`) con
+    blurb didáctico (orgs que bloquean OAuth apps), guía estilo
+    `CliLoginGuide.tsx` (instalar gh → link https://cli.github.com →
+    `gh auth login`), y el `AuthStatus` tras el toggle como feedback (distingue
+    unavailable / unauthenticated / signed_in con user). Nota visible si
+    `info.mockGithub` (modo demo: datos mock, el ajuste aplica al modo real).
+  - `SettingsModal.tsx`: montar la sección en `SettingsModalBody` con heading
+    propio, visualmente separada de lo de IA.
+  Aceptación: typecheck+lint+test verdes; el toggle persiste (verificable vía
+  `window.minerva.settings.get()`).
+
+- [ ] **T73. Verificación integral F14 + suite e2e + docs + v0.5.0** (orquestador)
+  - Nueva `scripts/smoke-github-mode.mjs` (app `MINERVA_MOCK=1 MINERVA_MOCK_AI=1`
+    + CDP): sección visible, toggle oauth↔gh-cli con señales inequívocas,
+    persistencia vía `settings.get()`, TitleBar en rama gh, restaurar `oauth` al
+    final (la suite muta settings.json real). Excluir `#didactic` del target.
+  - Regresión: `smoke-settings`, `smoke-pr-list`.
+  - Manual con gh real (SIN MINERVA_MOCK): PRs de org privada, diff, análisis con
+    snapshot, settings.json/logs sin token.
+  - Captura MIRADA de TitleBar en modo gh + sección nueva.
+  - `package.json` 0.5.0, README roadmap, CLAUDE.md (párrafo del modo gh),
+    bitácora F14.

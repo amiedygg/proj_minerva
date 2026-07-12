@@ -149,7 +149,10 @@ export const useAppStore = create<AppState>((set) => ({
   expandedThreadId: null,
   pendingThreadFocus: null,
 
-  authStatus: { state: 'signed_out' },
+  // `mode: 'oauth'` (F14): valor inicial mínimo para que el tipo compile —
+  // `AuthStatus.mode` pasó a requerido en F14/T67; el resto de la UI
+  // consciente del modo (polling, ramas de TitleBar/Sidebar) es T71.
+  authStatus: { mode: 'oauth', state: 'signed_out' },
 
   settingsOpen: false,
   aiModelInfo: null,

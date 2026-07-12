@@ -394,4 +394,101 @@ describe('SettingsStore', () => {
       expect(restarted.getPersistedModelOptions('codex')).toEqual({ effort: 'xhigh' })
     })
   })
+
+  describe('githubAccessMode (F14)', () => {
+    it('default "oauth" cuando no hay nada persistido', () => {
+      const store = new SettingsStore()
+      expect(store.getGithubAccessMode()).toBe('oauth')
+    })
+
+    it('roundtrip: setGithubAccessMode + getGithubAccessMode en la misma instancia (cache)', () => {
+      const store = new SettingsStore()
+      store.setGithubAccessMode('gh-cli')
+      expect(store.getGithubAccessMode()).toBe('gh-cli')
+    })
+
+    it('roundtrip tras "reinicio": una instancia nueva lee el modo persistido', () => {
+      new SettingsStore().setGithubAccessMode('gh-cli')
+
+      const restarted = new SettingsStore()
+      expect(restarted.getGithubAccessMode()).toBe('gh-cli')
+    })
+
+    it('un settings.json de la forma pre-F14 (sin "githubAccessMode") se lee OK, con default "oauth"', () => {
+      writeFileSync(
+        settingsFilePath(),
+        JSON.stringify({ aiProvider: 'opencode', models: { opencode: 'opencode/big-pickle' } }),
+        'utf-8',
+      )
+
+      const store = new SettingsStore()
+      expect(store.getGithubAccessMode()).toBe('oauth')
+      expect(store.getPersistedSettings()).toEqual({
+        aiProvider: 'opencode',
+        models: { opencode: 'opencode/big-pickle' },
+      })
+    })
+
+    it('devuelve null si "githubAccessMode" tiene un valor fuera de la whitelist (settings.json corrupto/editado a mano)', () => {
+      writeFileSync(
+        settingsFilePath(),
+        JSON.stringify({
+          aiProvider: 'opencode',
+          models: {},
+          githubAccessMode: 'ssh-key',
+        }),
+        'utf-8',
+      )
+      expect(new SettingsStore().getPersistedSettings()).toBeNull()
+    })
+
+    it('setAiProvider NO pisa un githubAccessMode ya guardado', () => {
+      const store = new SettingsStore()
+      store.setGithubAccessMode('gh-cli')
+      store.setAiProvider('claude-code')
+
+      expect(store.getGithubAccessMode()).toBe('gh-cli')
+      expect(store.getPersistedSettings()).toEqual({
+        aiProvider: 'claude-code',
+        models: {},
+        githubAccessMode: 'gh-cli',
+      })
+    })
+
+    it('setProviderModel NO pisa un githubAccessMode ya guardado', () => {
+      const store = new SettingsStore()
+      store.setGithubAccessMode('gh-cli')
+      store.setProviderModel('codex', 'gpt-5.5-codex')
+
+      expect(store.getGithubAccessMode()).toBe('gh-cli')
+    })
+
+    it('setModelOption NO pisa un githubAccessMode ya guardado', () => {
+      const store = new SettingsStore()
+      store.setGithubAccessMode('gh-cli')
+      store.setModelOption('codex', 'effort', 'high')
+
+      expect(store.getGithubAccessMode()).toBe('gh-cli')
+    })
+
+    it('setGithubAccessMode NO pisa la selección de IA ya guardada', () => {
+      const store = new SettingsStore()
+      store.setProviderModel('claude-code', 'claude-sonnet-5')
+      store.setAiProvider('claude-code')
+      store.setGithubAccessMode('gh-cli')
+
+      expect(store.getPersistedSettings()).toEqual({
+        aiProvider: 'claude-code',
+        models: { 'claude-code': 'claude-sonnet-5' },
+        githubAccessMode: 'gh-cli',
+      })
+    })
+
+    it('escribe settings.json SIN la clave githubAccessMode mientras nunca se llamó a setGithubAccessMode', () => {
+      new SettingsStore().setProviderModel('opencode', 'opencode/big-pickle')
+
+      const raw = readFileSync(settingsFilePath(), 'utf-8')
+      expect(JSON.parse(raw)).not.toHaveProperty('githubAccessMode')
+    })
+  })
 })

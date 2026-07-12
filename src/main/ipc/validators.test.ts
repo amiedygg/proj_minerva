@@ -396,6 +396,38 @@ describe('payloadValidators', () => {
     })
   })
 
+  describe('settings:setGithubAccessMode', () => {
+    const validate = payloadValidators['settings:setGithubAccessMode']
+
+    it('acepta "oauth"', () => {
+      expect(validate({ mode: 'oauth' })).toBe(true)
+    })
+
+    it('acepta "gh-cli"', () => {
+      expect(validate({ mode: 'gh-cli' })).toBe(true)
+    })
+
+    it('rechaza un modo fuera de la whitelist', () => {
+      expect(validate({ mode: 'ssh-key' })).toBe(false)
+      expect(validate({ mode: 'OAuth' })).toBe(false)
+    })
+
+    it('rechaza mode que no es string', () => {
+      expect(validate({ mode: 42 })).toBe(false)
+    })
+
+    it('rechaza claves desconocidas', () => {
+      expect(validate({ mode: 'gh-cli', evil: true })).toBe(false)
+    })
+
+    it('rechaza payload sin mode o no-objeto', () => {
+      expect(validate({})).toBe(false)
+      expect(validate(undefined)).toBe(false)
+      expect(validate('x')).toBe(false)
+      expect(validate([])).toBe(false)
+    })
+  })
+
   describe('window:openDidactic', () => {
     const validate = payloadValidators['window:openDidactic']
     const base = { repo: validRepo, number: 482, title: 'Add coupon support' }

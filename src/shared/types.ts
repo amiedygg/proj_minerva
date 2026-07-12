@@ -122,9 +122,35 @@ export interface CommentThread {
   comments: PrComment[]
 }
 
-export type AuthState = 'signed_out' | 'device_pending' | 'signed_in'
+/**
+ * Modo de acceso a GitHub (F14, v0.5.0): `oauth` es el Device Flow de siempre
+ * (`main/auth/auth-manager.ts`); `gh-cli` delega la autenticación al CLI `gh`
+ * ya logueado del usuario (`main/auth/gh-cli-auth.ts`) — pensado para orgs
+ * enterprise que bloquean la OAuth App de Minerva (*OAuth app access
+ * restrictions*) pero sí permiten GitHub CLI. En ambos modos los datos
+ * siguen fluyendo por el mismo `RealGithubService` (Octokit), solo cambia de
+ * dónde sale el token (ver `main/github/index.ts` y `./PLAN.md` § F14).
+ */
+export type GithubAccessMode = 'oauth' | 'gh-cli'
+
+/**
+ * `cli_unavailable`/`cli_unauthenticated` (F14) solo aplican en modo
+ * `gh-cli`: el binario `gh` no se encontró en PATH, o se encontró pero no
+ * hay sesión válida (`gh auth token` falló, devolvió vacío, o el token ya no
+ * sirve contra `GET /user`) — ver `main/auth/gh-cli-auth.ts`. `signed_in` se
+ * reutiliza para "gh autenticado", no hace falta un estado nuevo para eso.
+ */
+export type AuthState =
+  'signed_out' | 'device_pending' | 'signed_in' | 'cli_unavailable' | 'cli_unauthenticated'
 
 export interface AuthStatus {
+  /**
+   * Modo con el que se generó este status (F14): REQUERIDO desde que existe
+   * más de un modo — sin esto la UI no podría distinguir un `signed_out` de
+   * OAuth (ofrece "Iniciar sesión") de uno hipotético de gh-cli (no
+   * aplicable, `gh-cli` nunca reporta `signed_out`, ver `gh-cli-auth.ts`).
+   */
+  mode: GithubAccessMode
   state: AuthState
   user?: UserRef
   deviceCode?: {
@@ -253,6 +279,11 @@ export type AiModelSource = 'settings' | 'env' | 'default'
  * (`NoCliProvidersCard`): con GitHub mock la demo funciona sin ningún CLI
  * instalado (vía `MockAiService`), así que la card NO debe aparecer aunque
  * los tres proveedores reales reporten `unavailable`.
+ *
+ * `githubAccessMode` (F14): el modo de acceso a GitHub persistido (o el
+ * default `'oauth'` si no hay nada guardado, ver
+ * `settingsStore.getGithubAccessMode()`) — expuesto acá para que la sección
+ * "Acceso a GitHub" de Settings (T72) no necesite un canal aparte.
  */
 export interface AiSettingsInfo {
   provider: AiProviderId
@@ -262,6 +293,7 @@ export interface AiSettingsInfo {
   catalog: Record<AiProviderId, AiProviderCatalogEntry>
   selectedOptions?: Partial<Record<AiProviderId, Record<string, string>>>
   mockGithub: boolean
+  githubAccessMode: GithubAccessMode
 }
 
 /**

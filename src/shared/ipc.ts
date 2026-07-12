@@ -14,6 +14,7 @@ import type {
   CommentThread,
   DidacticAnalysis,
   DiffFile,
+  GithubAccessMode,
   PrComment,
   PrStateFilter,
   PullRequestDetail,
@@ -153,6 +154,21 @@ export interface IpcContract {
   }
 
   /**
+   * Cambia el modo de acceso a GitHub (F14, v0.5.0): `oauth` (Device Flow,
+   * comportamiento previo) o `gh-cli` (delega la auth al CLI `gh` ya
+   * logueado). El handler (`main/ipc/handlers.ts`) persiste el modo
+   * (`settingsStore.setGithubAccessMode`), cancela cualquier device flow
+   * pendiente si el modo nuevo es `gh-cli` (`authManager.cancelDeviceFlowIfPending`),
+   * calienta el probe de `gh` (`ghCliAuth.getStatus()`) y responde el mismo
+   * `AiSettingsInfo` agregado que los canales `settings:set*` de IA (mismo
+   * patrón: la UI refresca sin un roundtrip adicional).
+   */
+  'settings:setGithubAccessMode': {
+    req: { mode: GithubAccessMode }
+    res: AiSettingsInfo
+  }
+
+  /**
    * Abre (o enfoca, si ya hay una) la ventana didáctica desacoplada (T14,
    * `../main/windows/didactic-window.ts`) sincronizada con `repo`/`number`.
    * Solo existe UNA ventana didáctica a la vez: pedir este canal con un PR
@@ -196,6 +212,7 @@ export const IPC_CHANNELS = [
   'settings:setAiProvider',
   'settings:setProviderModel',
   'settings:setModelOption',
+  'settings:setGithubAccessMode',
   'window:openDidactic',
 ] as const satisfies readonly IpcChannel[]
 

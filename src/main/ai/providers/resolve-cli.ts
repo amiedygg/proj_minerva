@@ -35,8 +35,14 @@ import { accessSync, constants as fsConstants, readdirSync } from 'node:fs'
 import { homedir, platform } from 'node:os'
 import { delimiter, join } from 'node:path'
 
-/** Los binarios que Minerva necesita resolver (T28/T29/T55: `opencode`, mismas ubicaciones). */
-export type CliBinaryName = 'claude' | 'codex' | 'opencode'
+/**
+ * Los binarios que Minerva necesita resolver (T28/T29/T55: `opencode`, mismas
+ * ubicaciones). `'gh'` (F14): NO es un CLI de IA — es el GitHub CLI que el
+ * modo de acceso `gh-cli` reutiliza (`main/auth/gh-cli-auth.ts`) para el
+ * puente de token; comparte este resolver solo porque el problema (un
+ * proceso GUI con `PATH` recortado) es el mismo.
+ */
+export type CliBinaryName = 'claude' | 'codex' | 'opencode' | 'gh'
 
 const cache = new Map<CliBinaryName, string | null>()
 

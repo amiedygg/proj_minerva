@@ -66,19 +66,24 @@ function StateFilterControl({
 
 export function Sidebar(): React.JSX.Element {
   const searchQuery = useAppStore((s) => s.searchQuery)
-  const authState = useAppStore((s) => s.authStatus.state)
+  const authStatus = useAppStore((s) => s.authStatus)
+  const openSettings = useAppStore((s) => s.openSettings)
   const prStateFilter = useAppStore((s) => s.prStateFilter)
   const setPrStateFilter = useAppStore((s) => s.setPrStateFilter)
   const selectPr = useAppStore((s) => s.selectPr)
+  // Clave compuesta (F14/T71) en vez del `state` solo: cambiar de modo desde
+  // Settings (oauth ⇄ gh-cli) debe refetchear la lista igual que cambiar de
+  // `state` — `usePullRequests` trata este parámetro como un string opaco.
   const { pullRequests, loading, error, refetch, markSeen } = usePullRequests(
     searchQuery,
-    authState,
+    authStatus.mode + ':' + authStatus.state,
     prStateFilter,
   )
   const { signIn } = useAuth()
 
   const groups = useMemo(() => groupByRepo(pullRequests), [pullRequests])
   const needsLogin = Boolean(error?.includes(NOT_AUTHENTICATED_MARKER))
+  const isGhCliMode = authStatus.mode === 'gh-cli'
 
   const handleSelectPr = (pr: PullRequestSummary): void => {
     selectPr(pr)
@@ -102,14 +107,35 @@ export function Sidebar(): React.JSX.Element {
           <span className="text-3xl" aria-hidden>
             🔒
           </span>
-          <p className="text-sm text-muted">Inicia sesión con GitHub para ver tus pull requests.</p>
-          <button
-            type="button"
-            onClick={() => void signIn()}
-            className="rounded-md border border-accent/50 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition-colors duration-150 hover:bg-accent/20"
-          >
-            Iniciar sesión con GitHub
-          </button>
+          {isGhCliMode ? (
+            // Modo gh-cli (F14/T71): `signIn()` arrancaría un device flow que
+            // `main` ignora en este modo (no-op) — el CTA guía a la terminal
+            // en vez de llamarlo.
+            <>
+              <p className="text-sm text-muted">
+                Autentícate con GitHub CLI: ejecuta{' '}
+                <span className="font-mono text-text">gh auth login</span> en una terminal.
+              </p>
+              <button
+                type="button"
+                onClick={openSettings}
+                className="rounded-md border border-accent/50 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition-colors duration-150 hover:bg-accent/20"
+              >
+                Abrir configuración
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-muted">Inicia sesión con GitHub para ver tus pull requests.</p>
+              <button
+                type="button"
+                onClick={() => void signIn()}
+                className="rounded-md border border-accent/50 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition-colors duration-150 hover:bg-accent/20"
+              >
+                Iniciar sesión con GitHub
+              </button>
+            </>
+          )}
         </div>
       ) : error ? (
         <p className="p-4 text-sm text-danger">No se pudo cargar la lista de PRs: {error}</p>

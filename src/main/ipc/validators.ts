@@ -159,6 +159,18 @@ function isSetModelOptionPayload(value: unknown): boolean {
   return isNonEmptyString(value.value, MAX_OPTION_VALUE_LEN)
 }
 
+/**
+ * `settings:setGithubAccessMode` (F14): `mode` es uno de los dos valores
+ * literales de `GithubAccessMode` — whitelist explícita (no se importa
+ * `isAiProviderId`-style guard genérico porque solo hay dos valores posibles
+ * y nunca crece desde un catálogo externo), sin claves extra.
+ */
+function isSetGithubAccessModePayload(value: unknown): boolean {
+  if (!isPlainObject(value)) return false
+  if (!hasOnlyKeys(value, ['mode'])) return false
+  return value.mode === 'oauth' || value.mode === 'gh-cli'
+}
+
 /** `window:openDidactic` (T14): mismo `repo`/`number` que `isRepoAndNumberPayload`, más el título humano del PR. */
 function isOpenDidacticWindowPayload(value: unknown): boolean {
   if (!isPlainObject(value)) return false
@@ -194,5 +206,6 @@ export const payloadValidators: Record<IpcChannel, (payload: unknown) => boolean
   'settings:setAiProvider': isSetAiProviderPayload,
   'settings:setProviderModel': isSetProviderModelPayload,
   'settings:setModelOption': isSetModelOptionPayload,
+  'settings:setGithubAccessMode': isSetGithubAccessModePayload,
   'window:openDidactic': isOpenDidacticWindowPayload,
 }

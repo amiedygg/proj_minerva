@@ -44,6 +44,20 @@ export const MAX_TARBALL_BYTES = 150 * 1024 * 1024
  */
 export const MAX_EXTRACTED_BYTES = 500 * 1024 * 1024
 
+/**
+ * Marca de error de autenticación (F14, v0.5.0): adjunta como `.code` (vía
+ * `Object.assign`, no una subclase — mantiene el `Error` normal que ya
+ * consumen `pr-watcher.ts`/`Sidebar.tsx` por el PREFIJO del mensaje, ver
+ * abajo) a los errores 401 de `mapGithubError` y de `requireToken()`.
+ * `main/github/gh-retry.ts` (`withGhCliTokenRetry`) usa este código para
+ * distinguir "hay que reintentar con un token de gh fresco" de cualquier
+ * otro error de GitHub — el prefijo "No autenticado" del MENSAJE se
+ * CONSERVA intacto en ambos casos (es marker de texto usado en
+ * `pr-watcher.ts:53` para el skip silencioso del watcher, y en
+ * `Sidebar.tsx` para decidir el CTA de login).
+ */
+export const GITHUB_AUTH_ERROR_CODE = 'GITHUB_UNAUTHORIZED'
+
 // ---------------------------------------------------------------------------
 // Tipos propios para las respuestas de GraphQL (Octokit no genera tipos para
 // queries arbitrarias: se declaran a mano, con los campos que efectivamente
@@ -476,8 +490,11 @@ function mapGithubError(error: unknown, repoFullName?: string): Error {
   const repoLabel = repoFullName ?? 'este repositorio'
 
   if (status === 401) {
-    return new Error(
-      'No autenticado: el token de GitHub es inválido o expiró. Vuelve a iniciar sesión.',
+    return Object.assign(
+      new Error(
+        'No autenticado: el token de GitHub es inválido o expiró. Vuelve a iniciar sesión.',
+      ),
+      { code: GITHUB_AUTH_ERROR_CODE },
     )
   }
 
@@ -523,7 +540,11 @@ export class RealGithubService implements GithubService {
 
   private requireToken(): string {
     const token = this.getToken()
-    if (!token) throw new Error('No autenticado: inicia sesión con GitHub')
+    if (!token) {
+      throw Object.assign(new Error('No autenticado: inicia sesión con GitHub'), {
+        code: GITHUB_AUTH_ERROR_CODE,
+      })
+    }
     return token
   }
 
