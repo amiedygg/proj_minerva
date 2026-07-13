@@ -178,6 +178,13 @@ export type DidacticSection =
   | ({ kind: 'architecture'; mermaid: string } & DidacticSectionCommon)
   | ({ kind: 'endpoint'; snippets: DidacticSnippet[] } & DidacticSectionCommon)
   | ({ kind: 'schema'; mermaid: string } & DidacticSectionCommon)
+  /**
+   * A diferencia de `architecture`/`schema` (un solo `mermaid`), `cloud`
+   * lleva hasta DOS diagramas Mermaid en orden de aparición: el 1º es el big
+   * picture de la infra (AWS/Cloudflare/...) y el 2º un zoom a lo que toca el
+   * PR. Con 0 diagramas la sección sigue siendo válida (solo markdown).
+   */
+  | ({ kind: 'cloud'; mermaids: string[] } & DidacticSectionCommon)
 
 /**
  * Lo que produce un `AiService.analyzePullRequest` (T39): el contenido puro

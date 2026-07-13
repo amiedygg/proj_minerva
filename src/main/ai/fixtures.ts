@@ -1,7 +1,8 @@
 /**
  * Fixtures de `DidacticAnalysis` para el universo mock "shopwave" (mismos PRs
- * que `src/main/github/fixtures.ts`). Tres PRs tienen contenido enriquecido
- * (secciones `endpoint`/`schema`/`architecture` con diagramas Mermaid); el
+ * que `src/main/github/fixtures.ts`). Cuatro PRs tienen contenido enriquecido
+ * (secciones `endpoint`/`schema`/`architecture`/`cloud` con diagramas
+ * Mermaid, esta última solo en `shopwave/checkout-service#77`, T76); el
  * resto recibe un resumen genérico armado a partir de su `PullRequestDetail`.
  *
  * IMPORTANTE (gotcha de build, ver `.agents/TASKS.md`): el contenido largo de
@@ -264,9 +265,101 @@ const pr201Sections: DidacticSection[] = [
   },
 ]
 
+const pr77Sections: DidacticSection[] = [
+  {
+    kind: 'summary',
+    markdown:
+      '## Qué cambia\n\n' +
+      'Este PR agrega un lock optimista por `orderId` en `handlePaymentWebhook` para evitar que dos ' +
+      'webhooks de pago casi simultáneos marquen la misma orden como pagada dos veces (y disparen ' +
+      'doble notificación al cliente).\n\n' +
+      '**Por qué importa:** el handler corre como una función serverless invocada por el gateway de ' +
+      'webhooks del proveedor de pago; el proveedor puede reintentar (y de hecho reintenta) la ' +
+      'misma notificación, y varias invocaciones concurrentes de la misma función pueden procesar ' +
+      'el mismo `orderId` en paralelo.\n\n' +
+      '**Qué revisar:**\n' +
+      '- El comentario de @mgarcia sigue abierto: `acquireOrderLock` — ¿es un lock en memoria del ' +
+      'proceso o uno distribuido? Con varias instancias concurrentes de la función (el caso normal ' +
+      'en producción), un lock en memoria no alcanza: cada invocación ve su propia copia y no se ' +
+      'bloquean entre sí.\n' +
+      '- El job de CI falla intermitentemente (ver descripción del PR) — confirmar si es el fix o ' +
+      'un flake del entorno de test antes de aprobar.',
+  },
+  {
+    kind: 'setup',
+    markdown:
+      '## Cómo probar este PR\n\n' +
+      'El diff no muestra `Dockerfile` ni `docker-compose.yml`, así que no hay evidencia de un flujo ' +
+      'Docker en esta demo.\n\n' +
+      '**En local:** `handlePaymentWebhook` es una función Node.js invocada por el gateway de ' +
+      'webhooks de pago:\n\n' +
+      '1. `npm install`\n' +
+      '2. `npm run dev` (invoca el handler contra un evento de prueba simulado)\n\n' +
+      '**Variables de entorno necesarias:** `DATABASE_URL` (Postgres, vía `OrderRepository`) y las ' +
+      'credenciales del lock distribuido (ver sección de infra más abajo).\n\n' +
+      '**Variables de entorno NUEVAS de este PR:** este PR no agrega variables de entorno propias ' +
+      '— el lock que introduce reutiliza la conexión existente a la base de datos.',
+    snippets: [
+      {
+        label: 'arranque-local',
+        language: 'bash',
+        code: 'npm install\nnpm run dev',
+      },
+      {
+        label: 'env',
+        language: 'env',
+        code: 'DATABASE_URL=postgres://localhost:5432/shopwave',
+      },
+    ],
+  },
+  {
+    kind: 'cloud',
+    markdown:
+      '## Cómo funciona el sistema desplegado\n\n' +
+      '`payment-webhook-handler` no es un servidor persistente: es una función Lambda detrás de un ' +
+      'API Gateway que el proveedor de pago invoca por cada evento (pago confirmado, reembolso, ' +
+      'etc.). La Lambda lee y actualiza la orden en DynamoDB y, si el pago se confirma, encola un ' +
+      'evento en SQS para que otra Lambda (`order-notifier`) le mande el email de confirmación al ' +
+      'cliente por SES. Al ser serverless, el proveedor de pago puede disparar varias invocaciones ' +
+      'concurrentes de la MISMA Lambda para el mismo `orderId` (reintentos de webhook, picos de ' +
+      'tráfico) — no hay una única instancia de proceso que las sirva a todas.\n\n' +
+      '## Dónde incide este PR\n\n' +
+      'El lock que agrega este PR vive en `payment-webhook-handler` y debe coordinar esas ' +
+      'invocaciones concurrentes entre sí. Si `acquireOrderLock` fuera un lock en memoria (la duda ' +
+      'de @mgarcia en los comentarios), cada invocación de la Lambda vería su propio estado y el fix ' +
+      'no serviría de nada en producción: el lock necesita vivir afuera de la función, en un sitio ' +
+      'compartido por todas las invocaciones — por ejemplo una escritura condicional contra la ' +
+      'tabla `Orders` de DynamoDB (que ya está en el camino) o una tabla de locks aparte.',
+    mermaids: [
+      'architecture-beta\n' +
+        'group aws(logos:aws)[AWS]\n' +
+        'service payer(internet)[Payment Provider]\n' +
+        'service gw(logos:aws-api-gateway)[Webhook Gateway] in aws\n' +
+        'service handler(logos:aws-lambda)[Webhook Handler] in aws\n' +
+        'service orders(logos:aws-dynamodb)[Orders Table] in aws\n' +
+        'service queue(logos:aws-sqs)[Notify Queue] in aws\n' +
+        'service notifier(logos:aws-lambda)[Order Notifier] in aws\n' +
+        'service email(logos:aws-ses)[Email] in aws\n' +
+        'payer:R -- L:gw\n' +
+        'gw:R -- L:handler\n' +
+        'handler:R -- L:orders\n' +
+        'handler:B -- T:queue\n' +
+        'queue:R -- L:notifier\n' +
+        'notifier:R -- L:email\n',
+      'architecture-beta\n' +
+        'service handler(logos:aws-lambda)[Webhook Handler PR]\n' +
+        'service orders(logos:aws-dynamodb)[Orders Table PR]\n' +
+        'service queue(logos:aws-sqs)[Notify Queue]\n' +
+        'handler:R -- L:orders\n' +
+        'handler:B -- T:queue\n',
+    ],
+  },
+]
+
 /** Secciones enriquecidas por `prId` (`owner/name#number`, igual formato que `PullRequestDetail.id`). */
 export const richDidacticSections: Record<string, DidacticSection[]> = {
   'shopwave/api#482': pr482Sections,
   'shopwave/api#479': pr479Sections,
   'shopwave/web#201': pr201Sections,
+  'shopwave/checkout-service#77': pr77Sections,
 }

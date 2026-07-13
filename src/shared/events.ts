@@ -45,6 +45,13 @@ export type DraftDidacticSection =
   | ({ kind: 'architecture'; mermaid?: string } & DraftSectionCommon)
   | ({ kind: 'endpoint'; snippets: DidacticSnippet[] } & DraftSectionCommon)
   | ({ kind: 'schema'; mermaid?: string } & DraftSectionCommon)
+  /**
+   * `cloud` lleva hasta DOS mermaid (big picture + zoom al cambio). Igual
+   * criterio que `mermaid` en `architecture`/`schema`: un bloque todavía
+   * abierto no entra al array — `mermaids` solo acumula los ya cerrados, en
+   * orden de aparición.
+   */
+  | ({ kind: 'cloud'; mermaids?: string[] } & DraftSectionCommon)
 
 /**
  * Verbo canónico de una acción interna del harness agéntico (F13): a qué

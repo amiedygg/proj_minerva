@@ -236,6 +236,120 @@ describe('StreamSectionParser', () => {
     parser.push('@@@SECTION kind=architecture\ntexto sin mermaid nunca cerrado\n')
     expect(() => parser.finalize()).toThrow('Ninguna sección')
   })
+
+  describe('kind=cloud (T75)', () => {
+    it('parsea una sección cloud con 2 bloques MERMAID en orden', () => {
+      const parser = new StreamSectionParser()
+      parser.push(
+        '@@@SECTION kind=cloud\ntexto\n' +
+          '@@@MERMAID\nC4Context\n  title big picture\n@@@END_MERMAID\n' +
+          '@@@MERMAID\nC4Container\n  title zoom\n@@@END_MERMAID\n',
+      )
+
+      const final = parser.finalize()
+      expect(final).toEqual([
+        {
+          kind: 'cloud',
+          markdown: 'texto',
+          mermaids: ['C4Context\n  title big picture\n', 'C4Container\n  title zoom\n'],
+        },
+      ])
+    })
+
+    it('una sección cloud con 1 bloque es válida', () => {
+      const parser = new StreamSectionParser()
+      parser.push(
+        '@@@SECTION kind=cloud\ntexto\n@@@MERMAID\nC4Context\n  x\n@@@END_MERMAID\n',
+      )
+
+      const final = parser.finalize()
+      expect(final).toEqual([
+        { kind: 'cloud', markdown: 'texto', mermaids: ['C4Context\n  x\n'] },
+      ])
+    })
+
+    it('una sección cloud sin ningún bloque MERMAID es válida (solo markdown)', () => {
+      const parser = new StreamSectionParser()
+      parser.push('@@@SECTION kind=cloud\nsolo texto, sin diagramas\n')
+
+      const final = parser.finalize()
+      expect(final).toEqual([
+        { kind: 'cloud', markdown: 'solo texto, sin diagramas', mermaids: [] },
+      ])
+    })
+
+    it('streaming incremental: el draft pasa de 0 a 1 a 2 diagramas al cerrarse cada bloque', () => {
+      const parser = new StreamSectionParser()
+      parser.push('@@@SECTION kind=cloud\ntexto\n')
+
+      let snap = parser.snapshot()
+      expect(snap).toEqual([
+        { kind: 'cloud', markdown: 'texto', mermaids: [], streaming: true },
+      ])
+
+      parser.push('@@@MERMAID\nC4Context\n  big picture\n')
+      snap = parser.snapshot()
+      // Bloque todavía abierto: no entra al array.
+      expect(snap).toEqual([
+        { kind: 'cloud', markdown: 'texto', mermaids: [], streaming: true },
+      ])
+
+      parser.push('@@@END_MERMAID\n')
+      snap = parser.snapshot()
+      expect(snap).toEqual([
+        {
+          kind: 'cloud',
+          markdown: 'texto',
+          mermaids: ['C4Context\n  big picture\n'],
+          streaming: true,
+        },
+      ])
+
+      parser.push('@@@MERMAID\nC4Container\n  zoom\n@@@END_MERMAID\n')
+      snap = parser.snapshot()
+      expect(snap).toEqual([
+        {
+          kind: 'cloud',
+          markdown: 'texto',
+          mermaids: ['C4Context\n  big picture\n', 'C4Container\n  zoom\n'],
+          streaming: true,
+        },
+      ])
+    })
+
+    it('round-trip: stringifySections de una sección cloud con 2 diagramas se re-parsea idéntica', () => {
+      const original: DidacticSection[] = [
+        {
+          kind: 'cloud',
+          markdown: 'La infra corre en AWS con CDN de Cloudflare.',
+          mermaids: [
+            'C4Context\n  title Infra actual\n  System(app, "App")\n',
+            'C4Container\n  title Zoom al cambio\n  Container(api, "API")\n',
+          ],
+        },
+      ]
+      const text = stringifySections(original)
+
+      const parser = new StreamSectionParser()
+      pushInChunks(parser, text, 6)
+      const final = parser.finalize()
+
+      expect(final).toEqual(original)
+    })
+
+    it('round-trip: sección cloud sin diagramas', () => {
+      const original: DidacticSection[] = [
+        { kind: 'cloud', markdown: 'Sin cambios de infra en este PR.', mermaids: [] },
+      ]
+      const text = stringifySections(original)
+
+      const parser = new StreamSectionParser()
+      parser.push(text)
+      const final = parser.finalize()
+
+      expect(final).toEqual(original)
+    })
+  })
 })
 
 describe('stringifySections + StreamSectionParser (round-trip)', () => {

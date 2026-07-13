@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   BookOpen,
   Building2,
+  Cloud,
   Database,
   Globe,
   Loader2,
@@ -32,6 +33,22 @@ const SECTION_META: Record<DidacticSection['kind'], { title: string; icon: React
   architecture: { title: 'Arquitectura', icon: <Building2 size={16} /> },
   endpoint: { title: 'Endpoint', icon: <Globe size={16} /> },
   schema: { title: 'Esquema', icon: <Database size={16} /> },
+  cloud: { title: 'Infraestructura cloud', icon: <Cloud size={16} /> },
+}
+
+/**
+ * Subtítulo fijo por posición para los `mermaids[]` de una sección `cloud`
+ * (T77): el 1º diagrama es SIEMPRE el big picture del sistema cloud completo,
+ * el 2º el zoom a lo que el PR modifica (contrato de `DidacticSection`/
+ * `DraftDidacticSection`, ver `shared/types.ts`/`shared/events.ts`). Un 3º+
+ * diagrama no debería llegar nunca (el prompt pide como máximo 2) pero un
+ * genérico "Diagrama N" evita que un desvío del modelo deje un diagrama sin
+ * rótulo en vez de romper el render.
+ */
+function cloudDiagramSubtitle(index: number): string {
+  if (index === 0) return 'Sistema completo'
+  if (index === 1) return 'Dónde incide este PR'
+  return `Diagrama ${index + 1}`
 }
 
 /** Cursor sutil que marca "esta sección todavía está recibiendo texto" (T13). */
@@ -41,6 +58,41 @@ function StreamingCursor(): React.JSX.Element {
       ▍
     </span>
   )
+}
+
+/**
+ * Diagramas de una sección `cloud` (T77): a diferencia de `architecture`/
+ * `schema` (un `mermaid` único), acá `mermaids` es un array de hasta 2
+ * `architecture-beta` — cada uno con su propio subtítulo fijo por posición
+ * (`cloudDiagramSubtitle`) y su propio `ExpandableResource`/`MermaidDiagram`.
+ * Con el array vacío no renderiza nada (la sección se sostiene solo con el
+ * markdown de arriba, sin huecos visuales).
+ *
+ * Key por ÍNDICE (no por contenido, a diferencia de `architecture`/`schema`):
+ * durante el streaming el array crece 0→1→2 append-only — un diagrama ya
+ * cerrado nunca cambia de contenido en una posición ya emitida, así que
+ * indexar por posición no le causa un remount espurio, y evita uno real si
+ * (por lo que sea) el DSL de un diagrama cerrado se repitiera dos veces.
+ */
+function renderCloudDiagrams(
+  mermaids: string[],
+  sectionTitle: string,
+  onExpand: (resource: ViewerResource) => void,
+): React.JSX.Element[] {
+  return mermaids.map((mermaid, i) => {
+    const subtitle = cloudDiagramSubtitle(i)
+    return (
+      <div key={i} className="flex flex-col gap-1.5">
+        <p className="text-xs font-medium text-muted">{subtitle}</p>
+        <ExpandableResource
+          label="Expandir diagrama"
+          onExpand={() => onExpand({ kind: 'mermaid', title: sectionTitle + ' — ' + subtitle, code: mermaid })}
+        >
+          <MermaidDiagram code={mermaid} />
+        </ExpandableResource>
+      </div>
+    )
+  })
 }
 
 function renderSection(
@@ -72,6 +124,7 @@ function renderSection(
           <MermaidDiagram key={section.mermaid} code={section.mermaid} />
         </ExpandableResource>
       )}
+      {section.kind === 'cloud' && renderCloudDiagrams(section.mermaids, meta.title, onExpand)}
       {(section.kind === 'endpoint' || section.kind === 'setup') &&
         section.snippets.map((snippet, i) => (
           <CodeSnippet
@@ -92,7 +145,11 @@ function renderSection(
  * (`section.mermaid` presente). Mientras el bloque `@@@MERMAID` sigue
  * abierto, el campo directamente no existe, así que nunca hay riesgo de
  * montar `MermaidDiagram` con un DSL a medio escribir. La sección todavía
- * abierta (`section.streaming`) muestra el cursor parpadeante.
+ * abierta (`section.streaming`) muestra el cursor parpadeante. Mismo criterio
+ * para `cloud.mermaids` (T77): el array solo contiene los diagramas YA
+ * cerrados (ver `DraftDidacticSection` en `shared/events.ts`), así que
+ * `renderCloudDiagrams` recibe siempre contenido completo, nunca un DSL a
+ * medio escribir.
  */
 function renderDraftSection(
   section: DraftDidacticSection,
@@ -127,6 +184,8 @@ function renderDraftSection(
           <MermaidDiagram key={section.mermaid} code={section.mermaid} />
         </ExpandableResource>
       )}
+      {section.kind === 'cloud' &&
+        renderCloudDiagrams(section.mermaids ?? [], meta.title, onExpand)}
       {(section.kind === 'endpoint' || section.kind === 'setup') &&
         section.snippets.map((snippet, i) => (
           <CodeSnippet
