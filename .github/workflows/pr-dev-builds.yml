@@ -19,7 +19,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Puerta de calidad: typecheck + lint + unit tests UNA sola vez en Linux.
+  # Los builds de la matriz (3 SOs) solo arrancan si esto pasa — mismo
+  # pipeline que `npm run verify` en local.
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
   build:
+    needs: checks
     strategy:
       fail-fast: false
       matrix:
@@ -68,12 +97,6 @@ jobs:
           DEV_VERSION="${BASE_VERSION}-${SHORT_SHA}-dev"
           npm version --no-git-tag-version "$DEV_VERSION"
           echo "version=$DEV_VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Test
-        run: npm test
 
       - name: Build (electron-vite)
         run: npm run build

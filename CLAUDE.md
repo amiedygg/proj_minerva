@@ -179,6 +179,8 @@ scripts/            smoke-*.mjs (e2e vía CDP), screenshot-app.sh, debug-*.mjs
 - `npm run dev` — Electron con hot reload (main cambia ⇒ reinicio completo).
 - `npm run dev -- -- --remote-debugging-port=9222` — dev + CDP para las suites e2e.
 - `npm run build` / `npm run typecheck` / `npm run lint` / `npm test` (vitest).
+- `npm run verify` — typecheck + lint + test encadenados; es el mismo gate que el
+  job `checks` de los workflows de CI (pr-dev-builds y release).
 - `MINERVA_MOCK=1 npm run dev` — demo: PRs mock + IA real del proveedor activo (si su
   CLI está autenticado; si no, cae al mock de IA).
 - `MINERVA_MOCK=1 MINERVA_MOCK_AI=1 npm run dev` — demo/e2e 100% determinista: PRs

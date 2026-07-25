@@ -17,6 +17,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test": "vitest run",
+    "verify": "npm run typecheck && npm run lint && npm test",
     "dist": "electron-vite build && electron-builder --linux",
     "dist:dir": "electron-vite build && electron-builder --linux dir"
   },
