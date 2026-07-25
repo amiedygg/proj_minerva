@@ -3538,3 +3538,14 @@ el updater no los ve.
   tras `npm version` hay que correr `npm run dist:dir` antes de la suite. Es
   a propósito: el binario viejo es exactamente lo que CLAUDE.md ya advierte que
   no sirve para verificar nada.
+- **`responsive.spec.ts` tenía una carrera latente desde F16, y la destapó CI.**
+  El test medía el `boundingBox()` del panel de diff INMEDIATAMENTE después de
+  `setViewport`, pero el colapso del árbol de archivos a drawer lo dispara el
+  `ResizeObserver` de `useElementWidth`, que es asíncrono. Al pasar de 1920x540
+  a 960x540 la foto salía con el árbol todavía como columna: **580-260=320px**,
+  el número exacto del fallo (run 30171070743). No se reproduce en local ni con
+  la máquina saturada (3 corridas limpias + 1 con todos los cores ocupados) —
+  en esta máquina el observer llega antes de la medición. Fix: `expect.poll`
+  sobre la medición, SIN aflojar el umbral de 400px. Es el mismo gotcha 11 del
+  CLAUDE.md visto desde el lado del test: si la UI reacciona por
+  ResizeObserver, una medición única es una foto sacada demasiado pronto.
