@@ -1,4 +1,4 @@
-import { test, expect } from './fixtures'
+import { test, expect, attachScreenshot } from './fixtures'
 import type { Page } from './fixtures'
 
 /**
@@ -24,12 +24,6 @@ async function analyze(window: Page, prTitle: string): Promise<void> {
   await expect(window.getByRole('button', { name: /Re-?analizar/i })).toBeEnabled({
     timeout: 90_000,
   })
-}
-
-async function attachScreenshot(window: Page, testInfo: { outputPath(name: string): string; attach(name: string, opts: { path: string; contentType: string }): Promise<void> }, name: string): Promise<void> {
-  const path = testInfo.outputPath(name + '.png')
-  await window.screenshot({ path, fullPage: false })
-  await testInfo.attach(name, { path, contentType: 'image/png' })
 }
 
 const setupCard = (window: Page) =>
