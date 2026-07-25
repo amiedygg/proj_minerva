@@ -292,6 +292,15 @@ en `src/main/updater/`: `config.ts` (constantes + `buildReleaseUrl`),
      (ver `responsive.spec.ts`, F16): los 4 tamaños del mapa de tiling y, para
      contenido recortado, `scrollIntoViewIfNeeded()` — si un ancestro lo clipea
      sin scroller, ese paso falla, que es justo la regresión a cazar.
+3.b **Capturas en un PR**: van embebidas, no descritas. Playwright borra
+   `test-results/` al empezar cada corrida, así que copiá los PNGs ANTES de
+   volver a correr. Para subirlos sin arrastrarlos por la web (patrón de
+   F16/PR #19, repetido en F17): rama **huérfana** de evidencia
+   (`git switch --orphan evidence-<slug>`) con los PNGs y un README que diga
+   con qué comando y sobre qué commit se generaron; se embeben con
+   `<img src="https://raw.githubusercontent.com/amiedygg/proj_minerva/evidence-<slug>/…">`
+   y la rama se borra al cerrar el PR. Así los MB no entran a la historia del
+   código y el flujo funciona entero desde la terminal.
 3. **Verificación visual**: toda verificación de UI termina MIRANDO una captura
    (los tests Playwright ya adjuntan PNG por test en `test-results/` — mirarlos
    cuenta). Para la app corriendo en dev:

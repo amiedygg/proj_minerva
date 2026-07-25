@@ -32,8 +32,26 @@
   el DOM puede decir "visible" mientras el usuario ve un panel vacío.
 
   De dónde sacarlas:
-  - La suite Playwright ya deja un PNG por test en `test-results/`.
+  - La suite Playwright ya deja un PNG por test en `test-results/` (ojo: los
+    borra al empezar cada corrida — copialos antes de volver a correr).
   - App corriendo en dev: `scripts/screenshot-app.sh <salida.png> [patrón-título]`.
+
+  CÓMO SUBIRLAS sin arrastrarlas a mano por la web (patrón de F16/PR #19):
+  una rama HUÉRFANA de evidencia con los PNGs, embebidos por raw.githubusercontent.
+  Así también funciona desde la terminal, y los MB no entran a la historia
+  del código:
+
+      git switch --orphan evidence-<slug>
+      # copiar los PNGs, escribir un README con la provenance
+      git add -A && git commit -m "docs: evidencia visual de <slug>"
+      git push -u origin evidence-<slug>
+
+  y en el cuerpo del PR:
+
+      <img src="https://raw.githubusercontent.com/amiedygg/proj_minerva/evidence-<slug>/e2e/<archivo>.png" width="430">
+
+  La rama se borra al cerrar el PR. El README de esa rama debe decir con qué
+  comando se generaron las capturas y sobre qué commit.
 
   Minerva se usa TILEADA (media pantalla, un cuarto), así que si el cambio
   toca layout, incluí al menos un tamaño tileado además del normal (F16).
