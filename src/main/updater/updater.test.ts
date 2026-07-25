@@ -152,3 +152,31 @@ describe('updater singleton (T91 núcleo real + T92 selección de mock)', () => 
     updater.stop()
   })
 })
+
+/**
+ * Regresión de v0.7.0: el auto-updater REAL quedaba mudo en producción porque
+ * `electron-updater` (CJS) exporta `autoUpdater` con un getter de arrow
+ * function que `cjs-module-lexer` no reconoce, así que importado desde nuestro
+ * bundle ESM el named export llega `undefined` y solo vive en `default`.
+ * Dev y toda la suite e2e seguían en verde porque ahí el camino real nunca se
+ * ejecuta (`disabled` o mock) — esto lo cubre a nivel unitario.
+ */
+describe('resolveAutoUpdaterExport (interop ESM/CJS)', () => {
+  it('usa el export nombrado cuando cjs-module-lexer SÍ lo detectó', async () => {
+    const { resolveAutoUpdaterExport } = await import('./updater')
+    const named = { marca: 'named' }
+    expect(resolveAutoUpdaterExport({ autoUpdater: named } as never)).toBe(named)
+  })
+
+  it('cae a `default.autoUpdater` cuando el named export llega undefined (el caso REAL)', async () => {
+    const { resolveAutoUpdaterExport } = await import('./updater')
+    const enDefault = { marca: 'default' }
+    const mod = { autoUpdater: undefined, default: { autoUpdater: enDefault } }
+    expect(resolveAutoUpdaterExport(mod as never)).toBe(enDefault)
+  })
+
+  it('lanza con mensaje accionable si no está en ninguno de los dos lados', async () => {
+    const { resolveAutoUpdaterExport } = await import('./updater')
+    expect(() => resolveAutoUpdaterExport({ default: {} } as never)).toThrow(/no expuso/)
+  })
+})

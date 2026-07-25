@@ -3549,3 +3549,39 @@ el updater no los ve.
   sobre la medición, SIN aflojar el umbral de 400px. Es el mismo gotcha 11 del
   CLAUDE.md visto desde el lado del test: si la UI reacciona por
   ResizeObserver, una medición única es una foto sacada demasiado pronto.
+
+### T95 — el bug que solo aparecía en producción (2026-07-25)
+
+**El auto-updater de v0.7.0 estaba MUDO en producción y todos los tests en
+verde.** Lo cazó T95 corriendo la AppImage publicada de verdad, que es
+exactamente para lo que existía esa tarea.
+
+- **Síntoma**: la AppImage real (capacidad `auto`, `$APPIMAGE` definido y
+  escribible) devolvía `{phase:'idle'}` **sin `lastCheckedAt`** ante un
+  `updater:check`, y el log no tenía NI UNA línea `[updater]`. O sea:
+  `checkForUpdates()` nunca corría, ni siquiera emitía `checking-for-update`.
+- **Causa raíz**: `electron-updater` es CommonJS y exporta `autoUpdater` con
+  `Object.defineProperty(exports, 'autoUpdater', { get: () => ... })` — getter
+  con ARROW function. `cjs-module-lexer` (lo que usa Node para derivar los
+  named exports de un CJS importado desde ESM) reconoce el patrón que emite
+  TypeScript (`get: function () { return X }`) pero NO ese. Nuestro bundle de
+  main es ESM ⇒ `mod.autoUpdater` llegaba `undefined` y el objeto solo existía
+  en `mod.default.autoUpdater`. Comprobado a mano bajo Electron 43:
+  `typeof mod.autoUpdater === 'undefined'`, `typeof mod.default.autoUpdater ===
+  'object'`; todos los demás exports (`AppUpdater`, `NsisUpdater`, …) SÍ se
+  detectan — el único roto era justo el que necesitábamos.
+- **Por qué NADA lo detectó**: `instance.autoDownload = false` sobre `undefined`
+  lanzaba un TypeError, y el `catch` de `realCheckNow` se lo tragaba con el
+  comentario "el listener 'error' ya transicionó el estado" — que es cierto
+  para `checkForUpdates()` pero FALSO para `ensureRealAutoUpdater()`, que corre
+  ANTES de que ese listener exista. Silencio absoluto. Y ningún test lo
+  cubría porque dev y toda la suite e2e corren en `disabled` o con el mock:
+  **el camino real no se ejecutaba en ninguna verificación automatizada**.
+- **Fix**: `resolveAutoUpdaterExport()` (exportada y con test de regresión de
+  los 3 casos) + separar el `try` del setup del `try` de la operación, para que
+  un fallo de wiring transicione a `{phase:'error'}` en vez de desaparecer.
+- **Lección para el resto del proyecto**: cualquier dependencia CJS consumida
+  con `await import()` desde main puede perder named exports. Si el símbolo se
+  exporta con un getter que no sea el patrón de TypeScript, hay que ir por
+  `default`. Y un `catch {}` justificado por "otro ya reporta el error" tiene
+  que verificar que ese otro EXISTA en ese punto del flujo.
