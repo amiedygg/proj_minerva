@@ -187,6 +187,7 @@ function isOpenDidacticWindowPayload(value: unknown): boolean {
  */
 export const payloadValidators: Record<IpcChannel, (payload: unknown) => boolean> = {
   'minerva:ping': isVoidPayload,
+  'minerva:getVersion': isVoidPayload,
   'auth:getStatus': isVoidPayload,
   'auth:startDeviceFlow': isVoidPayload,
   'auth:signOut': isVoidPayload,
@@ -208,4 +209,11 @@ export const payloadValidators: Record<IpcChannel, (payload: unknown) => boolean
   'settings:setModelOption': isSetModelOptionPayload,
   'settings:setGithubAccessMode': isSetGithubAccessModePayload,
   'window:openDidactic': isOpenDidacticWindowPayload,
+  // Auto-updater (T90, F17): los 5 canales son `req: void` — mismo guard que
+  // `minerva:ping`/`auth:getStatus`, rechaza cualquier cosa distinta de `undefined`.
+  'updater:getStatus': isVoidPayload,
+  'updater:check': isVoidPayload,
+  'updater:download': isVoidPayload,
+  'updater:quitAndInstall': isVoidPayload,
+  'updater:openReleasePage': isVoidPayload,
 }

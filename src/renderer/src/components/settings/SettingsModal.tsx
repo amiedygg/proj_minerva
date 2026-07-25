@@ -11,6 +11,7 @@ import { ActiveConfigSummary } from './ActiveConfigSummary'
 import { GithubAccessSection } from './GithubAccessSection'
 import { ProviderTabs } from './ProviderTabs'
 import { ProviderModelPanel } from './ProviderModelPanel'
+import { UpdateSection } from './UpdateSection'
 
 /**
  * Modal de settings (T12; rediseñado en T62/F12: tabs por proveedor + strip
@@ -165,6 +166,12 @@ function SettingsModalBody({
   // es el `border-r` del contenedor (F16/T80).
   const github = <GithubAccessSection info={info} setGithubAccessMode={setGithubAccessMode} compact={compact} />
 
+  // Sección "Actualizaciones" (T93, F17): en una columna va al final de todo
+  // el scroll; en dos columnas (≥980px) va debajo de GitHub, la columna más
+  // corta (mismo criterio que el PLAN.md § F17). Se automonta en `disabled`
+  // (dev/e2e) — `UpdateSection` decide internamente no renderizar nada.
+  const updates = <UpdateSection compact={compact} />
+
   const ai = (
     <>
       {/*
@@ -196,7 +203,10 @@ function SettingsModalBody({
   if (twoColumn) {
     return (
       <div className="flex min-h-0 flex-1">
-        <div className="w-[40%] min-w-0 shrink-0 overflow-y-auto border-r border-border">{github}</div>
+        <div className="w-[40%] min-w-0 shrink-0 overflow-y-auto border-r border-border">
+          {github}
+          {updates}
+        </div>
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">{ai}</div>
       </div>
     )
@@ -206,6 +216,7 @@ function SettingsModalBody({
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="border-b border-border">{github}</div>
       {ai}
+      {updates}
     </div>
   )
 }

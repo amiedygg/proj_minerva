@@ -6,6 +6,7 @@ import { useAuth } from '../../hooks/use-auth'
 import { useLayoutTier } from '../../hooks/use-layout-tier'
 import { sidebarIsDrawer } from '../../lib/layout'
 import { useSettings } from '../../hooks/use-settings'
+import { useUpdater } from '../../hooks/use-updater'
 import { getModelOption } from '../../../../shared/ai-providers'
 import { resolveModelHintLabels } from '../../lib/model-labels'
 import { IconButton } from '../ui/IconButton'
@@ -30,17 +31,39 @@ import { Badge } from '../ui/Badge'
  * `useSettings()` ya cachea la selección en el store zustand compartido con
  * `SettingsModal` — abrir/cerrar el modal no dispara un fetch nuevo, y un
  * cambio hecho ahí se refleja acá al instante (mismo estado).
+ *
+ * Badge discreto (T93, F17): un punto sobre el engrane cuando
+ * `UpdaterStatus.phase` es `available` o `downloaded` — mismo patrón visual
+ * que el dot de "no leído" de `PrListItem` (`h-1.5 w-1.5 rounded-full`), solo
+ * que posicionado `absolute` en la esquina del botón para no sumar ancho: en
+ * el tier `sm` la TitleBar no tiene lugar para nada más que este punto (F16),
+ * nunca un banner.
  */
 function SettingsChip({ compact }: { compact: boolean }): React.JSX.Element {
   const openSettings = useAppStore((s) => s.openSettings)
   const { info } = useSettings()
+  const { status: updaterStatus } = useUpdater()
+
+  const showUpdateBadge = updaterStatus?.phase === 'available' || updaterStatus?.phase === 'downloaded'
+  const updateDot = showUpdateBadge ? (
+    <span
+      className="pointer-events-none absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-accent ring-2 ring-panel"
+      aria-hidden
+      title="Hay una actualización disponible"
+    />
+  ) : null
 
   // Compacto (F16/T83): en ventanas angostas el chip vuelve a ser solo el
   // engrane — el texto "Proveedor · Modelo" es lo primero que sobra cuando el
   // TitleBar no da para todo. El icono `lucide-settings` NUNCA sale del botón
   // (los specs e2e localizan Settings por `svg.lucide-settings`).
   if (!info || compact) {
-    return <IconButton icon={<Settings size={16} />} label="Configuración" onClick={openSettings} />
+    return (
+      <span className="relative inline-flex">
+        <IconButton icon={<Settings size={16} />} label="Configuración" onClick={openSettings} />
+        {updateDot}
+      </span>
+    )
   }
 
   const modelLabel = getModelOption(info.catalog, info.provider, info.model)?.label ?? info.model
@@ -57,18 +80,21 @@ function SettingsChip({ compact }: { compact: boolean }): React.JSX.Element {
     info.modelSource
 
   return (
-    <button
-      type="button"
-      title={title}
-      aria-label={title}
-      onClick={openSettings}
-      className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-muted transition-colors duration-150 hover:border-accent hover:text-text"
-    >
-      <Settings size={16} />
-      <span className="text-xs">
-        {providerLabel} · {modelLabel}
-      </span>
-    </button>
+    <span className="relative inline-flex">
+      <button
+        type="button"
+        title={title}
+        aria-label={title}
+        onClick={openSettings}
+        className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-muted transition-colors duration-150 hover:border-accent hover:text-text"
+      >
+        <Settings size={16} />
+        <span className="text-xs">
+          {providerLabel} · {modelLabel}
+        </span>
+      </button>
+      {updateDot}
+    </span>
   )
 }
 

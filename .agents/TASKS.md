@@ -3231,3 +3231,321 @@ Números del antes/después a 960x540 (un cuarto de un monitor 1080p):
   pide) y fusionar las tabs Conversación/Archivos en la fila del `PrHeader` en
   ventanas bajas (el `PrHeader` de una línea ya recupera ~76px; fusionar
   acoplaría `CenterPane` con `PrHeader` por ~37px más).
+
+---
+
+## F17 — Auto-updater (v0.7.0, 2026-07-25, rama feature/auto-updater)
+
+Pedido de Edilson (2026-07-25): *"quiero trabajar en una nueva rama para
+solucionar el autoupdater… este feature sí es un breaking change por lo tanto
+vamos a subir la versión a v0.7.0"*. Estudio de opciones, decisiones cerradas y
+arquitectura: `PLAN.md` § F17.
+
+**El diagnóstico en una línea:** no es "arreglar" el updater — no existe ni él ni
+su feed. `grep` limpio sobre `src/`, `electron-builder.yml` sin sección `publish`
+(⇒ sin `app-update.yml` embebido, electron-updater ni arranca), y `release.yml`
+sube solo los instaladores con `gh release upload`, así que los `latest*.yml` y
+los `*.blockmap` que electron-builder SÍ genera se quedan en el runner
+(verificado contra v0.6.0: 4 assets, cero metadata).
+
+**Decisiones cerradas con Edilson:** mac notify-only (sin Developer ID por
+ahora), Windows sin firmar, descarga con consentimiento explícito (130 MB),
+instalación al salir, check al arrancar + cada 6 h + botón manual,
+`allowPrerelease: true`, y release por tag → draft → publish.
+
+**Breaking change:** el auto-update existe de v0.7.0 en adelante. Quien tenga
+0.6.x instalada no tiene updater y debe reinstalar a mano UNA vez.
+
+- [x] **T89. Infra de release: `publish` en electron-builder + zip de mac + pipeline tag→draft→publish**
+  _(subagente Sonnet; verificado por el orquestador: `npm run dist` real con los
+  artefactos inspeccionados, YAML de los 3 archivos parseado con `js-yaml` +
+  grafo de jobs `checks→draft→build→publish` confirmado, `npm run verify` y
+  suite e2e 35/35 en verde.)_
+  NO toca `src/`. `electron-builder.yml`: sección `publish: {provider: github,
+  owner: amiedygg, repo: proj_minerva}` (es lo que genera `app-update.yml` dentro
+  del paquete — sin eso electron-updater lanza en runtime) y `zip` añadido al
+  target de mac junto al `dmg` (Squirrel.Mac lo exige aunque mac quede
+  notify-only: el hueco se deja preparado para el Developer ID).
+  `release.yml` reescrito: trigger `on: push: tags: ['v*']` en vez de
+  `release: published`; jobs `checks` → `draft` (`gh release create "$TAG"
+  --draft --title …`, UNA sola vez, para que los 3 runners no compitan creando
+  drafts duplicados) → `build` (matriz igual que hoy, pero `npx electron-builder
+  <flag> --publish always` con `GH_TOKEN`, que sube instalador + `latest*.yml` +
+  `*.blockmap`) → `publish` (`gh release edit "$TAG" --draft=false`, con
+  `needs: build`). El check tag-vs-`package.json` pasa de `::warning::` a
+  **fallo duro** (`exit 1`).
+  `pr-dev-builds.yml`: se queda con `--publish never`; confirmar que sigue verde
+  con la sección `publish` presente.
+  _Aceptación:_ `npx electron-builder --linux --publish never` local produce
+  `dist/latest-linux.yml` + `app-update.yml` dentro del
+  `linux-unpacked/resources/`; `actionlint` (o revisión manual) sobre los dos
+  workflows; el job `draft` es idempotente si el tag se re-pushea.
+  _(Corrección del orquestador: el criterio original pedía además un sidecar
+  `dist/*.AppImage.blockmap` y estaba MAL — ver bitácora.)_
+  _Gotchas:_ el `publish` de electron-builder crea la release como **draft** por
+  defecto — por eso el job `draft` explícito es un contenedor, no un duplicado:
+  electron-builder encuentra el draft existente por tag y sube ahí. `permissions:
+  contents: write` hace falta en el workflow entero, no solo en un job.
+
+- [x] **T90. Contrato: `UpdaterStatus`, canales IPC, evento push, validators y preload**
+  _(subagente Sonnet; verificado por el orquestador: revisión del diff completo
+  contra la frontera de seguridad —canal hardcodeado, guard de payload,
+  `removeListener` de ESE listener, `isVoidPayload` en los 6 canales, cero
+  `releaseNotes` en el contrato—, `npm run verify` verde por mi cuenta y suite
+  e2e 35/35 incluida `packaged.spec.ts`.)_
+  Sin lógica de updater todavía — solo el contrato, para que T91 y T93 puedan ir
+  en paralelo. `src/shared/types.ts`: union `UpdaterStatus` exactamente como en
+  `PLAN.md` § F17 (`disabled | unsupported | idle | checking | available |
+  downloading | downloaded | error`) + `UpdateInfoLite { version, releaseUrl,
+  releaseDate? }`. **`UpdateInfoLite` NO lleva `releaseNotes`**: vienen de GitHub
+  como HTML crudo y no se renderizan (ver frontera de seguridad del PLAN).
+  `src/shared/ipc.ts`: `updater:getStatus`, `updater:check`, `updater:download`,
+  `updater:quitAndInstall`, `updater:openReleasePage` (todos `req: void`) y
+  `minerva:getVersion` (`res: string`) en el namespace `system` — hoy
+  `app.getVersion()` no se muestra en ninguna parte de la app.
+  `src/shared/events.ts`: `minerva:event:updaterStatusChanged` con
+  `UpdaterStatusChangedEvent { status: UpdaterStatus }` + entrada en
+  `MINERVA_EVENTS`.
+  `src/main/ipc/validators.ts`: los 5 canales nuevos son `void` ⇒ validator que
+  rechaza cualquier cosa distinta de `undefined`.
+  `src/preload/index.ts`: `window.minerva.updater.*` (funciones concretas) y
+  `events.onUpdaterStatus(cb)` con el canal **hardcodeado**, mismo patrón que
+  `onAnalysisProgress` — jamás un `on(channel, cb)` genérico.
+  _Aceptación:_ `npm run verify` verde; ningún `any`; el renderer puede llamar
+  `getStatus` y recibir el tipo correcto (aunque main devuelva `disabled` fijo).
+  _Gotchas:_ `updater:quitAndInstall` existe pero es **acción secundaria**: el
+  comportamiento por defecto es instalar al salir (decisión 4). No lo conviertas
+  en el camino principal de la UI.
+
+- [x] **T91. Núcleo del updater en main: capacidad, máquina de estados y scheduler**
+  _(subagente Sonnet; verificado por el orquestador: precedencia de `capability.ts`
+  y regex de semver leídas contra el código, descartada la carrera invoke-vs-push
+  (`checkNow()` devuelve el `status` leído DESPUÉS del await), bundle de main sin
+  corromper, `npm run verify` (694 tests) y suite e2e 35/35 en corrida limpia.)_
+  `src/main/updater/config.ts`: `ALLOW_PRERELEASE = true`, `CHECK_INTERVAL_MS`
+  (6 h), `STARTUP_DELAY_MS` (60 s), `RELEASE_OWNER`/`RELEASE_REPO`.
+  `src/main/updater/capability.ts`: función **pura y testeable** (recibe
+  `{ platform, isPackaged, env, canWrite }`, no toca `app` ni `fs` directo) que
+  devuelve `'disabled' | 'auto' | 'notify'` según la tabla del PLAN:
+  `!isPackaged` o `MINERVA_UPDATER=off` ⇒ `disabled`; `darwin` ⇒ `notify`
+  (sin Developer ID); `linux` ⇒ `auto` solo si `$APPIMAGE` está definido **y**
+  el archivo y su directorio padre son escribibles (AppImageLauncher, `/opt` y
+  root rompen justo ahí), si no `notify`; `win32` ⇒ `auto`.
+  `src/main/updater/updater.ts`: singleton que cablea `electron-updater`
+  (`autoDownload: false`, `autoInstallOnAppQuit: true`, `allowPrerelease`,
+  `logger` mínimo con info/warn/error/debug — NO agregar `electron-log`),
+  mantiene el `UpdaterStatus`, agenda el check inicial con delay + el intervalo
+  (limpiándolos en `before-quit`), y hace **broadcast a todas las ventanas**
+  (mismo patrón que `analysisProgress`). En modo `notify` consulta el feed y
+  compara semver pero NUNCA descarga.
+  La `releaseUrl` la construye main desde plantilla hardcodeada con
+  `RELEASE_OWNER`/`RELEASE_REPO` y la versión **validada como semver** — jamás
+  una URL que venga del feed. `openReleasePage` va por `shell.openExternal`.
+  `electron-updater` a **`dependencies`** (no dev) en `package.json`.
+  Handlers en `src/main/ipc/handlers.ts` + init desde `src/main/index.ts`.
+  _Aceptación:_ unit tests (vitest) de `capability.ts` cubriendo la matriz
+  completa de plataforma/env/permisos y de la construcción+validación de la URL
+  (una versión no-semver no produce URL); `npm run verify` verde; `npm run dev`
+  arranca sin tocar la red (queda en `disabled`) y sin ruido en consola.
+  _Gotchas:_ **`electron-updater` en `devDependencies` es un bug que solo aparece
+  después de `npm run dist`** — `externalizeDepsPlugin` la externaliza, el bundle
+  de main hace `require` de un paquete que no viaja en el asar, y la app
+  empaquetada crashea al arrancar mientras en dev todo se ve perfecto. Errores
+  siempre a estado `error` visible, nunca throw silencioso (regla de CLAUDE.md).
+  En main usa `import.meta.dirname`, nunca `__dirname` (gotcha 2).
+
+- [x] **T92. Mock del updater (`MINERVA_MOCK_UPDATER=1`) guionado**
+  _(subagente Sonnet; verificado por el orquestador: los TRES guiones recorridos
+  de punta a punta sobre la app construida con capturas miradas.)_
+  `src/main/updater/mock-updater.ts`: implementación con el mismo contrato que
+  el real que emite un guion determinista al recibir `check`: `checking` →
+  `available` (versión = actual + minor) → al recibir `download`, una serie de
+  `downloading` con percent 0→100 en pasos cortos → `downloaded`. Un segundo
+  guion seleccionable por env (`MINERVA_MOCK_UPDATER=notify`) para el estado
+  `unsupported` (el caso mac/AppImageLauncher), y `=error` para el camino de
+  error. Se elige en el init de `updater.ts`, igual que `MockAiService` con
+  `MINERVA_MOCK_AI`.
+  _Aceptación:_ `MINERVA_MOCK_UPDATER=1 npm run dev` recorre el guion completo
+  sin salir a la red; unit test del guion (secuencia de estados emitidos).
+  _Gotchas:_ el mock es **LA única vía** de ejercitar esta UI en e2e: la suite
+  corre la app sin empaquetar y ahí el updater real está `disabled` por diseño.
+  Los tiempos del guion tienen que ser cortos (≤2 s el total) o el spec se vuelve
+  lento y flaky.
+
+- [x] **T93. UI: sección "Actualizaciones" en Settings + badge en el engrane**
+  _(subagente Sonnet; verificado por el orquestador: capturas MIRADAS de los
+  estados disponible/descargando/descargada/unsupported/error, jerarquía de
+  "Se instalará al salir" vs "Reiniciar ahora" confirmada visualmente, badge
+  presente en el chip de la TitleBar, `settings.spec.ts`/`github-mode.spec.ts`
+  verdes sin tocarlos.)_
+  `src/renderer/src/hooks/use-updater.ts`: suscripción a `onUpdaterStatus` +
+  `getStatus` inicial; devuelve `{ status, version, check, download,
+  quitAndInstall, openReleasePage }`.
+  `src/renderer/src/components/settings/UpdateSection.tsx` (nuevo): versión
+  actual (`minerva:getVersion`), botón "Buscar actualizaciones" (deshabilitado
+  en `checking`/`downloading`), y por estado: "Estás al día" + fecha del último
+  chequeo · "Disponible vX.Y.Z" + botón "Descargar (130 MB)" · barra de progreso
+  con porcentaje · "Se instalará al salir de Minerva" + acción SECUNDARIA
+  "Reiniciar ahora" · mensaje de error con reintento · en `unsupported`, texto
+  honesto del porqué ("esta instalación no puede actualizarse sola") + "Ver la
+  release". En `disabled` la sección no se monta.
+  Ubicación en `SettingsModal`: en una columna al final; en dos columnas (≥980px,
+  F16) debajo de "Acceso a GitHub".
+  Badge discreto (punto) en el botón del engrane de la `TitleBar` cuando el
+  estado es `available` o `downloaded` — reusar el patrón de "no leído" de la
+  lista de PRs. **Nada de banners.**
+  _Aceptación:_ los 6 estados se ven correctos con el mock; `settings.spec.ts` y
+  `github-mode.spec.ts` siguen verdes **sin tocarlos**; capturas de idle /
+  disponible / bajando / descargada MIRADAS.
+  _Gotchas:_ requisito duro heredado de F16 — esas dos suites exigen textos
+  VISIBLES apenas abre el modal, sin clicks ⇒ prohibido un `<details>` cerrado o
+  cualquier cosa que desmonte secciones. La TitleBar en tier `sm` no tiene ancho
+  para nada más que el punto. Las release notes NO se renderizan (HTML crudo de
+  GitHub, ver frontera de seguridad).
+
+- [x] **T94. e2e `updater.spec.ts` (mock guionado + pasada tileada)**
+  _(subagente Sonnet; el orquestador diagnosticó y arregló DOS fallos que dejó:
+  el test de `notify` clickeaba un botón que en `unsupported` no existía —lo
+  que destapó un hueco real de producto, ver abajo— y `packaged.spec.ts` falló
+  por el bump a 0.7.0 con el binario de `dist/` viejo. Verificado: suite
+  completa en verde y capturas miradas.)_
+  Spec nuevo en `e2e/` con `MINERVA_MOCK_UPDATER=1` pasado por el env extra que
+  ya acepta `launchMinerva`. Recorrido: abrir Settings → ver la versión actual →
+  "Buscar actualizaciones" → aparece "Disponible" con la versión del guion →
+  "Descargar" → la barra progresa → "Se instalará al salir" → el badge del
+  engrane está presente. Un segundo caso con `MINERVA_MOCK_UPDATER=notify`
+  afirmando que **no hay** botón de descarga y sí el link a la release.
+  Pasada responsive a 960×540 con `setViewport(page, 960, 540)`: la sección se
+  alcanza con `scrollIntoViewIfNeeded()`.
+  Reforzar en las fixtures que el resto de los specs corren con
+  `MINERVA_UPDATER=off` explícito.
+  _Aceptación:_ `npm run test:e2e` completo verde bajo Xvfb (`npm run build &&
+  xvfb-run -a -s "-screen 0 1600x1000x24" npx playwright test`); capturas del
+  spec nuevo miradas.
+  _Gotchas:_ espera señales inequívocas (el botón "Descargar" habilitado, el
+  texto "Se instalará al salir"), no strings que ya existan en el estado vacío.
+  `scrollIntoViewIfNeeded()` es LA aserción de contenido recortado (F16).
+  Redimensionar es `setViewport` por CDP, nunca `page.setViewportSize()`
+  (gotcha 12).
+
+- [ ] **T95. Verificación del update REAL con provider `generic` local** — _orquestador, no subagente_
+  Probar la mecánica de reemplazo del AppImage **sin quemar releases**:
+  `npm run dist` con `version` 0.7.0-rc.1 y luego 0.7.0-rc.2, servir un `dist/`
+  con ambos + `latest-linux.yml` desde `python3 -m http.server`, apuntar el
+  updater a ese feed con provider `generic` (override temporal por env, o
+  `dev-app-update.yml` + `forceDevUpdateConfig`), correr la AppImage rc.1 **de
+  verdad** (con `$APPIMAGE` definido) y comprobar: detecta rc.2, descarga con
+  progreso real, al cerrar la app reemplaza el archivo, y el siguiente arranque
+  reporta 0.7.0-rc.2.
+  _Aceptación:_ el ciclo completo observado, con captura de la versión nueva en
+  la sección de Settings. Los hallazgos van a la bitácora de F17.
+  _Gotchas:_ la AppImage tiene que ejecutarse tal cual (no `linux-unpacked`) o
+  `capability` la marca `notify` y no hay nada que probar. Para matar la app:
+  `pkill -f "[e]lectron"` en un comando SEPARADO (gotcha 5).
+
+- [x] **T96. Bump a 0.7.0 + documentación del breaking change**
+  _(orquestador directo: `package.json` 0.7.0, entrada de roadmap + aviso de
+  reinstalación manual en README, sección "Auto-updater" y comandos nuevos en
+  CLAUDE.md.)_
+  `package.json` a `0.7.0`. `README.md`: entrada de roadmap del auto-updater y
+  nota de instalación explicando que **quien venga de 0.6.x debe reinstalar a
+  mano una vez** (no tiene updater con que enterarse). `CLAUDE.md`: sección corta
+  del updater (módulo, modos de capacidad, `MINERVA_MOCK_UPDATER`,
+  `MINERVA_UPDATER=off`) y los gotchas nuevos que salgan de T91/T95.
+  Borrador de las notas de la release v0.7.0 con el breaking change arriba de
+  todo.
+  _Aceptación:_ `npm run verify` verde; los docs describen el estado REAL (mac
+  notify-only, Windows sin firmar), sin prometer lo que no hay.
+
+### Nota de contexto para F17 (no es tarea)
+
+Las 6 releases existentes están marcadas **pre-release** y ninguna tiene
+`latest*.yml`. Con `allowPrerelease: true` el updater las mira, pero v0.7.0 será
+la más nueva por semver y las viejas nunca se van a seleccionar ⇒ no hace falta
+sanearlas. La regla que sí queda vigente de acá en adelante: **ninguna release se
+publica sin sus assets de metadata** — para eso está el pipeline draft→publish de
+T89.
+
+Los dev builds por PR suben como **artifacts del run**, no como releases, así que
+el updater no los ve.
+
+### Bitácora F17 — gotchas
+
+- **El blockmap del AppImage va EMBEBIDO, no como sidecar `.blockmap`.** El
+  criterio de aceptación de T89 (escrito por el orquestador) pedía ver un
+  `dist/*.AppImage.blockmap` y eso no existe nunca: `app-builder-lib` usa
+  `appendBlockmap()` para el target AppImage — `buildBlockMap(file, 'deflate')`
+  SIN archivo de salida, o sea que lo appendea dentro del propio `.AppImage`
+  con un header de 4 bytes (`targets/appimage/appImageUtil.js` +
+  `differentialUpdateInfoBuilder.js`, verificado leyendo el código instalado).
+  El sidecar `.blockmap` solo lo escribe `createBlockmap()`, que se usa para el
+  instalador NSIS (`*.exe.blockmap`) y para el `zip` de mac. La evidencia de que
+  el update diferencial de Linux SÍ está habilitado es el campo
+  **`blockMapSize: 144026`** dentro de `latest-linux.yml`, no un archivo aparte.
+  Lo cazó el subagente de T89 leyendo la fuente en vez de asumir que el criterio
+  era correcto — el criterio se corrigió en la tarea.
+- **`gh` necesita `GH_REPO` en jobs sin checkout.** El job `publish` de
+  `release.yml` no hace checkout (solo corre `gh release edit`), así que `gh` no
+  puede autodetectar el repo por el remote de git. Se pasa
+  `GH_REPO: ${{ github.repository }}` por env en los jobs `draft` y `publish`.
+- **`--publish never` NO desactiva la escritura de `app-update.yml`**, solo la
+  SUBIDA de assets. Por eso los dev builds de `pr-dev-builds.yml` quedan con el
+  feed embebido y una AppImage `X.Y.Z-sha-dev` va a ofrecer actualizar a la
+  estable apenas salga. Es correcto por semver y además útil (empuja a no
+  quedarse en un dev build viejo), pero conviene saberlo antes de que sorprenda.
+- **`app.getVersion()` sin empaquetar devuelve la versión de ELECTRON, no la de
+  Minerva.** Corriendo `electron out/main/index.js` (toda la suite e2e) el
+  directorio de la app no tiene `package.json`, así que Electron cae a su propia
+  versión: la sección de Settings muestra "Versión instalada: 43.0.0" y el mock
+  ofrece "43.1.0" (deriva minor+1). Empaquetada devuelve la real (verificado con
+  `dist/linux-unpacked`: `0.6.3`). Consecuencia para los specs: **nunca afirmar
+  un literal de versión** en la suite sin empaquetar, solo el patrón — y por eso
+  la aserción "la app empaquetada reporta la version de package.json" vive en
+  `packaged.spec.ts`, que es donde significa algo.
+- **Un binario viejo en `dist/` miente en silencio.** El chequeo de versión
+  falló primero con `window.minerva.system.getVersion is not a function`: el
+  `dist/linux-unpacked` lo había generado T89 ANTES de que T90 agregara el canal.
+  Es la misma trampa que CLAUDE.md ya anota para `packaged.spec.ts` — si vas a
+  verificar algo contra el empaquetado, reconstruilo (`npm run dist:dir`) o no
+  estás verificando lo que creés.
+- **2 fallos de `detach.spec.ts` que NO eran regresión.** La corrida completa con
+  T91–T93 dentro falló en los dos tests de la ventana desacoplada (timeouts de
+  10s sobre el cursor de streaming) y tardó 11.2m contra 8.1m de la corrida
+  anterior. Diagnóstico: contención de CPU, no código — los dos pasan aislados
+  en 54.8s, `TitleBar` (lo único que T93 tocó que podría influir) solo se monta
+  en `App.tsx` y NO en la ventana didáctica, y una corrida limpia posterior dio
+  35/35 en 8.0m. Lección repetida del proyecto: ante un fallo e2e, primero
+  aislar el spec y recién después culpar al código.
+- **Hueco de producto destapado por un test mal escrito (T94).** El spec de
+  `notify` clickeaba "Buscar actualizaciones" y se colgaba: en `unsupported`
+  ese botón NO se renderizaba (la fila de chequeo solo existía en
+  `idle`/`checking`/`error`). El bug del spec era real, pero al mirarlo de
+  cerca el problema de fondo era del producto: la decisión 5 de F17 es "chequeo
+  manual desde Settings", y en `unsupported` esa vía desaparecía — un usuario
+  de macOS abría Settings y no tenía forma de pedir el chequeo, tenía que
+  esperar al tick del scheduler para que apareciera "Ver la release". Fix en la
+  UI (el botón vive también en `unsupported`), NO en el mock: poblar `available`
+  en el `init` del guion habría tapado el hueco y encima habría hecho divergir
+  el mock del comportamiento real.
+- **Un `npm run build` piped a `tail -2` esconde que falló.** Tras arreglar el
+  layout de `unsupported` la captura salía IDÉNTICA a la anterior: el build
+  había fallado (comentario JSX puesto entre `&& (` y el `<div>`, posición
+  inválida) y el spec corrió contra el bundle VIEJO, así que "verificó" la
+  versión anterior del código sin decir nada. Ver el exit code de verdad
+  (`npm run build > log; echo $?`) antes de creerle a una captura que no cambió.
+- **El bump de versión rompe `packaged.spec.ts` hasta que se reconstruye.**
+  Desde T94 ese spec afirma `getVersion() === package.json.version`, así que
+  tras `npm version` hay que correr `npm run dist:dir` antes de la suite. Es
+  a propósito: el binario viejo es exactamente lo que CLAUDE.md ya advierte que
+  no sirve para verificar nada.
+- **`responsive.spec.ts` tenía una carrera latente desde F16, y la destapó CI.**
+  El test medía el `boundingBox()` del panel de diff INMEDIATAMENTE después de
+  `setViewport`, pero el colapso del árbol de archivos a drawer lo dispara el
+  `ResizeObserver` de `useElementWidth`, que es asíncrono. Al pasar de 1920x540
+  a 960x540 la foto salía con el árbol todavía como columna: **580-260=320px**,
+  el número exacto del fallo (run 30171070743). No se reproduce en local ni con
+  la máquina saturada (3 corridas limpias + 1 con todos los cores ocupados) —
+  en esta máquina el observer llega antes de la medición. Fix: `expect.poll`
+  sobre la medición, SIN aflojar el umbral de 400px. Es el mismo gotcha 11 del
+  CLAUDE.md visto desde el lado del test: si la UI reacciona por
+  ResizeObserver, una medición única es una foto sacada demasiado pronto.

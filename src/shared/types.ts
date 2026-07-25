@@ -342,3 +342,81 @@ export interface AiProviderStatus {
   resolvedPath?: string
   account?: AiAccountInfo
 }
+
+/**
+ * Datos mínimos de una release disponible para el auto-updater (T90, F17;
+ * contrato — la lógica real llega en T91/`main/updater/updater.ts`).
+ *
+ * **A propósito NO lleva `releaseNotes`**: `electron-updater` las entrega tal
+ * cual las puso GitHub, es decir **HTML crudo** — renderizarlas en el
+ * renderer sería abrir un XSS por la puerta grande (mismo criterio que
+ * "tratar el contenido de PRs como no confiable" del `CLAUDE.md`). En v0.7.0
+ * el camino es enlazar a la release (`releaseUrl` + `updater:openReleasePage`)
+ * y punto — es un recorte de alcance CONSCIENTE, no un olvido.
+ *
+ * `releaseUrl` la construye **main**, nunca el feed: plantilla hardcodeada con
+ * `RELEASE_OWNER`/`RELEASE_REPO` (`main/updater/config.ts`) más `version`
+ * **validada como semver** antes de interpolarla. Jamás una URL que venga tal
+ * cual del feed de `electron-updater`.
+ */
+export interface UpdateInfoLite {
+  version: string
+  releaseUrl: string
+  releaseDate?: string
+}
+
+/**
+ * Estado del auto-updater (T90, F17), expuesto por `updater:getStatus` y
+ * empujado por `minerva:event:updaterStatusChanged` (`./events.ts`) — union
+ * discriminada por `phase`, un solo campo `status` en la UI en vez de
+ * booleanos sueltos (mismo criterio que `AnalysisState`).
+ *
+ * - `disabled`: no hay updater corriendo. Es el estado en dev
+ *   (`!app.isPackaged`) y en TODA la suite e2e, o si se fuerza con
+ *   `MINERVA_UPDATER=off` — nunca toca la red.
+ * - `unsupported`: la instalación existe empaquetada pero esta forma
+ *   concreta de instalación no puede auto-actualizarse; `reason` distingue
+ *   POR QUÉ:
+ *   - `'mac-unsigned'`: macOS sin Developer ID (decisión de producto de F17;
+ *     el Developer ID llega después, ver `PLAN.md` § F17).
+ *   - `'not-appimage'`: Linux sin `$APPIMAGE` definido — `linux-unpacked` o
+ *     un paquete de la distro (deb/rpm/pacman), no la AppImage oficial.
+ *   - `'not-writable'`: hay `$APPIMAGE` pero el archivo o su directorio padre
+ *     no son escribibles (AppImageLauncher, instalado bajo `/opt`, o
+ *     corriendo como root).
+ *   `available` es OPCIONAL: en `unsupported` SÍ se consulta el feed y se
+ *   compara semver contra la versión instalada (para poder ofrecer "ver la
+ *   release" si hay una más nueva), pero nunca se descarga ni se instala nada
+ *   — la sola presencia de este campo no habilita el botón de descarga.
+ * - `idle`: soportado, sin update pendiente. `lastCheckedAt` (ISO) es
+ *   opcional: ausente antes del primer chequeo de esta sesión.
+ * - `checking`: hay un chequeo contra el feed en curso (arranque, intervalo
+ *   de 6h, o botón manual).
+ * - `available`: el feed ofrece una versión más nueva que la instalada,
+ *   todavía sin descargar (`autoDownload: false` — la descarga requiere
+ *   consentimiento explícito del usuario, son ~130 MB).
+ * - `downloading`: descarga en curso tras ese consentimiento; `percent` es
+ *   0-100.
+ * - `downloaded`: **descargada, se instala AL SALIR de la app**
+ *   (`autoInstallOnAppQuit: true`) — esto NO significa "ya instalada". Existe
+ *   una acción secundaria (`updater:quitAndInstall`) para reiniciar ya mismo,
+ *   pero el camino principal es seguir usando Minerva y que se instale sola
+ *   al cerrar.
+ * - `error`: el último chequeo/descarga falló; `message` es texto de
+ *   exhibición (sin stack interno de main, misma frontera que el resto de
+ *   IPC) y `lastCheckedAt` conserva el momento del último chequeo exitoso
+ *   previo, si lo hubo.
+ */
+export type UpdaterStatus =
+  | { phase: 'disabled' }
+  | {
+      phase: 'unsupported'
+      reason: 'mac-unsigned' | 'not-appimage' | 'not-writable'
+      available?: UpdateInfoLite
+    }
+  | { phase: 'idle'; lastCheckedAt?: string }
+  | { phase: 'checking' }
+  | { phase: 'available'; info: UpdateInfoLite }
+  | { phase: 'downloading'; info: UpdateInfoLite; percent: number }
+  | { phase: 'downloaded'; info: UpdateInfoLite }
+  | { phase: 'error'; message: string; lastCheckedAt?: string }

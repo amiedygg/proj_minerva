@@ -1,8 +1,21 @@
 name: Release builds
 
+# F17/T89: pipeline tag → draft → publish (reemplaza el viejo trigger
+# `release: published`). Motivo: con el auto-updater, la release deja de
+# ser solo un ZIP para descargar a mano — es EL feed (`latest*.yml` +
+# `*.blockmap`) que electron-updater consulta. El flujo viejo (crear la
+# release ya publicada y subirle assets después con `gh release upload`)
+# deja una ventana de ~10 minutos en la que la release YA es visible pero
+# todavía no tiene assets: un cliente que chequee actualizaciones justo
+# ahí ve la versión nueva anunciada y un 404 al intentar bajarla. Ahora la
+# release nace como **draft** (invisible para el updater y para cualquiera
+# que no tenga acceso al repo en modo admin) y recién se publica cuando
+# los 3 SOs terminaron de subir TODO.
+
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*'
 
 permissions:
   contents: write
@@ -35,8 +48,57 @@ jobs:
       - name: Test
         run: npm test
 
-  build:
+  # Crea la release como draft UNA sola vez, antes de que arranque la
+  # matriz de build. Si este job no existiera y cada uno de los 3 runners
+  # intentara crear la release por su cuenta, competirían entre sí (el
+  # primero que llegue crea la release, los otros dos fallarían o crearían
+  # duplicados según el orden de llegada — una carrera de verdad, no
+  # hipotética, con 3 runners arrancando casi al mismo tiempo).
+  #
+  # Con updater, un tag que no coincide con package.json ya no es un
+  # detalle cosmético: publicaría un feed apuntando a una versión que
+  # ninguna app instalada va a reconocer nunca (electron-updater compara
+  # contra el semver de package.json embebido en el build). Por eso el
+  # chequeo pasa de `::warning::` a fallo duro.
+  draft:
     needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Check version vs tag
+        shell: bash
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::package.json version ($PKG_VERSION) does not match release tag ($GITHUB_REF_NAME) — el feed del updater apuntaría a una versión que ninguna app instalada reconoce. Bump package.json y re-taggeá."
+            exit 1
+          fi
+
+      # Idempotente a propósito: si el tag se re-pushea (p. ej. tras
+      # borrar y volver a crear el tag para reintentar un release fallido),
+      # el job no debe romperse porque la release ya existe — solo se
+      # asegura de que exista como draft y deja que `build` (que corre con
+      # --publish always) suba los assets sobre ella.
+      - name: Create draft release (idempotente)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          VERSION="${TAG#v}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG ya existe, no se crea de nuevo."
+          else
+            gh release create "$TAG" --draft --title "Minerva $VERSION" --generate-notes
+          fi
+
+  build:
+    needs: draft
     strategy:
       fail-fast: false
       matrix:
@@ -44,18 +106,15 @@ jobs:
           - os-name: linux
             runner: ubuntu-latest
             flag: --linux
-            assets: dist/*.AppImage
           - os-name: windows
             runner: windows-latest
             flag: --win
-            assets: dist/*.exe
           # macos pineado (no -latest): GitHub está migrando macos-latest a
           # macOS 26 desde 2026-06-15 y no queremos que el entorno de build
           # cambie por sorpresa. Subir de versión a propósito, no por drift.
           - os-name: mac
             runner: macos-15
             flag: --mac
-            assets: dist/*.dmg
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
@@ -71,25 +130,31 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Check version vs tag
-        shell: bash
-        run: |
-          PKG_VERSION="$(node -p "require('./package.json').version")"
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
-            echo "::warning::package.json version ($PKG_VERSION) does not match release tag ($GITHUB_REF_NAME)"
-          fi
-
       - name: Build (electron-vite)
         run: npm run build
 
-      - name: Package (electron-builder)
-        run: npx electron-builder ${{ matrix.flag }} --publish never
+      # `--publish always` hace que electron-builder suba TODO por su
+      # cuenta: el instalador, `latest*.yml` y `*.blockmap` (más el zip en
+      # mac) — justo los assets que el `gh release upload` manual de antes
+      # nunca subía porque apuntaba solo al instalador. electron-builder
+      # encuentra el draft creado por el job `draft` (mismo tag) y sube ahí.
+      - name: Package + publish (electron-builder)
+        run: npx electron-builder ${{ matrix.flag }} --publish always
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
-      - name: Upload release assets
+  # La release solo se vuelve visible (y por lo tanto solo entonces el
+  # updater puede verla) cuando los 3 SOs terminaron de subir todos sus
+  # assets. Este es el paso que cierra la ventana de "feed roto".
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Publish release (draft=false)
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$GITHUB_REF_NAME" ${{ matrix.assets }} --clobber
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false

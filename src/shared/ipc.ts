@@ -20,12 +20,21 @@ import type {
   PullRequestDetail,
   PullRequestSummary,
   RepoRef,
+  UpdaterStatus,
 } from './types'
 import type { AiModelOption, AiProviderId } from './ai-providers'
-import type { AnalysisProgressEvent, PrListChangedEvent } from './events'
+import type { AnalysisProgressEvent, PrListChangedEvent, UpdaterStatusChangedEvent } from './events'
 
 export interface IpcContract {
   'minerva:ping': { req: void; res: string }
+  /**
+   * `app.getVersion()` de main (T90, F17) — hoy la versión de Minerva no se
+   * muestra en ninguna parte de la app; este canal existe para la sección
+   * "Actualizaciones" de Settings (T93), pero es de utilidad general (no
+   * depende del updater). Vive en el namespace `system` (alias de `minerva`,
+   * ver `NamespaceAliasMap` más abajo) por el prefijo `minerva:`.
+   */
+  'minerva:getVersion': { req: void; res: string }
 
   'auth:getStatus': { req: void; res: AuthStatus }
   'auth:startDeviceFlow': { req: void; res: AuthStatus }
@@ -179,6 +188,39 @@ export interface IpcContract {
    * depender de que la ventana pida `github:getPullRequestDetail` primero.
    */
   'window:openDidactic': { req: { repo: RepoRef; number: number; title: string }; res: void }
+
+  /**
+   * Contrato del auto-updater (T90, F17) — SOLO el contrato: hasta que T91
+   * cablee `main/updater/updater.ts`, los handlers de main son stubs que
+   * devuelven `{ phase: 'disabled' }` (ver `// T91:` en
+   * `main/ipc/handlers.ts`). `UpdaterStatus` en `./types.ts`.
+   */
+
+  /** Snapshot actual del updater, sin disparar ningún chequeo (lectura pura, mismo criterio que `ai:getAnalysisState`). */
+  'updater:getStatus': { req: void; res: UpdaterStatus }
+  /** Chequeo MANUAL: fuerza un chequeo inmediato contra el feed (botón "Buscar actualizaciones" de Settings), sin esperar al intervalo de 6h. */
+  'updater:check': { req: void; res: UpdaterStatus }
+  /**
+   * Descarga la versión disponible. Solo válido con `phase: 'available'` —
+   * `autoDownload: false` a propósito (decisión de producto, ~130 MB): este
+   * canal ES el consentimiento explícito del usuario, la app nunca descarga
+   * por su cuenta.
+   */
+  'updater:download': { req: void; res: UpdaterStatus }
+  /**
+   * Reinicia Minerva ya mismo para instalar una versión ya descargada. Acción
+   * **SECUNDARIA**: el comportamiento por defecto es instalar al salir de la
+   * app (`autoInstallOnAppQuit: true`, ver `downloaded` en `UpdaterStatus`).
+   * No lo conviertas en el camino principal de ninguna UI — es un atajo, no
+   * el flujo esperado.
+   */
+  'updater:quitAndInstall': { req: void; res: void }
+  /**
+   * Abre en el navegador del sistema la página de la release disponible
+   * (`shell.openExternal` sobre la `releaseUrl` de `UpdateInfoLite`, que main
+   * ya construyó y validó — nunca una URL cruda del feed).
+   */
+  'updater:openReleasePage': { req: void; res: { ok: true } }
 }
 
 export type IpcChannel = keyof IpcContract
@@ -193,6 +235,7 @@ export type IpcResponse<C extends IpcChannel> = IpcContract[C]['res']
  */
 export const IPC_CHANNELS = [
   'minerva:ping',
+  'minerva:getVersion',
   'auth:getStatus',
   'auth:startDeviceFlow',
   'auth:signOut',
@@ -214,6 +257,11 @@ export const IPC_CHANNELS = [
   'settings:setModelOption',
   'settings:setGithubAccessMode',
   'window:openDidactic',
+  'updater:getStatus',
+  'updater:check',
+  'updater:download',
+  'updater:quitAndInstall',
+  'updater:openReleasePage',
 ] as const satisfies readonly IpcChannel[]
 
 type AssertNoMissingChannel = [IpcChannel] extends [(typeof IPC_CHANNELS)[number]] ? true : never
@@ -263,6 +311,14 @@ interface EventsApi {
    * `onAnalysisProgress`: método concreto, no un `on(channel, cb)` genérico.
    */
   onPrListChanged(callback: (payload: PrListChangedEvent) => void): () => void
+  /**
+   * Suscripción al estado del auto-updater (T90, F17): main empuja el
+   * `UpdaterStatus` completo (no deltas) ante cada transición, a TODAS las
+   * ventanas — ver `UpdaterStatusChangedEvent` (`./events.ts`). Mismo patrón
+   * que `onAnalysisProgress`/`onPrListChanged`: canal hardcodeado en el
+   * preload, nunca un `on(channel, cb)` genérico.
+   */
+  onUpdaterStatus(callback: (payload: UpdaterStatusChangedEvent) => void): () => void
 }
 
 export type MinervaApi = InvokeApi & { events: EventsApi }

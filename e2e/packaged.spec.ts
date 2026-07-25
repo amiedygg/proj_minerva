@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect, launchMinerva, closeMinerva, attachScreenshot } from './fixtures'
 
@@ -15,6 +15,20 @@ import { test, expect, launchMinerva, closeMinerva, attachScreenshot } from './f
  */
 
 const PACKAGED_BINARY = join(process.cwd(), 'dist', 'linux-unpacked', 'minerva')
+
+/**
+ * Versión que la app EMPAQUETADA reporta por `window.minerva.system.getVersion()`
+ * (`minerva:getVersion` → `app.getVersion()`, T90/F17) debe coincidir EXACTO
+ * con `package.json`: es la única superficie donde Minerva muestra su propia
+ * versión (sección "Actualizaciones" del modal de Settings, `UpdateSection.tsx`)
+ * y hoy nada la protegía. Sin empaquetar `app.getVersion()` devuelve la
+ * versión de Electron (por eso el resto de la suite, `updater.spec.ts`, nunca
+ * afirma un literal) — acá SÍ es seguro afirmarlo porque el binario está
+ * empaquetado de verdad.
+ */
+const PACKAGE_JSON_VERSION = (
+  JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf-8')) as { version: string }
+).version
 
 // eslint-disable-next-line no-empty-pattern
 test('la app empaquetada arranca, expone el preload y sirve los fixtures del asar', async ({}, testInfo) => {
@@ -41,6 +55,12 @@ test('la app empaquetada arranca, expone el preload y sirve los fixtures del asa
 
     // Preload CJS cargado: window.minerva expuesto por contextBridge.
     expect(await window.evaluate(() => typeof window.minerva)).toBe('object')
+
+    // La versión reportada por IPC coincide EXACTO con package.json (T94).
+    const reportedVersion = await window.evaluate(() => window.minerva.system.getVersion())
+    expect(reportedVersion, 'getVersion() == package.json en el binario empaquetado').toBe(
+      PACKAGE_JSON_VERSION,
+    )
 
     // Lista de PRs mock vía IPC (fixtures de main DENTRO del asar) + ping.
     await expect(window.getByText('apply-coupon').first()).toBeVisible({ timeout: 20_000 })

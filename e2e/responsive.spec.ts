@@ -45,12 +45,26 @@ test('el shell sobrevive a los 4 tilings: diff usable y sin desborde horizontal'
 
     // El árbol de archivos puede haberse vuelto drawer (botón "N archivos" en
     // la toolbar); el diff, en cambio, existe siempre.
-    const box = await diffPane(window).boundingBox()
-    expect(box, `hay panel de diff a ${viewport.w}x${viewport.h}`).not.toBeNull()
-    expect(
-      Math.round(box!.width),
-      `diff usable en ${viewport.name} (${viewport.w}x${viewport.h})`,
-    ).toBeGreaterThan(400)
+    //
+    // `expect.poll` y NO una medición única: el colapso del árbol lo dispara el
+    // `ResizeObserver` de `useElementWidth`, que es ASÍNCRONO respecto del
+    // cambio de viewport. Medir el `boundingBox()` justo después de
+    // `setViewport` puede capturar el layout de ANTES del colapso — al pasar de
+    // 1920x540 a 960x540 eso da exactamente 580-260=320px (el árbol todavía
+    // como columna) y el test falla por una foto sacada demasiado pronto, no
+    // por un layout roto. Reproducido en CI (run 30171070743); en local no
+    // aparece ni con la máquina saturada, porque ahí el observer llega antes.
+    // El umbral NO se afloja: sigue exigiendo >400, solo se le da tiempo a que
+    // el layout se asiente.
+    await expect
+      .poll(
+        async () => {
+          const box = await diffPane(window).boundingBox()
+          return box === null ? -1 : Math.round(box.width)
+        },
+        { message: `diff usable en ${viewport.name} (${viewport.w}x${viewport.h})` },
+      )
+      .toBeGreaterThan(400)
 
     const overflow = await window.evaluate(() => ({
       scrollWidth: document.body.scrollWidth,

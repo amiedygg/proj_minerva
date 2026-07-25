@@ -6,6 +6,7 @@ import {
   type AnalysisProgressEvent,
   type PrChange,
   type PrListChangedEvent,
+  type UpdaterStatusChangedEvent,
 } from '../shared/events'
 
 /** Wrapper fino sobre `ipcRenderer.invoke` para un canal concreto del contrato. */
@@ -123,9 +124,57 @@ function onPrListChanged(callback: (payload: PrListChangedEvent) => void): () =>
   return () => ipcRenderer.removeListener(MINERVA_EVENTS.prListChanged, listener)
 }
 
+/** Los 8 valores válidos de `UpdaterStatus['phase']` (`../shared/types.ts`), whitelist explícita para el guard de forma de abajo. */
+const VALID_UPDATER_PHASES = [
+  'disabled',
+  'unsupported',
+  'idle',
+  'checking',
+  'available',
+  'downloading',
+  'downloaded',
+  'error',
+] as const
+
+/**
+ * Guard mínimo de forma para el payload de `updaterStatusChanged` (T90, F17):
+ * no valida cada variante de la unión `UpdaterStatus` campo por campo (eso lo
+ * arma main a partir de `electron-updater`, una fuente confiable, a
+ * diferencia del contenido de un PR) — solo que `status` es un objeto con un
+ * `phase` que sea uno de los 8 valores válidos, mismo criterio de defensa en
+ * profundidad que `isAnalysisProgressPayload`/`isPrListChangedPayload`.
+ */
+function isUpdaterStatusPayload(value: unknown): value is UpdaterStatusChangedEvent {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  if (typeof v.status !== 'object' || v.status === null) return false
+  const status = v.status as Record<string, unknown>
+  return (
+    typeof status.phase === 'string' &&
+    (VALID_UPDATER_PHASES as readonly string[]).includes(status.phase)
+  )
+}
+
+/**
+ * Suscripción al estado del auto-updater (T90, F17). Mismo patrón que
+ * `onAnalysisProgress`/`onPrListChanged`: canal hardcodeado literal
+ * (`MINERVA_EVENTS.updaterStatusChanged`), guard de forma antes de llamar al
+ * callback, devuelve la función de desuscripción de ESE listener.
+ */
+function onUpdaterStatus(callback: (payload: UpdaterStatusChangedEvent) => void): () => void {
+  const listener = (_event: IpcRendererEvent, payload: unknown): void => {
+    if (isUpdaterStatusPayload(payload)) {
+      callback(payload)
+    }
+  }
+  ipcRenderer.on(MINERVA_EVENTS.updaterStatusChanged, listener)
+  return () => ipcRenderer.removeListener(MINERVA_EVENTS.updaterStatusChanged, listener)
+}
+
 const minervaApi = {
   system: {
     ping: invoke('minerva:ping'),
+    getVersion: invoke('minerva:getVersion'),
   },
   auth: {
     getStatus: invoke('auth:getStatus'),
@@ -158,9 +207,17 @@ const minervaApi = {
   window: {
     openDidactic: invoke('window:openDidactic'),
   },
+  updater: {
+    getStatus: invoke('updater:getStatus'),
+    check: invoke('updater:check'),
+    download: invoke('updater:download'),
+    quitAndInstall: invoke('updater:quitAndInstall'),
+    openReleasePage: invoke('updater:openReleasePage'),
+  },
   events: {
     onAnalysisProgress,
     onPrListChanged,
+    onUpdaterStatus,
   },
 } satisfies MinervaApi
 
