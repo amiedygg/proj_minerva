@@ -231,6 +231,38 @@ scripts/            smoke-*.mjs (e2e vía CDP), screenshot-app.sh, debug-*.mjs
 - `MINERVA_MOCK=1 MINERVA_MOCK_AI=1 npm run dev` — demo/e2e 100% determinista: PRs
   mock + IA mock forzada (desde F11 los proveedores son CLIs que suelen estar
   logueados en dev — este flag es LA forma de pedir el mock a propósito).
+- `MINERVA_MOCK_UPDATER=1|notify|error npm run dev` — guiones deterministas del
+  auto-updater (F17). LA única vía de ejercitar esa UI fuera de un binario
+  empaquetado: sin empaquetar el updater real queda `disabled` a propósito.
+- `MINERVA_UPDATER=off` — kill switch del updater (default de las fixtures e2e).
+
+## Auto-updater (F17, v0.7.0)
+
+`electron-updater` con provider `github` sobre las releases públicas del repo;
+el feed son los assets (`latest*.yml` + blockmap embebido en el AppImage). Vive
+en `src/main/updater/`: `config.ts` (constantes + `buildReleaseUrl`),
+`capability.ts` (función PURA), `updater.ts` (singleton) y `mock-updater.ts`.
+
+- **La capacidad se decide antes que nada** (`capability.ts`):
+  `MINERVA_UPDATER=off` o `!app.isPackaged` ⇒ `disabled`; `darwin` ⇒ `notify`
+  (`mac-unsigned`, no hay Developer ID); `linux` ⇒ `auto` solo con `$APPIMAGE`
+  definido **y** escribible (archivo + dir padre), si no `notify`
+  (`not-appimage`/`not-writable`); `win32` ⇒ `auto`. `MINERVA_MOCK_UPDATER`
+  precede a TODO (por eso el mock funciona sin empaquetar, que es lo que la
+  suite e2e necesita).
+- `notify` NO es un error: consulta el feed y compara semver para ofrecer "ver
+  la release", pero jamás descarga ni instala.
+- `autoDownload: false` (la descarga son ~130 MB: pide consentimiento) +
+  `autoInstallOnAppQuit: true` (se instala AL SALIR; "Reiniciar ahora" existe
+  pero es acción secundaria) + `allowPrerelease: true` (Minerva es beta).
+- **Las release notes NO se renderizan**: `electron-updater` las entrega como
+  HTML crudo de GitHub. `UpdateInfoLite` ni siquiera las lleva; el único camino
+  a esa información es `openReleasePage`. La `releaseUrl` la construye MAIN
+  desde plantilla hardcodeada con la versión validada como semver — nunca una
+  URL que venga del feed.
+- Release por **tag → draft → publish** (`.github/workflows/release.yml`): la
+  release nace draft (invisible para el updater) y se publica cuando los 3 SOs
+  subieron todo. Un tag que no coincide con `package.json` es **fallo duro**.
 
 ## Verificación (obligatoria antes de dar algo por hecho)
 

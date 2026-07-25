@@ -9,6 +9,7 @@ import { stopOpencodeServer } from './ai/providers/opencode-runtime'
 import { secureWebPreferences } from './windows/secure-web-preferences'
 import { installExternalLinkGuard } from './windows/external-link-guard'
 import { hydratePathFromLoginShell } from './system/shell-path'
+import { initUpdater, stop as stopUpdater } from './updater/updater'
 
 const isDev = !app.isPackaged
 
@@ -117,6 +118,17 @@ void app.whenReady().then(async () => {
   // tras destruir todas las ventanas, hasta que el proceso muriera solo.
   app.on('before-quit', () => {
     stopPrWatcher()
+  })
+
+  // Auto-updater (T91, F17): decide capacidad (`disabled`/`auto`/`notify`,
+  // o el guion de `MINERVA_MOCK_UPDATER`) y agenda el check de arranque +
+  // el periódico. Se inicializa DESPUÉS de `registerIpcHandlers()` para que
+  // los canales `updater:*` ya estén registrados cuando el primer broadcast
+  // de estado pudiera dispararse. `stop()` limpia los timers antes de que la
+  // app termine de cerrarse — mismo criterio que `stopPrWatcher` arriba.
+  initUpdater()
+  app.on('before-quit', () => {
+    stopUpdater()
   })
 
   // Limpieza periódica de snapshots de PRs (T54): barrido inmediato + timer.

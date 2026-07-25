@@ -68,6 +68,14 @@ export async function launchMinerva(
     ...process.env,
     MINERVA_MOCK: '1',
     MINERVA_MOCK_AI: '1',
+    // Kill switch explícito del updater (F17/T94): hoy ya queda `disabled` por
+    // `!app.isPackaged` (`resolveUpdaterCapability`, `main/updater/capability.ts`),
+    // pero blindarlo acá evita que el día que `packaged.spec.ts` u otro spec
+    // corra el binario empaquetado de verdad, el updater real se active sin
+    // que el spec lo pida. `MINERVA_MOCK_UPDATER` (que pasan los tests de
+    // `updater.spec.ts` vía `opts.env`) se resuelve ANTES que este kill switch
+    // en `initUpdater()` (`main/updater/updater.ts`), así que no se pisan.
+    MINERVA_UPDATER: 'off',
     MINERVA_USER_DATA_DIR: userDataDir,
     ...opts.env,
   }

@@ -1,4 +1,4 @@
-import { BrowserWindow } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { handle } from './register'
 import { createGithubService } from '../github'
 import { createPrWatcher, type PrWatcher } from '../github/pr-watcher'
@@ -12,6 +12,7 @@ import { settingsStore } from '../settings/store'
 import { authManager } from '../auth/auth-manager'
 import { ghCliAuth } from '../auth/gh-cli-auth'
 import { openDidacticWindow } from '../windows/didactic-window'
+import * as updaterService from '../updater/updater'
 import {
   MINERVA_EVENTS,
   type AnalysisActivityItem,
@@ -95,6 +96,9 @@ function resolveWatchIntervalMs(): number | undefined {
  */
 export async function registerIpcHandlers(): Promise<{ stopPrWatcher: () => void }> {
   handle('minerva:ping', () => 'pong from main @ electron ' + process.versions.electron)
+  // Ya es la implementación FINAL (T90, F17): `app.getVersion()` no depende
+  // del updater, solo no tenía ningún canal que lo expusiera hasta ahora.
+  handle('minerva:getVersion', () => app.getVersion())
 
   handle('auth:getStatus', () => authManager.getStatus())
   handle('auth:startDeviceFlow', () => authManager.startDeviceFlow())
@@ -372,6 +376,20 @@ export async function registerIpcHandlers(): Promise<{ stopPrWatcher: () => void
   // sola instancia a la vez, mismo preload/webPreferences que la principal.
   handle('window:openDidactic', (req) => {
     openDidacticWindow(req.repo, req.number, req.title)
+  })
+
+  // Auto-updater (T90 contrato, T91 núcleo real, F17): delega 1:1 al
+  // singleton de `../updater/updater.ts` (capacidad + `electron-updater` +
+  // scheduler + broadcast a todas las ventanas, o el guion de
+  // `../updater/mock-updater.ts` bajo `MINERVA_MOCK_UPDATER`).
+  // `minerva:getVersion` de arriba es la única implementación final desde T90.
+  handle('updater:getStatus', () => updaterService.getStatus())
+  handle('updater:check', () => updaterService.checkNow())
+  handle('updater:download', () => updaterService.download())
+  handle('updater:quitAndInstall', () => updaterService.quitAndInstall())
+  handle('updater:openReleasePage', async () => {
+    await updaterService.openReleasePage()
+    return { ok: true as const }
   })
 
   return { stopPrWatcher: () => prWatcher.stop() }

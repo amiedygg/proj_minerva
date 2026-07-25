@@ -113,6 +113,19 @@ npm run build
 
 - `npm run dist` — build + AppImage en `dist/Minerva-<versión>.AppImage`
   (`npm run dist:dir` genera solo `dist/linux-unpacked/`, más rápido para probar).
+
+> ⚠️ **Si venís de una versión anterior a la 0.7.0, tenés que reinstalar a mano
+> UNA vez.** El auto-updater se introdujo EN la 0.7.0: las versiones 0.6.x y
+> anteriores no tienen con qué enterarse de que hay algo nuevo, así que no van a
+> avisarte nunca. Bajá la 0.7.0 desde
+> [Releases](https://github.com/amiedygg/proj_minerva/releases) y a partir de ahí
+> las actualizaciones son automáticas (con tu confirmación para descargar).
+>
+> El auto-update funciona sobre la **AppImage oficial** en Linux y sobre el
+> instalador NSIS en Windows. NO funciona si corrés `linux-unpacked/`, si el
+> AppImage está en un directorio donde Minerva no puede escribir, o en macOS
+> mientras no haya Developer ID: en esos casos la app te lo dice y te enlaza a la
+> release en vez de fallar en silencio.
 - **Los tres proveedores de IA (Claude Code, Codex, OpenCode) requieren su CLI
   oficial instalado y logueado en la máquina donde corre Minerva** — Minerva ya
   no gestiona ninguna API key propia (eliminado en T59: hasta entonces existía
@@ -189,6 +202,7 @@ npm run build
 - [x] Modo de acceso a GitHub v0.5.0: OAuth de Minerva o **GitHub CLI (`gh`)** — para orgs enterprise con *OAuth app access restrictions* que bloquean la OAuth App pero permiten gh; puente de token (`gh auth token` solo en memoria de main, datos por Octokit igual), toggle en Settings
 - [x] Panel de IA: sección "Infraestructura cloud" v0.6.0 — si el repo declara infra AWS/Cloudflare (Terraform, CDK, SAM, serverless.yml, wrangler.toml…), big picture del sistema desplegado + zoom a dónde incide el PR, en Mermaid `architecture-beta` con logos oficiales (icon packs locales: `@iconify-json/logos` + pack `cf` vendoreado con R2/D1/KV/Durable Objects/Pages/Queues) _(GCP/DO: pendiente)_
 - [x] Layout responsivo para tiling v0.6.3: la UI se adapta a la ventana partida (mitad vertical/horizontal, hasta 4 por monitor) — lista de PRs y árbol de archivos pasan a drawer cuando falta ancho, el diff cae a inline antes de volverse ilegible, y el modal de Settings deja de recortar contenido (scroll único; dos columnas en ventanas anchas)
+- [x] Auto-updater v0.7.0: Minerva avisa cuando hay versión nueva y se actualiza sola — chequeo al arrancar y cada 6 h (más un botón manual en Settings), **la descarga solo empieza con tu confirmación** y la instalación ocurre **al salir**, para no interrumpir una review a medias. En Linux (AppImage) y Windows el update es real; en macOS, mientras no haya Developer ID, la app avisa y enlaza a la release en vez de fingir que puede actualizarse sola
 - [ ] Comentar en un PR real de prueba (verificación con cuenta real)
 
 > Estado detallado, bitácora de gotchas y control de tareas: `.agents/TASKS.md`.

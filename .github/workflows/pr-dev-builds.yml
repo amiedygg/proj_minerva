@@ -5,6 +5,16 @@ name: PR dev builds
 # como ARTIFACTS del run (no como release assets) — se descargan desde la
 # pestaña del workflow run y expiran solos a los 14 días.
 
+# F17/T89: electron-builder.yml ahora tiene una sección `publish` (github/
+# amiedygg/proj_minerva) para que el auto-updater tenga feed. Efecto
+# secundario aceptado acá: como --publish never NO desactiva la escritura
+# de `app-update.yml` (solo desactiva la SUBIDA de assets), los binarios
+# dev de este workflow quedan con ese archivo embebido — una AppImage
+# `0.7.0-abc1234-dev` va a ofrecer actualizar a la 0.7.0 estable apenas
+# salga esa release. Es correcto (la 0.7.0 estable es más nueva por
+# semver) y además útil (empuja a probar el build real en vez de quedarse
+# en un dev build viejo).
+
 on:
   pull_request:
     branches: [main]

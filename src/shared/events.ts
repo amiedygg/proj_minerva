@@ -12,7 +12,7 @@
  * renderer se suscriba a un canal arbitrario si en algún momento tuviera
  * acceso a `ipcRenderer` por una vía no prevista.
  */
-import type { DidacticSnippet, RepoRef } from './types'
+import type { DidacticSnippet, RepoRef, UpdaterStatus } from './types'
 
 interface DraftSectionCommon {
   markdown: string
@@ -158,9 +158,24 @@ export interface PrListChangedEvent {
   changes: PrChange[]
 }
 
+/**
+ * Payload de `minerva:event:updaterStatusChanged` (T90, F17): main empuja el
+ * `UpdaterStatus` COMPLETO ante cada transición, nunca un delta — mismo
+ * criterio que `activity` en `AnalysisProgressEvent`: una ventana que se
+ * engancha tarde (p. ej. la didáctica desacoplada, o una segunda ventana) no
+ * necesita reconstruir nada, el primer evento que vea ya trae el estado
+ * íntegro. Se emite a TODAS las ventanas abiertas (`BrowserWindow.getAllWindows()`,
+ * mismo patrón que `broadcastProgress`/`broadcastPrListChanged` en
+ * `main/ipc/handlers.ts`), no solo a la que disparó el chequeo manual.
+ */
+export interface UpdaterStatusChangedEvent {
+  status: UpdaterStatus
+}
+
 export interface EventContract {
   'minerva:event:analysisProgress': AnalysisProgressEvent
   'minerva:event:prListChanged': PrListChangedEvent
+  'minerva:event:updaterStatusChanged': UpdaterStatusChangedEvent
 }
 
 export type EventChannel = keyof EventContract
@@ -174,4 +189,5 @@ export type EventPayload<C extends EventChannel> = EventContract[C]
 export const MINERVA_EVENTS = {
   analysisProgress: 'minerva:event:analysisProgress',
   prListChanged: 'minerva:event:prListChanged',
+  updaterStatusChanged: 'minerva:event:updaterStatusChanged',
 } satisfies Record<string, EventChannel>
