@@ -181,6 +181,11 @@ scripts/            smoke-*.mjs (e2e vía CDP), screenshot-app.sh, debug-*.mjs
 - `npm run build` / `npm run typecheck` / `npm run lint` / `npm test` (vitest).
 - `npm run verify` — typecheck + lint + test encadenados; es el mismo gate que el
   job `checks` de los workflows de CI (pr-dev-builds y release).
+- `npm run test:e2e` — build + suite Playwright (`e2e/`): lanza la app CONSTRUIDA
+  con mocks y userData aislado por test (no necesita la app corriendo ni CDP
+  manual). Sin sesión gráfica (tty/CI): `npm run build && xvfb-run -a npx
+  playwright test`. Las capturas por test quedan en `test-results/` — mirarlas
+  sigue siendo parte de la verificación.
 - `MINERVA_MOCK=1 npm run dev` — demo: PRs mock + IA real del proveedor activo (si su
   CLI está autenticado; si no, cae al mock de IA).
 - `MINERVA_MOCK=1 MINERVA_MOCK_AI=1 npm run dev` — demo/e2e 100% determinista: PRs
