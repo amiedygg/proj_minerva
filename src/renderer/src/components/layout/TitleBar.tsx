@@ -1,7 +1,10 @@
-import { GraduationCap, Search, Settings } from 'lucide-react'
+import { useState } from 'react'
+import { GraduationCap, PanelLeft, Search, Settings, X } from 'lucide-react'
 import { useAppStore } from '../../stores/app-store'
 import { useConnectionStatus } from '../../hooks/use-connection-status'
 import { useAuth } from '../../hooks/use-auth'
+import { useLayoutTier } from '../../hooks/use-layout-tier'
+import { sidebarIsDrawer } from '../../lib/layout'
 import { useSettings } from '../../hooks/use-settings'
 import { getModelOption } from '../../../../shared/ai-providers'
 import { resolveModelHintLabels } from '../../lib/model-labels'
@@ -28,11 +31,15 @@ import { Badge } from '../ui/Badge'
  * `SettingsModal` — abrir/cerrar el modal no dispara un fetch nuevo, y un
  * cambio hecho ahí se refleja acá al instante (mismo estado).
  */
-function SettingsChip(): React.JSX.Element {
+function SettingsChip({ compact }: { compact: boolean }): React.JSX.Element {
   const openSettings = useAppStore((s) => s.openSettings)
   const { info } = useSettings()
 
-  if (!info) {
+  // Compacto (F16/T83): en ventanas angostas el chip vuelve a ser solo el
+  // engrane — el texto "Proveedor · Modelo" es lo primero que sobra cuando el
+  // TitleBar no da para todo. El icono `lucide-settings` NUNCA sale del botón
+  // (los specs e2e localizan Settings por `svg.lucide-settings`).
+  if (!info || compact) {
     return <IconButton icon={<Settings size={16} />} label="Configuración" onClick={openSettings} />
   }
 
@@ -92,7 +99,7 @@ const CONNECTION_LABEL: Record<ReturnType<typeof useConnectionStatus>, string> =
  *   corriendo en este estado y descubre solo cuando el usuario complete el
  *   login en una terminal.
  */
-function AuthControls(): React.JSX.Element {
+function AuthControls({ compact }: { compact: boolean }): React.JSX.Element {
   const { status, signIn, signOut } = useAuth()
   const openSettings = useAppStore((s) => s.openSettings)
 
@@ -112,14 +119,15 @@ function AuthControls(): React.JSX.Element {
 
   if (status.state === 'signed_in') {
     return (
-      <div className="flex items-center gap-2 text-xs">
-        <span className="text-text">{status.user?.login}</span>
+      <div className="flex min-w-0 items-center gap-2 text-xs">
+        <span className="max-w-[120px] truncate text-text">{status.user?.login}</span>
         <button
           type="button"
           onClick={() => void signOut()}
-          className="rounded-md border border-border px-2 py-1 text-muted transition-colors duration-150 hover:border-danger/60 hover:text-danger"
+          title="Cerrar sesión"
+          className="shrink-0 rounded-md border border-border px-2 py-1 text-muted transition-colors duration-150 hover:border-danger/60 hover:text-danger"
         >
-          Cerrar sesión
+          {compact ? 'Salir' : 'Cerrar sesión'}
         </button>
       </div>
     )
@@ -192,48 +200,117 @@ function AuthControls(): React.JSX.Element {
     <button
       type="button"
       onClick={() => void signIn()}
-      className="rounded-md border border-border px-2.5 py-1 text-xs text-text transition-colors duration-150 hover:border-accent"
+      title="Iniciar sesión con GitHub"
+      className="shrink-0 whitespace-nowrap rounded-md border border-border px-2.5 py-1 text-xs text-text transition-colors duration-150 hover:border-accent"
     >
-      Iniciar sesión con GitHub
+      {compact ? 'Iniciar sesión' : 'Iniciar sesión con GitHub'}
     </button>
   )
 }
 
+/**
+ * Barra superior. Divulgación progresiva por tier (F16/T83) — el orden en que
+ * se sacrifica el contenido cuando la ventana se angosta al tilearla:
+ *
+ * 1. `lg`: el TEXTO del estado de conexión (queda el punto de color + title).
+ * 2. `md`: el chip de Settings pierde su texto "Proveedor · Modelo" (queda el
+ *    engrane), los botones de auth se acortan y aparece el botón de la lista
+ *    de PRs (que en ese tier pasa a drawer, ver `Sidebar`).
+ * 3. `sm`: el buscador colapsa a un icono que despliega el campo sobre la
+ *    barra, y el nombre "Minerva" cede el paso al logo.
+ *
+ * Con la ventana baja (`short`/`xshort`) la barra pasa de `h-12` a `h-9`: son
+ * 12px que en 540px de alto se notan en el contenido de abajo.
+ */
 export function TitleBar(): React.JSX.Element {
   const searchQuery = useAppStore((s) => s.searchQuery)
   const setSearchQuery = useAppStore((s) => s.setSearchQuery)
   const didacticPanelOpen = useAppStore((s) => s.didacticPanelOpen)
   const toggleDidacticPanel = useAppStore((s) => s.toggleDidacticPanel)
+  const sidebarOpen = useAppStore((s) => s.sidebarOpen)
+  const toggleSidebar = useAppStore((s) => s.toggleSidebar)
   const connectionStatus = useConnectionStatus()
+  const tier = useLayoutTier()
+  const [searchExpanded, setSearchExpanded] = useState(false)
+
+  const showDrawerToggle = sidebarIsDrawer(tier.w)
+  const compact = tier.w === 'md' || tier.w === 'sm'
+  const collapseSearch = tier.w === 'sm'
+  const showConnectionLabel = tier.w === 'xl'
+
+  const searchInput = (
+    <input
+      type="search"
+      value={searchQuery}
+      onChange={(e) => setSearchQuery(e.target.value)}
+      placeholder="Buscar PRs por título o repo…"
+      className="w-full rounded-md border border-border bg-bg py-1 pl-8 pr-3 text-sm text-text placeholder:text-muted transition-colors duration-150 focus:border-accent"
+    />
+  )
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-panel px-3">
-      <span className="flex items-center gap-1.5 text-sm font-semibold text-text">
+    <header
+      className={`relative flex ${
+        tier.h === 'tall' ? 'h-12' : 'h-9'
+      } shrink-0 items-center gap-2 border-b border-border bg-panel px-3`}
+    >
+      {showDrawerToggle && (
+        <IconButton
+          icon={<PanelLeft size={16} />}
+          label="Lista de PRs"
+          active={sidebarOpen}
+          onClick={toggleSidebar}
+        />
+      )}
+
+      <span className="flex shrink-0 items-center gap-1.5 text-sm font-semibold text-text">
         <span aria-hidden>🦉</span>
-        Minerva
+        {!collapseSearch && 'Minerva'}
       </span>
 
-      <div className="relative ml-2 max-w-md flex-1">
-        <Search
-          size={14}
-          className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted"
+      {collapseSearch ? (
+        <IconButton
+          icon={<Search size={16} />}
+          label="Buscar PRs"
+          active={searchQuery.length > 0}
+          onClick={() => setSearchExpanded(true)}
         />
-        <input
-          type="search"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Buscar PRs por título o repo…"
-          className="w-full rounded-md border border-border bg-bg py-1.5 pl-8 pr-3 text-sm text-text placeholder:text-muted transition-colors duration-150 focus:border-accent"
-        />
-      </div>
+      ) : (
+        <div className="relative ml-2 min-w-0 max-w-md flex-1">
+          <Search
+            size={14}
+            className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted"
+          />
+          {searchInput}
+        </div>
+      )}
 
-      <div className="ml-auto flex items-center gap-3">
-        <SettingsChip />
+      {/* Buscador desplegado sobre la barra en `sm`: el campo necesita el ancho
+          entero, y en ese tier no queda ancho que compartir. */}
+      {collapseSearch && searchExpanded && (
+        <div className="absolute inset-x-2 z-30 flex items-center gap-1 rounded-md bg-panel">
+          <div className="relative min-w-0 flex-1">
+            <Search
+              size={14}
+              className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted"
+            />
+            {searchInput}
+          </div>
+          <IconButton
+            icon={<X size={16} />}
+            label="Cerrar búsqueda"
+            onClick={() => setSearchExpanded(false)}
+          />
+        </div>
+      )}
 
-        <AuthControls />
+      <div className="ml-auto flex min-w-0 items-center gap-2">
+        <SettingsChip compact={compact} />
+
+        <AuthControls compact={compact} />
 
         <span
-          className="flex items-center gap-1.5 text-xs text-muted"
+          className="flex shrink-0 items-center gap-1.5 text-xs text-muted"
           title={`Estado de la conexión IPC con el proceso principal: ${CONNECTION_LABEL[connectionStatus]}`}
         >
           <span
@@ -245,7 +322,7 @@ export function TitleBar(): React.JSX.Element {
                   : 'bg-warning'
             }`}
           />
-          {CONNECTION_LABEL[connectionStatus]}
+          {showConnectionLabel && CONNECTION_LABEL[connectionStatus]}
         </span>
 
         <IconButton

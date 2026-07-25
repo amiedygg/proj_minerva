@@ -3,6 +3,7 @@ import { X } from 'lucide-react'
 import { useAppStore } from '../../stores/app-store'
 import { useSettings } from '../../hooks/use-settings'
 import { useProviderStatus } from '../../hooks/use-provider-status'
+import { useLayoutTier } from '../../hooks/use-layout-tier'
 import type { AiProviderId } from '../../../../shared/ai-providers'
 import type { AiProviderStatus, AiSettingsInfo, GithubAccessMode } from '../../../../shared/types'
 import { IconButton } from '../ui/IconButton'
@@ -31,11 +32,30 @@ import { ProviderModelPanel } from './ProviderModelPanel'
  *
  * Cierra con Esc o con un clic fuera de la card (el overlay tiene el
  * `onClick`; la card detiene la propagación).
+ *
+ * Responsive (F16/T80) — el modal era el peor caso reportado por Edilson:
+ * antes SOLO `ProviderModelPanel` vivía dentro de un `overflow-y-auto`, así que
+ * con la ventana tileada (p. ej. 960x540) el bloque de GitHub + "En uso" +
+ * tabs excedía el `max-h-[85vh]` y las tabs y la lista de modelos quedaban
+ * RECORTADAS SIN NINGÚN SCROLL QUE LAS ALCANZARA. Ahora:
+ * - todo el cuerpo es scrolleable (`flex-1 min-h-0 overflow-y-auto`) y el
+ *   header es `shrink-0`: nada puede volver a quedar inalcanzable;
+ * - con ≥980px de ancho de ventana el contenido se reparte en DOS COLUMNAS
+ *   (GitHub | IA), cada una con su scroll — en una ventana ancha y baja
+ *   (1920x540, mitad horizontal) se ve todo de una sin scrollear, que es
+ *   justamente lo que la pila vertical hacía imposible;
+ * - con la ventana baja (`xshort`, <560px) el modal deja de ser una card
+ *   centrada y pasa a ocupar la ventana entera: a esa altura, los márgenes de
+ *   un modal centrado son espacio que no sobra.
+ * Las secciones SIEMPRE están montadas (nunca un switcher que desmonte): los
+ * specs e2e abren el modal y esperan ver "Acceso a GitHub" y sus cards sin
+ * dar ningún click.
  */
 export function SettingsModal(): React.JSX.Element {
   const closeSettings = useAppStore((s) => s.closeSettings)
   const { info, error, selectProvider, saveModel, setModelOption, setGithubAccessMode } = useSettings()
   const providerStatus = useProviderStatus()
+  const tier = useLayoutTier()
   const cardRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -46,9 +66,15 @@ export function SettingsModal(): React.JSX.Element {
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [closeSettings])
 
+  const isSheet = tier.h === 'xshort'
+  const twoColumn = tier.width >= 980
+  const sizeClass = isSheet
+    ? 'h-full w-full max-w-[1000px]'
+    : 'h-[min(88vh,700px)] w-full ' + (twoColumn ? 'max-w-[900px]' : 'max-w-lg')
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 sm:p-4"
       onClick={closeSettings}
     >
       <div
@@ -58,9 +84,12 @@ export function SettingsModal(): React.JSX.Element {
         aria-modal="true"
         aria-labelledby="settings-modal-title"
         onClick={(e) => e.stopPropagation()}
-        className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border border-border bg-panel shadow-xl outline-none"
+        className={
+          'flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-panel shadow-xl outline-none ' +
+          sizeClass
+        }
       >
-        <header className="flex items-center justify-between border-b border-border px-4 py-3">
+        <header className="flex shrink-0 items-center justify-between border-b border-border px-4 py-2.5">
           <h2 id="settings-modal-title" className="text-sm font-semibold text-text">
             Configuración
           </h2>
@@ -80,6 +109,8 @@ export function SettingsModal(): React.JSX.Element {
             saveModel={saveModel}
             setModelOption={setModelOption}
             setGithubAccessMode={setGithubAccessMode}
+            twoColumn={twoColumn}
+            compact={tier.h !== 'tall'}
           />
         )}
       </div>
@@ -97,6 +128,10 @@ interface SettingsModalBodyProps {
   saveModel: (provider: AiProviderId, model: string) => Promise<boolean>
   setModelOption: (provider: AiProviderId, optionId: string, value: string) => Promise<boolean>
   setGithubAccessMode: (mode: GithubAccessMode) => Promise<boolean>
+  /** Reparte GitHub | IA en dos columnas con scroll propio (ventana ≥980px). */
+  twoColumn: boolean
+  /** Ventana baja (`short`/`xshort`): densidad reducida en las cabeceras de sección. */
+  compact: boolean
 }
 
 /**
@@ -119,35 +154,58 @@ function SettingsModalBody({
   saveModel,
   setModelOption,
   setGithubAccessMode,
+  twoColumn,
+  compact,
 }: SettingsModalBodyProps): React.JSX.Element {
   const [viewedProvider, setViewedProvider] = useState<AiProviderId>(info.provider)
 
-  return (
+  // Primera sección no-IA del modal (T72, F14): "Acceso a GitHub" antes que
+  // nada relacionado a proveedor/modelo. En una columna va arriba con
+  // `border-b`; en dos columnas pasa a ser la columna izquierda y el separador
+  // es el `border-r` del contenedor (F16/T80).
+  const github = <GithubAccessSection info={info} setGithubAccessMode={setGithubAccessMode} compact={compact} />
+
+  const ai = (
     <>
       {/*
-        Primera sección no-IA del modal (T72, F14): "Acceso a GitHub" antes
-        que nada relacionado a proveedor/modelo — con heading propio y el
-        mismo `border-b` que separa a `ActiveConfigSummary`, para que quede
-        visualmente aparte del resto (que sí es todo config de IA).
+        "En uso" + tabs quedan PEGADOS arriba del scroller (T62 exigía que la
+        config activa no se pierda de vista; F16 la mete dentro del área
+        scrolleable, así que `sticky` es lo que conserva esa intención sin
+        volver a bloquear el scroll).
       */}
-      <GithubAccessSection info={info} setGithubAccessMode={setGithubAccessMode} />
-
-      <ActiveConfigSummary info={info} statuses={statuses} />
-      <ProviderTabs info={info} statuses={statuses} viewed={viewedProvider} onChange={setViewedProvider} />
-      <div className="flex-1 overflow-y-auto">
-        <ProviderModelPanel
-          key={viewedProvider}
-          info={info}
-          viewedProvider={viewedProvider}
-          statuses={statuses}
-          statusLoading={statusLoading}
-          error={error}
-          onRefetchStatus={onRefetchStatus}
-          saveModel={saveModel}
-          selectProvider={selectProvider}
-          setModelOption={setModelOption}
-        />
+      <div className="sticky top-0 z-10 bg-panel">
+        <ActiveConfigSummary info={info} statuses={statuses} compact={compact} />
+        <ProviderTabs info={info} statuses={statuses} viewed={viewedProvider} onChange={setViewedProvider} />
       </div>
+      <ProviderModelPanel
+        key={viewedProvider}
+        info={info}
+        viewedProvider={viewedProvider}
+        statuses={statuses}
+        statusLoading={statusLoading}
+        error={error}
+        onRefetchStatus={onRefetchStatus}
+        saveModel={saveModel}
+        selectProvider={selectProvider}
+        setModelOption={setModelOption}
+        wide={twoColumn}
+      />
     </>
+  )
+
+  if (twoColumn) {
+    return (
+      <div className="flex min-h-0 flex-1">
+        <div className="w-[40%] min-w-0 shrink-0 overflow-y-auto border-r border-border">{github}</div>
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">{ai}</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="border-b border-border">{github}</div>
+      {ai}
+    </div>
   )
 }

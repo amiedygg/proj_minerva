@@ -188,6 +188,7 @@ npm run build
 - [x] Mini-log de actividad del harness v0.4.2: mientras la IA analiza, el panel muestra en vivo qué está haciendo el agente ("Leyó src/api/routes.ts", "Buscó \"router\"", "Pensando…") — efímero, sutil, en los tres proveedores + mock
 - [x] Modo de acceso a GitHub v0.5.0: OAuth de Minerva o **GitHub CLI (`gh`)** — para orgs enterprise con *OAuth app access restrictions* que bloquean la OAuth App pero permiten gh; puente de token (`gh auth token` solo en memoria de main, datos por Octokit igual), toggle en Settings
 - [x] Panel de IA: sección "Infraestructura cloud" v0.6.0 — si el repo declara infra AWS/Cloudflare (Terraform, CDK, SAM, serverless.yml, wrangler.toml…), big picture del sistema desplegado + zoom a dónde incide el PR, en Mermaid `architecture-beta` con logos oficiales (icon packs locales: `@iconify-json/logos` + pack `cf` vendoreado con R2/D1/KV/Durable Objects/Pages/Queues) _(GCP/DO: pendiente)_
+- [x] Layout responsivo para tiling v0.6.3: la UI se adapta a la ventana partida (mitad vertical/horizontal, hasta 4 por monitor) — lista de PRs y árbol de archivos pasan a drawer cuando falta ancho, el diff cae a inline antes de volverse ilegible, y el modal de Settings deja de recortar contenido (scroll único; dos columnas en ventanas anchas)
 - [ ] Comentar en un PR real de prueba (verificación con cuenta real)
 
 > Estado detallado, bitácora de gotchas y control de tareas: `.agents/TASKS.md`.

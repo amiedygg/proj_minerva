@@ -1,14 +1,22 @@
-import { AlignJustify, Columns2, WrapText } from 'lucide-react'
+import { AlignJustify, Columns2, Files, WrapText } from 'lucide-react'
 import type { DiffFile } from '../../../../shared/types'
 import type { DiffViewMode } from '../../stores/app-store'
+import { SPLIT_DIFF_MIN_WIDTH } from '../../lib/layout'
 import { IconButton } from '../ui/IconButton'
 
 interface DiffToolbarProps {
   file: DiffFile
+  /** Modo EFECTIVO (ya resuelto por `DiffView`), no la preferencia cruda del store. */
   mode: DiffViewMode
   onModeChange: (mode: DiffViewMode) => void
   wordWrap: boolean
   onToggleWordWrap: () => void
+  /** El panel no da el ancho mínimo para split (F16/T86): el botón queda deshabilitado y explicado. */
+  splitTooNarrow?: boolean
+  /** Abre/cierra el árbol de archivos cuando es drawer (F16/T85). */
+  fileTreeToggle?: { open: boolean; count: number; onToggle: () => void }
+  /** Panel angosto: solo el nombre del archivo, sin la ruta completa. */
+  compact?: boolean
 }
 
 /** Barra superior del panel de diff: path del archivo, toggles de vista y conteo +/-. */
@@ -18,11 +26,38 @@ export function DiffToolbar({
   onModeChange,
   wordWrap,
   onToggleWordWrap,
+  splitTooNarrow = false,
+  fileTreeToggle,
+  compact = false,
 }: DiffToolbarProps): React.JSX.Element {
+  // Compacto (F16/T86): el path completo es lo primero que sobra cuando la
+  // toolbar no entra; el nombre del archivo alcanza para saber dónde estás y la
+  // ruta entera sigue disponible en el `title`.
+  const basename = file.path.slice(file.path.lastIndexOf('/') + 1)
+
   return (
     <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5">
-      <span className="min-w-0 flex-1 truncate font-mono text-xs text-text">
-        {file.status === 'renamed' && file.previousPath ? (
+      {fileTreeToggle && (
+        <button
+          type="button"
+          onClick={fileTreeToggle.onToggle}
+          aria-expanded={fileTreeToggle.open}
+          title="Ver los archivos del PR"
+          className={`flex shrink-0 items-center gap-1 rounded-md border px-2 py-0.5 text-xs transition-colors duration-150 ${
+            fileTreeToggle.open
+              ? 'border-accent/50 bg-accent/10 text-accent'
+              : 'border-border text-muted hover:border-accent/40 hover:text-text'
+          }`}
+        >
+          <Files size={13} />
+          {fileTreeToggle.count}
+        </button>
+      )}
+
+      <span className="min-w-0 flex-1 truncate font-mono text-xs text-text" title={file.path}>
+        {compact ? (
+          basename
+        ) : file.status === 'renamed' && file.previousPath ? (
           <>
             <span className="text-muted line-through">{file.previousPath}</span>
             <span className="text-muted"> → </span>
@@ -41,8 +76,13 @@ export function DiffToolbar({
       <div className="flex shrink-0 gap-0.5 border-l border-border pl-2">
         <IconButton
           icon={<Columns2 size={15} />}
-          label="Vista split"
+          label={
+            splitTooNarrow
+              ? `Vista split (necesita ~${SPLIT_DIFF_MIN_WIDTH}px de ancho; cierra el panel didáctico o agranda la ventana)`
+              : 'Vista split'
+          }
           active={mode === 'split'}
+          disabled={splitTooNarrow}
           onClick={() => onModeChange('split')}
         />
         <IconButton

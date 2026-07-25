@@ -11,6 +11,11 @@
  * en vez de desestructurar el store completo, para no re-renderizar de más.
  */
 import { create } from 'zustand'
+import {
+  clampDidacticWidth,
+  DIDACTIC_PANEL_DEFAULT_WIDTH,
+  DIDACTIC_PANEL_MIN_WIDTH,
+} from '../lib/layout'
 import type {
   AiSettingsInfo,
   AuthStatus,
@@ -22,25 +27,21 @@ export type CenterTab = 'conversation' | 'files'
 export type DiffViewMode = 'split' | 'inline'
 export type FileTreeMode = 'tree' | 'list'
 
-export const DIDACTIC_PANEL_DEFAULT_WIDTH = 380
-export const DIDACTIC_PANEL_MIN_WIDTH = 320
-/** Fracción máxima del viewport que puede ocupar el panel didáctico acoplado (T23). */
-const DIDACTIC_PANEL_MAX_FRACTION = 0.6
 const DIDACTIC_PANEL_WIDTH_KEY = 'minerva.didacticPanelWidth'
 
 /**
- * Ancho del panel didáctico acoplado (T23, resize por arrastre): clamp entre
- * el mínimo fijo y una fracción del viewport ACTUAL — el máximo se evalúa en
- * cada llamada (no una vez) porque la ventana puede cambiar de tamaño entre
- * arrastres, y un ancho persistido en un monitor grande no debe comerse la
- * pantalla entera en uno chico.
+ * Ancho del panel didáctico acoplado (T23, resize por arrastre): el clamp real
+ * vive en `lib/layout.ts` (F16/T79) y es tier-aware — la MISMA función la usa
+ * `DidacticPanel` al pintar, para que arrastrar y renderizar no discrepen (si
+ * no, el panel saltaría al soltar el handle).
+ *
+ * El valor persistido es el PREFERIDO del usuario, no el efectivo: al achicar
+ * la ventana el panel se pinta clampeado, pero el número guardado no se pisa —
+ * vuelve solo al ensanchar. Por eso el clamp NO se aplica al leer de
+ * `localStorage`, solo se sanea el número.
  */
 function clampDidacticPanelWidth(width: number): number {
-  const max = Math.max(
-    DIDACTIC_PANEL_MIN_WIDTH,
-    Math.round(window.innerWidth * DIDACTIC_PANEL_MAX_FRACTION),
-  )
-  return Math.min(Math.max(Math.round(width), DIDACTIC_PANEL_MIN_WIDTH), max)
+  return clampDidacticWidth(width, window.innerWidth)
 }
 
 /** Ancho persistido en `localStorage` (sobrevive reinicios del renderer); inválido o ausente → default. */
@@ -48,7 +49,7 @@ function readInitialDidacticPanelWidth(): number {
   const raw = window.localStorage.getItem(DIDACTIC_PANEL_WIDTH_KEY)
   const parsed = raw === null ? Number.NaN : Number(raw)
   if (!Number.isFinite(parsed)) return DIDACTIC_PANEL_DEFAULT_WIDTH
-  return clampDidacticPanelWidth(parsed)
+  return Math.max(Math.round(parsed), DIDACTIC_PANEL_MIN_WIDTH)
 }
 
 /**
@@ -74,6 +75,13 @@ interface AppState {
    */
   prStateFilter: PrStateFilter
   centerTab: CenterTab
+  /**
+   * Drawer de la lista de PRs (F16/T82): SOLO tiene efecto en los tiers donde
+   * la sidebar no está acoplada (`md`/`sm`, ver `sidebarIsDrawer`). En `xl`/`lg`
+   * la lista es una columna fija y este flag se ignora — así, al ensanchar la
+   * ventana, no queda un overlay abierto encima de la columna.
+   */
+  sidebarOpen: boolean
   didacticPanelOpen: boolean
   /** Ancho en px del panel didáctico acoplado (T23); se arrastra desde su borde izquierdo y persiste en `localStorage`. */
   didacticPanelWidth: number
@@ -114,6 +122,8 @@ interface AppState {
   setSearchQuery: (query: string) => void
   setPrStateFilter: (filter: PrStateFilter) => void
   setCenterTab: (tab: CenterTab) => void
+  toggleSidebar: () => void
+  closeSidebar: () => void
   toggleDidacticPanel: () => void
   /** Fija el ancho del panel didáctico acoplado (clampeado y persistido); ver `clampDidacticPanelWidth`. */
   setDidacticPanelWidth: (width: number) => void
@@ -136,6 +146,7 @@ export const useAppStore = create<AppState>((set) => ({
   searchQuery: '',
   prStateFilter: 'open',
   centerTab: 'conversation',
+  sidebarOpen: false,
   didacticPanelOpen: true,
   didacticPanelWidth: readInitialDidacticPanelWidth(),
 
@@ -164,10 +175,15 @@ export const useAppStore = create<AppState>((set) => ({
       selectedFilePath: null,
       expandedThreadId: null,
       pendingThreadFocus: null,
+      // Elegir un PR cierra el drawer de la lista (F16/T82): en `md`/`sm` la
+      // lista tapa el centro, y el gesto natural tras elegir es ver el PR.
+      sidebarOpen: false,
     }),
   setSearchQuery: (query) => set({ searchQuery: query }),
   setPrStateFilter: (filter) => set({ prStateFilter: filter }),
   setCenterTab: (tab) => set({ centerTab: tab }),
+  toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
+  closeSidebar: () => set({ sidebarOpen: false }),
   toggleDidacticPanel: () => set((state) => ({ didacticPanelOpen: !state.didacticPanelOpen })),
   setDidacticPanelWidth: (width) => {
     const clamped = clampDidacticPanelWidth(width)

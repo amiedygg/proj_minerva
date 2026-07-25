@@ -149,6 +149,19 @@ scripts/            smoke-*.mjs (e2e vía CDP), screenshot-app.sh, debug-*.mjs
 - Componentes de UI pequeños y enfocados; lógica de datos en hooks/main.
 - Para resetear estado por entidad usa **remount por `key`** (el linter de react-hooks
   prohíbe `setState`-en-efecto y refs-en-render).
+- **Responsive (F16, v0.6.3):** la app se usa tileada (media pantalla, un cuarto).
+  Las reglas viven en `renderer/src/lib/layout.ts` — cortes de ancho
+  `xl≥1360 / lg≥1040 / md≥760 / sm` y de alto `tall≥700 / short≥560 / xshort` — y
+  se consumen por DOS vías, según qué se decida:
+  - `useLayoutTier()` (ventana) para lo **estructural**: si la lista de PRs y el
+    panel didáctico son columna, drawer u overlay.
+  - `useElementWidth()` (ResizeObserver sobre el nodo) para lo **intra-panel**:
+    árbol de archivos columna⇄drawer (<640px), split⇄inline del diff (<560px),
+    toolbar compacta (<520px). NO uses el ancho de ventana para esto: el panel
+    didáctico se arrastra a mano, así que la misma ventana deja el diff con
+    anchos distintos.
+  Al agregar un panel nuevo: `min-w-0` en los contenedores flex y nada de anchos
+  fijos con `shrink-0` sin un clamp que los ceda.
 - Errores de red/IA: siempre estado de carga + error visible, nunca throw silencioso.
 
 ## Gotchas duros (aprendidos a la mala — bitácora completa en `.agents/TASKS.md`)
@@ -188,6 +201,16 @@ scripts/            smoke-*.mjs (e2e vía CDP), screenshot-app.sh, debug-*.mjs
     (escalada SIGKILL 3s por el shutdown colgante de Chromium bajo Xvfb sin
     clipboard manager). No re-litigar salvo evidencia de fix upstream probada
     en una rama aparte.
+11. **Medir un nodo con `useRef` + `useEffect([])` no sirve si el componente
+    tiene `return` tempranos** (loading/error/vacío): en el primer render el nodo
+    no existe, el efecto corre una sola vez contra `ref.current === null` y no
+    mide NUNCA (F16: el árbol de archivos se quedaba como columna a 580px porque
+    `width` seguía en `null`). Usa el **callback ref** de `useElementWidth`, que
+    corre cada vez que el nodo entra o sale del DOM.
+12. **Redimensionar la ventana de Electron en un test es
+    `Emulation.setDeviceMetricsOverride` por CDP** (`setViewport` en
+    `e2e/fixtures.ts`), NO `page.setViewportSize()`: con `connectOverCDP` la
+    página vive en una ventana que Playwright no creó y ese método la rechaza.
 
 ## Comandos
 
@@ -233,6 +256,10 @@ scripts/            smoke-*.mjs (e2e vía CDP), screenshot-app.sh, debug-*.mjs
      exige bounding box real).
    - No heredes los rituales de limpieza de las suites CDP (buscador, cache,
      PR neutral): el userData aislado por test los reemplaza por construcción.
+   - Si el cambio toca layout, ejercítalo TILEADO con `setViewport(page, w, h)`
+     (ver `responsive.spec.ts`, F16): los 4 tamaños del mapa de tiling y, para
+     contenido recortado, `scrollIntoViewIfNeeded()` — si un ancestro lo clipea
+     sin scroller, ese paso falla, que es justo la regresión a cazar.
 3. **Verificación visual**: toda verificación de UI termina MIRANDO una captura
    (los tests Playwright ya adjuntan PNG por test en `test-results/` — mirarlos
    cuenta). Para la app corriendo en dev:

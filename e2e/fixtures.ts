@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { test as base, expect, chromium } from '@playwright/test'
-import type { Browser, BrowserContext, Page, TestInfo } from '@playwright/test'
+import type { Browser, BrowserContext, CDPSession, Page, TestInfo } from '@playwright/test'
 import type { ChildProcess } from 'node:child_process'
 
 declare global {
@@ -134,6 +134,39 @@ export async function mainWindow(app: MinervaApp): Promise<Page> {
   await page.waitForLoadState('domcontentloaded')
   await expect(page.getByText('apply-coupon').first()).toBeVisible({ timeout: 20_000 })
   return page
+}
+
+/**
+ * Cambia el tamaño del viewport de una ventana de Electron (F16/T88).
+ *
+ * `page.setViewportSize()` NO sirve acá: con `connectOverCDP` la página vive en
+ * una ventana que Playwright no creó, y ese método exige un contexto propio. La
+ * vía que sí funciona es `Emulation.setDeviceMetricsOverride` por CDP — es lo
+ * que usó la sonda con la que se midió el diagnóstico de F16 (el diff de 40px a
+ * 960x540). La sesión CDP se cachea por página: al detachear, Chromium revierte
+ * los overrides de esa sesión.
+ *
+ * Espera a que `window.innerWidth/Height` reflejen el tamaño pedido, así el
+ * llamador no tiene que dormir a ciegas esperando el relayout de React.
+ */
+const cdpSessions = new WeakMap<Page, CDPSession>()
+
+export async function setViewport(page: Page, width: number, height: number): Promise<void> {
+  let session = cdpSessions.get(page)
+  if (!session) {
+    session = await page.context().newCDPSession(page)
+    cdpSessions.set(page, session)
+  }
+  await session.send('Emulation.setDeviceMetricsOverride', {
+    width,
+    height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  })
+  await page.waitForFunction(
+    ([w, h]) => window.innerWidth === w && window.innerHeight === h,
+    [width, height] as const,
+  )
 }
 
 /** Captura del viewport adjunta como artifact del test (verificación visual). */

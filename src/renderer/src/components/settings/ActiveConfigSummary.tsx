@@ -18,6 +18,12 @@ const STATUS_TONE: Record<AiProviderStatus['status'], 'neutral' | 'warning' | 's
 interface ActiveConfigSummaryProps {
   info: AiSettingsInfo
   statuses: Record<AiProviderId, AiProviderStatus> | null
+  /**
+   * Ventana baja (F16/T80): una sola fila (label + proveedor + badge + modelo)
+   * en vez de tres. Este strip es `sticky` dentro del scroller del modal, así
+   * que cada línea que ocupa es una línea menos de lista de modelos visible.
+   */
+  compact?: boolean
 }
 
 /**
@@ -32,7 +38,11 @@ interface ActiveConfigSummaryProps {
  * del `overflow-y-auto`): cambiar de tab para mirar otro proveedor nunca
  * debe hacer perder de vista qué está activo de verdad.
  */
-export function ActiveConfigSummary({ info, statuses }: ActiveConfigSummaryProps): React.JSX.Element {
+export function ActiveConfigSummary({
+  info,
+  statuses,
+  compact = false,
+}: ActiveConfigSummaryProps): React.JSX.Element {
   const status = statuses?.[info.provider]
   const { effortLabel } = resolveModelHintLabels(
     info.catalog,
@@ -41,28 +51,20 @@ export function ActiveConfigSummary({ info, statuses }: ActiveConfigSummaryProps
     info.selectedOptions?.[info.provider]?.effort,
   )
 
-  return (
-    <div className="border-b border-border px-4 py-3">
-      <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">En uso</h3>
+  const statusBadge = status ? (
+    <Badge tone={STATUS_TONE[status.status]}>
+      {STATUS_LABEL[status.status]}
+      {status.status === 'authenticated' && status.account?.plan ? ' · ' + status.account.plan : ''}
+      {status.status === 'authenticated' && status.account?.email ? ' · ' + status.account.email : ''}
+    </Badge>
+  ) : (
+    <Badge tone="neutral">…</Badge>
+  )
 
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-medium text-text">{info.catalog[info.provider].label}</span>
-        {status ? (
-          <Badge tone={STATUS_TONE[status.status]}>
-            {STATUS_LABEL[status.status]}
-            {status.status === 'authenticated' && status.account?.plan ? ' · ' + status.account.plan : ''}
-            {status.status === 'authenticated' && status.account?.email ? ' · ' + status.account.email : ''}
-          </Badge>
-        ) : (
-          <Badge tone="neutral">…</Badge>
-        )}
-      </div>
-
-      <p className="mt-1 text-sm text-text">
-        <span className="font-mono">{info.model}</span>
-        {effortLabel && <span className="text-muted"> · Razonamiento: {effortLabel}</span>}
-      </p>
-
+  // El aviso de procedencia del modelo se muestra en AMBAS densidades: es la
+  // única pista de que `MINERVA_AI_MODEL` está pisando lo que se elija acá.
+  const sourceNote = (
+    <>
       {info.modelSource === 'env' && (
         <p className="mt-1.5 rounded-md border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs text-warning">
           Definido por MINERVA_AI_MODEL en tu entorno. Elegir un modelo acá lo pisa.
@@ -73,6 +75,39 @@ export function ActiveConfigSummary({ info, statuses }: ActiveConfigSummaryProps
           Usando el default del proveedor (todavía no elegiste un modelo).
         </p>
       )}
+    </>
+  )
+
+  if (compact) {
+    return (
+      <div className="border-b border-border px-4 py-2">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">En uso</h3>
+          <span className="text-sm font-medium text-text">{info.catalog[info.provider].label}</span>
+          {statusBadge}
+          <span className="min-w-0 truncate font-mono text-xs text-text">{info.model}</span>
+          {effortLabel && <span className="text-xs text-muted">· {effortLabel}</span>}
+        </div>
+        {sourceNote}
+      </div>
+    )
+  }
+
+  return (
+    <div className="border-b border-border px-4 py-3">
+      <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">En uso</h3>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium text-text">{info.catalog[info.provider].label}</span>
+        {statusBadge}
+      </div>
+
+      <p className="mt-1 text-sm text-text">
+        <span className="font-mono">{info.model}</span>
+        {effortLabel && <span className="text-muted"> · Razonamiento: {effortLabel}</span>}
+      </p>
+
+      {sourceNote}
     </div>
   )
 }

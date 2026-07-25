@@ -51,7 +51,13 @@ export function ProviderTabs({ info, statuses, viewed, onChange }: ProviderTabsP
   }
 
   return (
-    <div role="tablist" aria-label="Proveedor de IA" className="flex border-b border-border px-2">
+    // `overflow-x-auto` + tabs `shrink-0` (F16/T81): con el modal angosto los
+    // tres tabs se comprimían hasta cortar los labels; ahora scrollean.
+    <div
+      role="tablist"
+      aria-label="Proveedor de IA"
+      className="flex overflow-x-auto border-b border-border bg-panel px-2"
+    >
       {AI_PROVIDER_IDS.map((provider, index) => {
         const entry = info.catalog[provider]
         const status = statuses?.[provider]
@@ -70,7 +76,7 @@ export function ProviderTabs({ info, statuses, viewed, onChange }: ProviderTabsP
             autoFocus={isViewed}
             onClick={() => onChange(provider)}
             onKeyDown={(event) => handleKeyDown(event, index)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm transition-colors duration-150 ${
+            className={`flex shrink-0 items-center gap-1.5 px-3 py-1.5 text-sm transition-colors duration-150 ${
               isViewed ? '-mb-px border-b-2 border-accent text-text' : 'text-muted hover:text-text'
             }`}
           >

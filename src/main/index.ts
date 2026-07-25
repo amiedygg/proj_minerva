@@ -46,6 +46,11 @@ function createWindow(): void {
   const mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
+    // Piso del layout responsivo (F16): la UI está diseñada y verificada hasta
+    // el tier `sm`/`xshort` (ver `renderer/src/lib/layout.ts`); por debajo de
+    // esto el shell deja de ser operable, así que el WM no puede llevarla ahí.
+    minWidth: 560,
+    minHeight: 420,
     show: false,
     backgroundColor: '#1a1d23',
     title: 'Minerva',

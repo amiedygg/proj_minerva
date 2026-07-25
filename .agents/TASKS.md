@@ -3050,3 +3050,184 @@ Migración del smoke testing a Playwright manteniendo checks y capturas.
   de los specs solo los valida el editor. El paso de "modelo inválido" de
   settings.spec.ts SÍ corre entero en esta máquina (opencode authenticated,
   ~50 s de análisis real rechazado).
+
+---
+
+## F16 — Layout responsivo para tiling (v0.6.3, 2026-07-25, rama fix/responsive-tiling-layout)
+
+Pedido de Edilson (2026-07-25): la UI se rompe al tilear la ventana (mitad
+vertical, mitad horizontal, hasta 4 ventanas por monitor); Settings es el caso
+más visible. Plan completo, breakpoints y diagnóstico medido: `PLAN.md` § F16.
+
+Diagnóstico con sonda CDP (`Emulation.setDeviceMetricsOverride`, app construida
+con mocks bajo Xvfb): a 960x540 el diff queda en **40px** (280 sidebar + 260
+árbol + 380 didáctico = 920px `shrink-0`), y en Settings las tabs + la lista de
+modelos son **inalcanzables** (solo `ProviderModelPanel` está dentro de un
+`overflow-y-auto`; el resto se recorta contra `max-h-[85vh]`).
+
+- [x] **T79. Fundaciones: tiers de layout + mínimos de ventana + re-clamp del ancho didáctico**
+  `src/renderer/src/hooks/use-layout-tier.ts` (nuevo): `useSyncExternalStore`
+  sobre `resize` que devuelve `{ width, height, w: 'xl'|'lg'|'md'|'sm',
+  h: 'tall'|'short'|'xshort' }` (cortes: 1360/1040/760 y 700/560). Snapshot
+  CACHEADO (string estable) para no romper `useSyncExternalStore`.
+  `src/renderer/src/hooks/use-element-width.ts` (nuevo): ResizeObserver sobre un
+  ref; `setState` SOLO en el callback del observer (nunca en el cuerpo del
+  efecto) y solo si el ancho redondeado cambió.
+  `main/index.ts`: `minWidth: 560`, `minHeight: 420`.
+  `stores/app-store.ts`: re-clamp del `didacticPanelWidth` ante `resize` de
+  ventana (hoy solo se clampea al arrastrar) + estado `sidebarOpen` para el modo
+  drawer.
+  _Aceptación:_ typecheck/lint verdes; el ancho didáctico persistido se achica
+  solo al reducir la ventana; la ventana no puede achicarse por debajo del piso.
+  _Gotchas:_ lint react-hooks del repo prohíbe `setState` en efecto; el
+  `getSnapshot` de `useSyncExternalStore` no puede devolver un objeto nuevo por
+  llamada.
+
+- [x] **T80. SettingsModal: scroll único, sticky, tamaño por tier y dos columnas**
+  Un solo `flex-1 min-h-0 overflow-y-auto` para TODO el cuerpo; `shrink-0` en el
+  header. "En uso" y `ProviderTabs` pasan a `sticky` dentro del scroller (se
+  conserva la intención de T62 sin bloquear el scroll). Tamaño: `max-w-[900px]`
+  en dos columnas / `max-w-lg` en una; alto `h-[min(88vh,700px)]`; en `xshort`
+  sheet de ventana completa. Con ≥980px de ventana el cuerpo se reparte en DOS
+  COLUMNAS (GitHub | IA) con scroll propio — NO es un switcher: todas las
+  secciones siguen montadas. (El plan original decía "nav lateral de anclas";
+  con solo dos secciones era decorativa, ver PLAN.md § F16.)
+  _Aceptación:_ a 960x540 y 1920x540 se llega por scroll a la lista de modelos y
+  al selector de razonamiento; `settings.spec.ts` y `github-mode.spec.ts` siguen
+  verdes SIN tocarlos.
+  _Gotchas:_ `github-mode.spec.ts` exige "Acceso a GitHub", las dos cards y
+  `gh auth login` VISIBLES apenas se abre el modal ⇒ prohibido un `<details>`
+  cerrado o un switcher que desmonte secciones.
+
+- [x] **T81. GithubAccessSection + ProviderModelPanel/Tabs compactos**
+  Guía de `gh` de bloque `<ol>` (~110px) a una línea con los mismos textos
+  visibles; nota de modo demo compacta. `ProviderTabs` con `overflow-x-auto` y
+  `shrink-0` en los tabs. Cards de modelo en grid de 2 columnas cuando el panel
+  supera ~720px (aprovecha el modal ancho) y `truncate`/`break-all` en los slugs
+  largos.
+  _Aceptación:_ los textos que verifican los specs siguen visibles; a 1920x540
+  las cards se ven en dos columnas sin desbordar.
+
+- [x] **T82. Sidebar: dock 280/240, drawer overlay en `md`/`sm`**
+  Ancho por tier (`xl` 280, `lg` 240); en `md`/`sm` se renderiza como drawer
+  overlay (`fixed`, backdrop, Esc, cierre al seleccionar PR) controlado por
+  `sidebarOpen`. El contenido de la lista NO cambia.
+  _Aceptación:_ a 960 de ancho el centro recupera los 280px; el drawer abre/
+  cierra con el botón del TitleBar y al elegir un PR.
+
+- [x] **T83. TitleBar: divulgación progresiva + toggle de la lista**
+  Botón hamburguesa (solo en `md`/`sm`) que abre el drawer de PRs. Por tier:
+  `lg` oculta el texto del estado de conexión (queda el punto); `md` el buscador
+  colapsa a icono con campo overlay y el chip de settings pierde el texto; `sm`
+  auth/settings/didáctico van a un menú `⋯`. En `short`, `h-12 → h-9`.
+  _Aceptación:_ a 720px de ancho nada se desborda ni se solapa; el engrane
+  conserva `svg.lucide-settings` (los specs lo localizan así).
+  _Gotchas:_ NO sacar el icono `Settings` de dentro del botón (contrato e2e).
+
+- [x] **T84. CenterPane + PrHeader compactos en `short`**
+  `PrHeader` a una línea (título truncado + `#n` + Draft) con autor/rama/commits/
+  labels dentro de un `<details>` "Detalles" cuando el alto es `short`/`xshort`;
+  las tabs Conversación/Archivos comparten fila con el header en ese tier.
+  _Aceptación:_ a 1920x540 el contenido del tab gana ~90px verticales; a
+  1400x900 el header se ve exactamente como hoy.
+
+- [x] **T85. FilesTab: árbol como columna o drawer según el ancho REAL del panel**
+  `useElementWidth` sobre el contenedor del tab: ≥640px columna (como hoy),
+  <640px el árbol se vuelve drawer interno con botón "N archivos" en la toolbar
+  del diff, y el diff ocupa todo el ancho.
+  _Aceptación:_ a 960x540 el diff pasa de 40px a >400px; `diff.spec.ts` verde.
+
+- [x] **T86. DiffView/DiffToolbar: split→inline automático y toolbar compacta**
+  `effectiveMode`: si el panel de diff mide <560px, se renderiza `inline` sin
+  pisar la preferencia del store; el botón split queda deshabilitado con tooltip
+  ("Necesita ~560px de ancho"). Toolbar: bajo 520px solo el basename (path
+  completo en `title`).
+  _Aceptación:_ el toggle sigue funcionando por encima del umbral; por debajo el
+  usuario ve POR QUÉ está en inline; `diff.spec.ts` verde.
+
+- [x] **T87. DidacticPanel + ConversationTab + ventana didáctica + ResourceViewer**
+  Panel: tope de ancho por tier (34% en `lg`, 45% en `md`, mínimo 300) y rail en
+  `sm`. `ConversationTab`: columna de lectura `max-w-[900px]` centrada y padding
+  reducido bajo 520px. Ventana didáctica: `minWidth` 700 → 520, padding `p-6 →
+  p-3` en anchos chicos. `ResourceViewer`: `max-w-5xl` → `min(92vw,1100px)` y
+  sheet completo en `xshort`.
+  _Aceptación:_ `didactic.spec.ts`, `detach.spec.ts` y `cloud-section.spec.ts`
+  verdes; captura mirada de la ventana didáctica a 520px.
+
+- [x] **T88. Spec e2e `responsive.spec.ts` + docs + bump 0.6.3**
+  Helper `setViewport(page, w, h)` en `e2e/fixtures.ts` (CDP
+  `Emulation.setDeviceMetricsOverride`, con `clearDeviceMetricsOverride` al
+  final). Spec que recorre 1920x1080 / 960x1080 / 1920x540 / 960x540 y afirma:
+  (a) el panel de diff mide >400px en todos, (b) `document.body.scrollWidth`
+  nunca supera el viewport, (c) en Settings toda sección es alcanzable por
+  scroll (comparando `scrollHeight`/`clientHeight` del scroller y llegando a la
+  lista de modelos). Capturas adjuntas por tamaño. Docs: CLAUDE.md (convención
+  de tiers + gotcha de la sonda), README (roadmap), `package.json` 0.6.2 →
+  0.6.3.
+  _Aceptación:_ `npm run verify` + suite e2e completa en verde bajo Xvfb;
+  capturas de los 4 tamaños MIRADAS.
+
+### Cierre F16 (2026-07-25, orquestador)
+
+Verificación de la fase (toda ejecutada tras la última línea de código):
+
+- `npm run verify` — typecheck (node + web), lint y 664 tests en 35 archivos: verde.
+- Suite e2e Playwright COMPLETA bajo Xvfb (`xvfb-run -a -s "-screen 0
+  1600x1000x24" npx playwright test`): **35/35 en verde**, incluidos los 3 tests
+  nuevos de `responsive.spec.ts` y sin tocar NINGÚN spec existente — el tier por
+  defecto (1400x900 = `xl`/`tall`) deja el shell idéntico a v0.6.2.
+- Capturas MIRADAS (sonda CDP con `Emulation.setDeviceMetricsOverride`, app
+  construida con mocks), antes y después, a 1920x1080 / 960x1080 / 1920x540 /
+  960x540, en los tres estados (conversación, archivos, settings) + la ventana
+  didáctica desacoplada a 520x700.
+
+Números del antes/después a 960x540 (un cuarto de un monitor 1080p):
+
+| | antes | después |
+|---|---|---|
+| ancho del panel de diff | **40px** (20 por lado en split) | **580px**, split legible |
+| lista de PRs | columna fija de 280px | drawer (botón en TitleBar) |
+| árbol de archivos | columna fija de 260px | drawer (botón "3" en la toolbar) |
+| Settings | tabs y modelos **inalcanzables** | sheet completo, todo por scroll |
+| cabecera del PR | ~110px | ~34px (`<details>` "Detalles") |
+
+### Bitácora F16 — gotchas
+
+- **`useRef` + `useEffect([])` NO mide un nodo que aparece tarde.** `FilesTab`
+  tiene `return` tempranos (cargando / error / sin archivos), así que en el
+  primer render el div medido no existe: el efecto corría una vez contra
+  `ref.current === null` y jamás observaba nada ⇒ `width` se quedaba en `null` y
+  el árbol seguía siendo columna a 580px (visto en la captura, con el layout
+  "casi bien" — el tipo de bug que un assert de DOM no delata). Fix:
+  `useElementWidth` es un **callback ref** (corre en cada montaje/desmontaje del
+  nodo) con la limpieza en la función que devuelve (React 19). Copiado a
+  CLAUDE.md como gotcha 11.
+- **`page.setViewportSize()` no existe para nosotros.** Con `connectOverCDP` la
+  página vive en una ventana que Playwright no creó y el método la rechaza. La
+  vía es `Emulation.setDeviceMetricsOverride` por CDP (`setViewport` en
+  `e2e/fixtures.ts`), cacheando la sesión CDP por página: al detachear, Chromium
+  revierte los overrides. Gotcha 12 de CLAUDE.md.
+- **`scrollIntoViewIfNeeded()` es LA aserción para "contenido recortado"**: si un
+  ancestro `overflow-hidden` clipea el elemento y no hay scroller, Playwright no
+  puede traerlo a la vista y el paso falla. Es exactamente el bug que tenía
+  Settings, y un `toBeVisible()` solo no lo habría cazado (el elemento
+  simplemente no estaba en el DOM visible).
+- **`section:has([aria-label="Vista inline"])` matchea DOS elementos**: el
+  `CenterPane` contiene al `DiffView`, así que el `:has` sube por la jerarquía y
+  rompe el modo estricto. `.last()` = el panel de diff real.
+- **El default de la app (1400x900) da un panel de diff de 480px**, por debajo
+  del mínimo legible de split (560px) ⇒ con el panel didáctico abierto, la
+  ventana por defecto ahora arranca en **inline**. No es una regresión: 480px en
+  split son ~190px de código por lado. Cerrar el didáctico o ensanchar la
+  ventana devuelve split solo, y el botón deshabilitado explica el porqué en su
+  tooltip (sin eso, clickear split "no haría nada" y parecería roto).
+- **El ancho del didáctico se persiste como PREFERENCIA, no como efectivo**: el
+  clamp tier-aware se aplica al pintar (`clampDidacticWidth(preferred, ancho de
+  ventana)`), así que tilear la ventana no destruye el ancho elegido en el
+  monitor grande — vuelve solo al ensanchar. El mismo helper lo usa el arrastre,
+  si no el panel saltaría al soltar el handle.
+- **Fuera de alcance consciente**: sidebar redimensionable a mano (los tiers ya
+  resuelven el espacio; el handle de `DidacticPanel` es el patrón a reusar si se
+  pide) y fusionar las tabs Conversación/Archivos en la fila del `PrHeader` en
+  ventanas bajas (el `PrHeader` de una línea ya recupera ~76px; fusionar
+  acoplaría `CenterPane` con `PrHeader` por ~37px más).
