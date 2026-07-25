@@ -173,6 +173,21 @@ scripts/            smoke-*.mjs (e2e vía CDP), screenshot-app.sh, debug-*.mjs
 9. El snapshot mock se cachea en disco por `headSha` (`userData/snapshots/`): si
    cambias `fixtures-snapshot.ts` hay que borrar el dir del snapshot afectado (y
    reiniciar la app entera: el hot reload de main a veces no re-escribe el árbol).
+10. **E2E: NUNCA volver a `_electron.launch` de Playwright.** Con Electron 43 +
+    Playwright 1.62, `electronApp.close()` se cuelga PARA SIEMPRE en ciertos
+    escenarios (reproducido por bisección el 2026-07-24: escribir al clipboard
+    y cerrar ~2s después; también la didáctica abierta a mitad de streaming)
+    aunque el proceso de Electron salga limpio e inmediato (EXIT 0). El wedge
+    vive en el bookkeeping interno de Playwright: ni SIGKILL, ni destruir los
+    streams stdio, ni `emit('close')`, ni cerrar páginas antes lo destraban, y
+    contamina el teardown del worker (120s + exit 1 en TODA la corrida). Bug
+    upstream cerrado como not-planned (microsoft/playwright#39248). La
+    arquitectura correcta ya está en `e2e/fixtures.ts`: spawn propio de
+    Electron + `--remote-debugging-port=0` + `chromium.connectOverCDP` — misma
+    API de locators/aserciones, teardown = desconexión WS + SIGTERM nuestro
+    (escalada SIGKILL 3s por el shutdown colgante de Chromium bajo Xvfb sin
+    clipboard manager). No re-litigar salvo evidencia de fix upstream probada
+    en una rama aparte.
 
 ## Comandos
 
@@ -195,7 +210,16 @@ scripts/            smoke-*.mjs (e2e vía CDP), screenshot-app.sh, debug-*.mjs
 ## Verificación (obligatoria antes de dar algo por hecho)
 
 1. `typecheck`, `lint` y `npm test` en verde.
-2. Suites e2e vía CDP: app corriendo con `--remote-debugging-port=9222`, luego
+2. **Suite e2e Playwright** (`e2e/`, preferida para lo ya portado):
+   `npm run test:e2e`, o sin sesión gráfica
+   `npm run build && xvfb-run -a -s "-screen 0 1600x1000x24" npx playwright test`.
+   Lanza la app construida con mocks y userData aislado por test (fixtures en
+   `e2e/fixtures.ts` — ver gotcha 10 sobre por qué usa `connectOverCDP` y no
+   `_electron`). Cubre: didactic, search, diff, comments, copy-url, streaming,
+   analysis-cache, detach, cloud-section, persistence.
+3. Suites smoke legacy vía CDP (solo las AÚN NO portadas: e2e, settings,
+   pr-list, github-mode, packaged, f9-ui, bugfixes, harness-activity):
+   app corriendo con `--remote-debugging-port=9222`, luego
    `node scripts/smoke-<suite>.mjs`. Reglas para escribir/tocar suites:
    - El target CDP SIEMPRE excluye la ventana didáctica: `!url.includes('#didactic')`.
    - Limpia el estado global al arrancar: buscador, cache del PR bajo prueba
@@ -208,7 +232,9 @@ scripts/            smoke-*.mjs (e2e vía CDP), screenshot-app.sh, debug-*.mjs
      de OpenCode para su paso de modelo inválido (se auto-skipea si no hay sesión).
    - Verifica **contenido**, no solo URLs o rects: `getBoundingClientRect` ignora el
      clipping (un visor colapsado a 0px "pasaba" los checks geométricos).
-3. **Verificación visual**: toda verificación de UI termina MIRANDO una captura:
+4. **Verificación visual**: toda verificación de UI termina MIRANDO una captura
+   (los tests Playwright ya adjuntan PNG por test en `test-results/` — mirarlos
+   cuenta). Para la app corriendo en dev:
    `scripts/screenshot-app.sh <salida.png> [patrón-título]` (hyprctl + grim, no
    interactivo; 2º argumento para la ventana didáctica). No sirve con hyprlock activo.
 

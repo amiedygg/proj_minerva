@@ -2973,3 +2973,51 @@ mermaid.parse NO se agenda por ahora. Docs: CLAUDE.md (sección cloud + gotchas
   en ninguna colección Iconify**: se vendorearon los SVG oficiales de
   `cloudflare/cloudflare-docs` `src/icons/` (CC-BY-4.0, atribución en
   `cf-icon-pack.ts`), monocromos `currentColor` fijados al naranja #F6821F.
+
+## E2E Playwright (2026-07-24/25, rama feature/playwright-e2e)
+
+Migración del smoke testing a Playwright manteniendo checks y capturas.
+Suite en `e2e/` (9 specs, 18 tests, 18/18 verde bajo Xvfb en ~3.5m, EXIT=0):
+didactic, search, diff, comments, copy-url, streaming, analysis-cache,
+detach, cloud-section, persistence. Los scripts legacy siguen intactos.
+
+- [x] Gate `npm run verify` + job `checks` en pr-dev-builds/release (PR #17)
+- [x] Fixture `connectOverCDP` + specs núcleo (commits 98c3f2e/40e33e0)
+- [ ] Portar smoke-e2e (comentario general end-to-end; el resto ya cubierto)
+- [ ] Portar smoke-settings (modal Settings; paso de modelo inválido necesita
+      OpenCode real ⇒ test.skip condicional)
+- [ ] Portar smoke-pr-list (watcher: parametrizar env del fixture con
+      MINERVA_WATCH_INTERVAL_MS=1500)
+- [ ] Portar smoke-github-mode (F14: settings gh-cli; partes con gh real ⇒
+      skip condicional)
+- [ ] Portar smoke-f9-ui (banner generatedWith/staleness)
+- [ ] Portar smoke-bugfixes (triar qué regresiones siguen vigentes)
+- [ ] Portar smoke-harness-activity (buffer activity en eventos de progreso)
+- [ ] Portar smoke-packaged (parametrizar launchMinerva al binario de dist/)
+- [ ] Job `e2e` en pr-dev-builds.yml (xvfb-run tras el gate checks)
+- [ ] Al terminar: retirar scripts legacy portados y su sección en CLAUDE.md
+
+### Bitácora — gotchas
+
+- **`_electron.launch` de Playwright es INVIABLE con Electron 43 + PW 1.62**:
+  `electronApp.close()` se cuelga para siempre en escenarios específicos
+  (bisección: clipboard write + ~2s antes de cerrar; didáctica abierta a
+  mitad de streaming) aunque el proceso Electron salga EXIT 0 inmediato. El
+  wedge es bookkeeping interno de PW: ni SIGKILL, ni destruir streams stdio,
+  ni emit('close'), ni page.close() previo lo destraban; el teardown del
+  worker muere a los 120s y la corrida entera sale exit 1. Upstream:
+  microsoft/playwright#39248, cerrado not-planned. Solución en
+  `e2e/fixtures.ts`: spawn propio + `--remote-debugging-port=0` +
+  `chromium.connectOverCDP` (API íntegra de PW; teardown = WS disconnect +
+  SIGTERM propio). NO volver a `_electron` sin probar el fix upstream en rama
+  aparte.
+- **Shutdown de Chromium colgante bajo Xvfb sin clipboard manager**: tras
+  escribir al clipboard, el quit (vía SIGTERM) puede no completar — el
+  closeMinerva escala a SIGKILL a los 3s (un exit limpio tarda <1s).
+- **xvfb-run por defecto es 640x480x8**: usar
+  `-s "-screen 0 1600x1000x24"` o la ventana de 1400x900 sale mutilada en
+  las capturas.
+- **userData aislado por test**: `MINERVA_USER_DATA_DIR` (main/index.ts,
+  setPath antes de whenReady) reemplaza TODA la limpieza de estado que las
+  suites CDP legacy hacían a mano (buscador, invalidateAnalysis, PR neutral) —
+  los specs nuevos no deben heredar esos rituales.
