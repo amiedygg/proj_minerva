@@ -7,6 +7,8 @@ import { Badge } from '../ui/Badge'
 interface GithubAccessSectionProps {
   info: AiSettingsInfo
   setGithubAccessMode: (mode: GithubAccessMode) => Promise<boolean>
+  /** Ventana baja (F16/T81): recorta el texto explicativo largo, no los controles. */
+  compact?: boolean
 }
 
 const MODE_META: Record<GithubAccessMode, { label: string; description: string }> = {
@@ -84,6 +86,7 @@ function GhCliStatusFeedback({ status }: { status: AuthStatus }): React.JSX.Elem
 export function GithubAccessSection({
   info,
   setGithubAccessMode,
+  compact = false,
 }: GithubAccessSectionProps): React.JSX.Element {
   const authStatus = useAppStore((s) => s.authStatus)
   const [switching, setSwitching] = useState<GithubAccessMode | null>(null)
@@ -102,13 +105,15 @@ export function GithubAccessSection({
   const anySwitching = switching !== null
 
   return (
-    <div className="border-b border-border p-4">
+    <div className="p-4">
       <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">Acceso a GitHub</h3>
-      <p className="mb-3 text-xs text-muted">
-        Algunas orgs enterprise bloquean la OAuth App de Minerva (
-        <em>OAuth app access restrictions</em>). El modo GitHub CLI usa la sesión de{' '}
-        <span className="font-mono text-text">gh</span>, que esas orgs sí suelen aprobar.
-      </p>
+      {!compact && (
+        <p className="mb-3 text-xs text-muted">
+          Algunas orgs enterprise bloquean la OAuth App de Minerva (
+          <em>OAuth app access restrictions</em>). El modo GitHub CLI usa la sesión de{' '}
+          <span className="font-mono text-text">gh</span>, que esas orgs sí suelen aprobar.
+        </p>
+      )}
 
       {info.mockGithub && (
         <p className="mb-3 rounded-md border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs text-warning">
@@ -143,18 +148,22 @@ export function GithubAccessSection({
                 ) : null}
               </button>
 
+              {/*
+                Guía de login compactada a UNA línea (F16/T81): como bloque
+                `<ol>` ocupaba ~110px verticales que en una ventana tileada
+                empujaban las tabs de proveedor fuera de la vista. Los dos
+                textos que verifican los specs e2e (`cli.github.com` y
+                `gh auth login`) siguen VISIBLES sin desplegar nada — por eso
+                no es un `<details>` cerrado.
+              */}
               {mode === 'gh-cli' && (
-                <div className="mt-2 rounded-md border border-border bg-bg/40 p-2.5">
-                  <ol className="list-decimal space-y-1 pl-4 text-xs text-muted">
-                    <li>
-                      Instala GitHub CLI desde{' '}
-                      <ExternalLink href="https://cli.github.com">cli.github.com</ExternalLink>.
-                    </li>
-                    <li>
-                      Ejecuta <span className="font-mono text-text">gh auth login</span> en una
-                      terminal.
-                    </li>
-                  </ol>
+                <div className="mt-2 rounded-md border border-border bg-bg/40 px-2.5 py-2">
+                  <p className="text-xs text-muted">
+                    Instala GitHub CLI desde{' '}
+                    <ExternalLink href="https://cli.github.com">cli.github.com</ExternalLink> y
+                    ejecuta <span className="font-mono text-text">gh auth login</span> en una
+                    terminal.
+                  </p>
 
                   {isActive && <GhCliStatusFeedback status={authStatus} />}
                 </div>

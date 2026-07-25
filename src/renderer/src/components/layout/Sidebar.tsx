@@ -1,9 +1,11 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { RefreshCw } from 'lucide-react'
 import type { PrStateFilter, PullRequestSummary } from '../../../../shared/types'
 import { groupByRepo } from '../../lib/pr-filters'
 import { usePullRequests } from '../../hooks/use-pull-requests'
 import { useAuth } from '../../hooks/use-auth'
+import { useLayoutTier } from '../../hooks/use-layout-tier'
+import { SIDEBAR_WIDTH, sidebarIsDrawer } from '../../lib/layout'
 import { useAppStore } from '../../stores/app-store'
 import { RepoGroup } from '../pr-list/RepoGroup'
 import { IconButton } from '../ui/IconButton'
@@ -64,7 +66,20 @@ function StateFilterControl({
   )
 }
 
-export function Sidebar(): React.JSX.Element {
+/**
+ * Lista de PRs. Dos formas según el tier de layout (F16/T82):
+ *
+ * - `xl`/`lg`: columna acoplada de 280/240px, como siempre.
+ * - `md`/`sm` (ventana tileada a media pantalla o menos): **drawer overlay**
+ *   sobre el centro, cerrado por defecto y abierto desde el botón del TitleBar.
+ *   Motivo medido (PLAN.md § F16): con la columna fija, a 960px de ancho la
+ *   sidebar + el árbol de archivos + el panel didáctico dejaban el diff en
+ *   40px. Elegir un PR cierra el drawer (`selectPr` en el store).
+ *
+ * Los hooks de datos corren SIEMPRE, también con el drawer cerrado: la lista
+ * (y su watcher) no debe depender de si el overlay está visible.
+ */
+export function Sidebar(): React.JSX.Element | null {
   const searchQuery = useAppStore((s) => s.searchQuery)
   const authStatus = useAppStore((s) => s.authStatus)
   const openSettings = useAppStore((s) => s.openSettings)
@@ -80,6 +95,22 @@ export function Sidebar(): React.JSX.Element {
     prStateFilter,
   )
   const { signIn } = useAuth()
+  const tier = useLayoutTier()
+  const isDrawer = sidebarIsDrawer(tier.w)
+  const sidebarOpen = useAppStore((s) => s.sidebarOpen)
+  const closeSidebar = useAppStore((s) => s.closeSidebar)
+
+  // Esc cierra el drawer (solo cuando está abierto y no hay un modal encima:
+  // `SettingsModal` monta su propio listener y también cierra con Esc).
+  const settingsOpen = useAppStore((s) => s.settingsOpen)
+  useEffect(() => {
+    if (!isDrawer || !sidebarOpen || settingsOpen) return
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key === 'Escape') closeSidebar()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [isDrawer, sidebarOpen, settingsOpen, closeSidebar])
 
   const groups = useMemo(() => groupByRepo(pullRequests), [pullRequests])
   const needsLogin = Boolean(error?.includes(NOT_AUTHENTICATED_MARKER))
@@ -90,8 +121,26 @@ export function Sidebar(): React.JSX.Element {
     markSeen(pr)
   }
 
+  if (isDrawer && !sidebarOpen) return null
+
+  const asideClass = isDrawer
+    ? 'absolute inset-y-0 left-0 z-40 flex w-[300px] max-w-[85%] flex-col overflow-y-auto border-r border-border bg-panel shadow-2xl'
+    : 'flex shrink-0 flex-col overflow-y-auto border-r border-border bg-panel'
+
   return (
-    <aside className="flex w-[280px] shrink-0 flex-col overflow-y-auto border-r border-border bg-panel">
+    <>
+      {isDrawer && (
+        <div
+          className="absolute inset-0 z-30 bg-black/50"
+          onClick={closeSidebar}
+          aria-hidden
+        />
+      )}
+      <aside
+        aria-label="Lista de pull requests"
+        style={isDrawer ? undefined : { width: SIDEBAR_WIDTH[tier.w] }}
+        className={asideClass}
+      >
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-2">
         <StateFilterControl value={prStateFilter} onChange={setPrStateFilter} />
         <IconButton
@@ -159,6 +208,7 @@ export function Sidebar(): React.JSX.Element {
           <RepoGroup key={group.repo.fullName} group={group} onSelectPr={handleSelectPr} />
         ))
       )}
-    </aside>
+      </aside>
+    </>
   )
 }

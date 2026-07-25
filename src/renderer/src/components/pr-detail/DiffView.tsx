@@ -4,6 +4,8 @@ import type { DiffViewMode } from '../../stores/app-store'
 import { useAppStore } from '../../stores/app-store'
 import { parsePatch } from '../../lib/diff-parser'
 import { indexLineThreads, type LineSide } from '../../lib/line-threads'
+import { useElementWidth } from '../../hooks/use-element-width'
+import { SPLIT_DIFF_MIN_WIDTH } from '../../lib/layout'
 import { useLineHighlights } from '../../hooks/use-line-highlights'
 import { DiffToolbar } from './DiffToolbar'
 import { SplitDiff } from './SplitDiff'
@@ -20,9 +22,21 @@ interface DiffViewProps {
   /** Hilos del PR completo; se filtran acá a los que son de línea y de este archivo. */
   threads: CommentThread[]
   reloadThreads: () => Promise<CommentThread[]>
+  /** Presente solo cuando el árbol de archivos es drawer (F16/T85): botón "N archivos" en la toolbar. */
+  fileTreeToggle?: { open: boolean; count: number; onToggle: () => void }
 }
 
-/** Panel principal: toolbar + diff (split o inline) del archivo seleccionado. */
+/**
+ * Panel principal: toolbar + diff (split o inline) del archivo seleccionado.
+ *
+ * F16/T86 — `effectiveMode`: por debajo de `SPLIT_DIFF_MIN_WIDTH` (560px de
+ * panel REAL) la vista split deja de ser legible (dos columnas de ~190px con
+ * los gutters puestos), así que se renderiza inline aunque la preferencia
+ * guardada sea split. La preferencia NO se pisa en el store: al ensanchar el
+ * panel (cerrar el didáctico, agrandar la ventana) el split vuelve solo. La
+ * toolbar deshabilita el botón split y explica por qué en el tooltip — sin eso,
+ * el usuario clickearía split y "no pasaría nada".
+ */
 export function DiffView({
   file,
   mode,
@@ -33,7 +47,11 @@ export function DiffView({
   number,
   threads,
   reloadThreads,
+  fileTreeToggle,
 }: DiffViewProps): React.JSX.Element {
+  const { ref, width } = useElementWidth<HTMLElement>()
+  const splitTooNarrow = width !== null && width < SPLIT_DIFF_MIN_WIDTH
+  const effectiveMode: DiffViewMode = mode === 'split' && splitTooNarrow ? 'inline' : mode
   const hunks = useMemo(() => parsePatch(file.patch ?? ''), [file.patch])
   const { getTokens } = useLineHighlights(file.path, file.patch)
   const threadsByPosition = useMemo(
@@ -86,19 +104,22 @@ export function DiffView({
   }
 
   return (
-    <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
+    <section ref={ref} className="flex min-w-0 flex-1 flex-col overflow-hidden">
       <DiffToolbar
         file={file}
-        mode={mode}
+        mode={effectiveMode}
         onModeChange={onModeChange}
         wordWrap={wordWrap}
         onToggleWordWrap={onToggleWordWrap}
+        splitTooNarrow={splitTooNarrow}
+        fileTreeToggle={fileTreeToggle}
+        compact={width !== null && width < 520}
       />
 
       <div className="flex-1 overflow-auto">
         {file.isBinary || !file.patch || hunks.length === 0 ? (
           <p className="p-4 text-sm text-muted">Sin vista previa disponible.</p>
-        ) : mode === 'split' ? (
+        ) : effectiveMode === 'split' ? (
           <SplitDiff
             hunks={hunks}
             wordWrap={wordWrap}

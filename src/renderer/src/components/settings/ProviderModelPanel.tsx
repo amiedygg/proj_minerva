@@ -22,6 +22,8 @@ interface ProviderModelPanelProps {
   saveModel: (provider: AiProviderId, model: string) => Promise<boolean>
   selectProvider: (provider: AiProviderId) => Promise<boolean>
   setModelOption: (provider: AiProviderId, optionId: string, value: string) => Promise<boolean>
+  /** Modal en dos columnas (F16/T81): las cards de modelo se pintan en grid de 2. */
+  wide?: boolean
 }
 
 /**
@@ -57,6 +59,7 @@ export function ProviderModelPanel({
   saveModel,
   selectProvider,
   setModelOption,
+  wide = false,
 }: ProviderModelPanelProps): React.JSX.Element {
   const fallbackModels = info.catalog[viewedProvider].models
   const { models, error: modelsError } = useProviderModels(viewedProvider, fallbackModels)
@@ -109,7 +112,9 @@ export function ProviderModelPanel({
         </p>
       )}
 
-      <div className="space-y-2">
+      {/* Grid de 2 columnas solo en el modal ancho (F16/T81): con 6-8 modelos,
+          una columna única obligaba a scrollear el doble en ventanas bajas. */}
+      <div className={wide ? 'grid grid-cols-2 gap-2' : 'space-y-2'}>
         {models.map((model) => {
           const isModelActive = isActiveTab && model.id === info.model
           const isThisActivating = activating === model.id
@@ -124,11 +129,14 @@ export function ProviderModelPanel({
                 isModelActive ? 'border-accent/50 bg-accent/10' : 'border-border hover:border-accent/30'
               } ${anyActivating ? 'opacity-60' : ''}`}
             >
-              <span className="flex flex-col">
-                <span className="text-sm text-text">
+              {/* `min-w-0` + `truncate`: los slugs de OpenCode
+                  (`openrouter/z-ai/glm-…`) desbordaban la card en columnas
+                  angostas y estiraban el modal entero (F16/T81). */}
+              <span className="flex min-w-0 flex-col">
+                <span className="truncate text-sm text-text">
                   {model.label} <span className="text-muted">· {model.vendor}</span>
                 </span>
-                <span className="font-mono text-[11px] text-muted">{model.id}</span>
+                <span className="truncate font-mono text-[11px] text-muted">{model.id}</span>
               </span>
               {isThisActivating ? (
                 <Loader2 size={14} className="mt-0.5 shrink-0 animate-spin text-muted" />
@@ -142,8 +150,10 @@ export function ProviderModelPanel({
         {allowCustom && (
           <div
             className={`rounded-md border p-2.5 transition-colors duration-150 ${
-              customIsActive ? 'border-accent/50 bg-accent/10' : 'border-border'
-            } ${anyActivating ? 'opacity-60' : ''}`}
+              wide ? 'col-span-2' : ''
+            } ${customIsActive ? 'border-accent/50 bg-accent/10' : 'border-border'} ${
+              anyActivating ? 'opacity-60' : ''
+            }`}
           >
             <div className="mb-1.5 flex items-center justify-between gap-2">
               <span className="text-sm text-text">Otro (avanzado)</span>

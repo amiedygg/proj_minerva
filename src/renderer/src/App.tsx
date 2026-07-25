@@ -20,7 +20,10 @@ function App(): React.JSX.Element {
   return (
     <div className="flex h-full flex-col">
       <TitleBar />
-      <div className="flex flex-1 overflow-hidden">
+      {/* `relative`: en los tiers angostos (F16/T82) la `Sidebar` se pinta como
+          drawer `absolute` DENTRO de esta fila — no sobre el TitleBar, que
+          conserva el botón para abrirla y cerrarla. */}
+      <div className="relative flex flex-1 overflow-hidden">
         <Sidebar />
         <CenterPane />
         <DidacticPanel />

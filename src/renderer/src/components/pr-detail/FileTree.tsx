@@ -13,15 +13,22 @@ interface FileTreeProps {
   onModeChange: (mode: FileTreeMode) => void
   selectedPath: string | null
   onSelectFile: (path: string) => void
+  /** Drawer sobre el diff en vez de columna (F16/T85, panel angosto). */
+  overlay?: boolean
 }
 
-/** Panel izquierdo del tab "Archivos": toggle tree/list + árbol o lista plana. */
+/**
+ * Panel izquierdo del tab "Archivos": toggle tree/list + árbol o lista plana.
+ * Con `overlay` se pinta como drawer flotante sobre el diff — es lo que hace
+ * `FilesTab` cuando el tab no da el ancho para tener las dos cosas a la vez.
+ */
 export function FileTree({
   files,
   mode,
   onModeChange,
   selectedPath,
   onSelectFile,
+  overlay = false,
 }: FileTreeProps): React.JSX.Element {
   const [collapsedFolders, setCollapsedFolders] = useState<ReadonlySet<string>>(new Set())
 
@@ -41,7 +48,13 @@ export function FileTree({
   }
 
   return (
-    <aside className="flex w-[260px] shrink-0 flex-col border-r border-border">
+    <aside
+      className={
+        overlay
+          ? 'absolute inset-y-0 left-0 z-40 flex w-[260px] max-w-[85%] flex-col border-r border-border bg-panel shadow-2xl'
+          : 'flex w-[260px] shrink-0 flex-col border-r border-border'
+      }
+    >
       <div className="flex shrink-0 items-center justify-between gap-1 border-b border-border px-2 py-1.5">
         <span className="px-1 text-xs font-medium text-muted">
           {files.length} {files.length === 1 ? 'archivo' : 'archivos'}

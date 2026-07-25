@@ -20,7 +20,7 @@ export function IconButton({
       title={label}
       aria-label={label}
       aria-pressed={active}
-      className={`inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors duration-150 ${
+      className={`inline-flex h-8 w-8 items-center justify-center rounded-md border transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40 ${
         active
           ? 'border-accent/40 bg-accent/15 text-accent'
           : 'border-transparent text-muted hover:bg-border/60 hover:text-text'

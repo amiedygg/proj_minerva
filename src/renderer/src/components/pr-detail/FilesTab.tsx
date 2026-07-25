@@ -1,5 +1,7 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { usePullRequestFiles } from '../../hooks/use-pull-request-files'
+import { useElementWidth } from '../../hooks/use-element-width'
+import { FILE_TREE_COLUMN_MIN_WIDTH } from '../../lib/layout'
 import { useAppStore } from '../../stores/app-store'
 import type { CommentThread, RepoRef } from '../../../../shared/types'
 import { FileTree } from './FileTree'
@@ -17,6 +19,13 @@ interface FilesTabProps {
  * Tab "Archivos": árbol de archivos a la izquierda + diff estilo GitKraken
  * (split/inline, syntax highlighting) a la derecha para el archivo
  * seleccionado. El estado de selección/vista vive en `app-store` (T7).
+ *
+ * Responsive (F16/T85): el árbol es columna mientras ESTE panel mida al menos
+ * `FILE_TREE_COLUMN_MIN_WIDTH`; por debajo pasa a drawer interno (botón "N
+ * archivos" en la toolbar del diff) y el diff se queda con todo el ancho. La
+ * medida es la del contenedor REAL, no la de la ventana: el panel didáctico se
+ * arrastra a mano, así que la misma ventana puede dejar este tab con anchos
+ * muy distintos. Medición previa a F16: a 960x540 el diff quedaba en 40px.
  */
 export function FilesTab({
   repo,
@@ -25,6 +34,8 @@ export function FilesTab({
   reloadThreads,
 }: FilesTabProps): React.JSX.Element {
   const { files, loading, error } = usePullRequestFiles(repo, number)
+  const { ref, width } = useElementWidth<HTMLDivElement>()
+  const [treeOpen, setTreeOpen] = useState(false)
 
   const selectedFilePath = useAppStore((s) => s.selectedFilePath)
   const setSelectedFilePath = useAppStore((s) => s.setSelectedFilePath)
@@ -43,6 +54,10 @@ export function FilesTab({
     if (!stillExists) setSelectedFilePath(files[0].path)
   }, [files, selectedFilePath, setSelectedFilePath])
 
+  // `width === null` = todavía sin medir: se asume el layout ancho para no
+  // parpadear al drawer durante el primer frame.
+  const treeIsDrawer = width !== null && width < FILE_TREE_COLUMN_MIN_WIDTH
+
   if (error) {
     return <p className="p-4 text-sm text-danger">No se pudieron cargar los archivos: {error}</p>
   }
@@ -57,15 +72,38 @@ export function FilesTab({
 
   const selectedFile = files.find((f) => f.path === selectedFilePath) ?? files[0]
 
+  function handleSelectFile(path: string): void {
+    setSelectedFilePath(path)
+    setTreeOpen(false)
+  }
+
+  const tree = (
+    <FileTree
+      files={files}
+      mode={fileTreeMode}
+      onModeChange={setFileTreeMode}
+      selectedPath={selectedFile.path}
+      onSelectFile={handleSelectFile}
+      overlay={treeIsDrawer}
+    />
+  )
+
   return (
-    <div className="flex h-full min-h-0">
-      <FileTree
-        files={files}
-        mode={fileTreeMode}
-        onModeChange={setFileTreeMode}
-        selectedPath={selectedFile.path}
-        onSelectFile={setSelectedFilePath}
-      />
+    <div ref={ref} className="relative flex h-full min-h-0">
+      {treeIsDrawer ? (
+        treeOpen && (
+          <>
+            <div
+              className="absolute inset-0 z-30 bg-black/50"
+              onClick={() => setTreeOpen(false)}
+              aria-hidden
+            />
+            {tree}
+          </>
+        )
+      ) : (
+        tree
+      )}
       <DiffView
         key={selectedFile.path}
         file={selectedFile}
@@ -77,6 +115,11 @@ export function FilesTab({
         number={number}
         threads={threads}
         reloadThreads={reloadThreads}
+        fileTreeToggle={
+          treeIsDrawer
+            ? { open: treeOpen, count: files.length, onToggle: () => setTreeOpen((open) => !open) }
+            : undefined
+        }
       />
     </div>
   )

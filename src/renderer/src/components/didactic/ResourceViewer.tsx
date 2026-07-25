@@ -39,7 +39,9 @@ export function ResourceViewer({ resource, onClose }: ResourceViewerProps): Reac
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6 backdrop-blur-sm"
+      // Padding del overlay reducido en ventanas chicas (F16/T87): `p-6` fijo
+      // se comía 96px de una ventana tileada de 540px de alto.
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-2 backdrop-blur-sm sm:p-6"
       onClick={onClose}
     >
       {/*
@@ -54,8 +56,8 @@ export function ResourceViewer({ resource, onClose }: ResourceViewerProps): Reac
       */}
       <div
         className={
-          'flex w-[92vw] max-w-5xl flex-col overflow-hidden rounded-lg border border-border bg-panel shadow-2xl ' +
-          (resource.kind === 'mermaid' ? 'h-[90vh]' : 'max-h-[90vh]')
+          'flex w-[96vw] max-w-[1100px] flex-col overflow-hidden rounded-lg border border-border bg-panel shadow-2xl ' +
+          (resource.kind === 'mermaid' ? 'h-[92vh]' : 'max-h-[92vh]')
         }
         onClick={(e) => e.stopPropagation()}
       >

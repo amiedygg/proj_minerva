@@ -1,6 +1,8 @@
 import { useRef } from 'react'
 import { ExternalLink, GraduationCap, X } from 'lucide-react'
-import { DIDACTIC_PANEL_DEFAULT_WIDTH, useAppStore } from '../../stores/app-store'
+import { useAppStore } from '../../stores/app-store'
+import { useLayoutTier } from '../../hooks/use-layout-tier'
+import { clampDidacticWidth, DIDACTIC_PANEL_DEFAULT_WIDTH } from '../../lib/layout'
 import { IconButton } from '../ui/IconButton'
 import { DidacticAnalysisArea } from '../didactic/DidacticAnalysisArea'
 import { DidacticPlaceholder } from '../didactic/DidacticPlaceholder'
@@ -39,9 +41,17 @@ export function DidacticPanel(): React.JSX.Element {
   const didacticPanelOpen = useAppStore((s) => s.didacticPanelOpen)
   const toggleDidacticPanel = useAppStore((s) => s.toggleDidacticPanel)
   const selectedPr = useAppStore((s) => s.selectedPr)
-  const panelWidth = useAppStore((s) => s.didacticPanelWidth)
+  const preferredWidth = useAppStore((s) => s.didacticPanelWidth)
   const setPanelWidth = useAppStore((s) => s.setDidacticPanelWidth)
+  const tier = useLayoutTier()
   const asideRef = useRef<HTMLElement>(null)
+
+  // F16/T87: el ancho PINTADO es el preferido clampeado contra el viewport
+  // ACTUAL. Antes el clamp solo corría al arrastrar, así que un ancho guardado
+  // en un monitor grande sobrevivía al tilear la ventana y se comía el centro.
+  // El valor del store no se toca: al ensanchar de nuevo, el panel recupera su
+  // ancho preferido solo.
+  const panelWidth = clampDidacticWidth(preferredWidth, tier.width)
 
   if (!didacticPanelOpen) {
     return (
@@ -55,32 +65,48 @@ export function DidacticPanel(): React.JSX.Element {
     )
   }
 
+  // F16/T87: en el tier más angosto (`sm`, p. ej. media pantalla de una laptop)
+  // el panel abierto se pinta como OVERLAY sobre el centro en vez de robarle
+  // ancho — a 700px de ventana, acoplarlo dejaba el diff sin espacio útil. El
+  // resize no aplica ahí (el ancho lo fija el overlay).
+  const isOverlay = tier.w === 'sm'
+
   return (
-    <aside
-      ref={asideRef}
-      style={{ width: panelWidth }}
-      className="relative flex shrink-0 flex-col border-l border-border bg-panel"
-    >
+    <>
+      {isOverlay && (
+        <div className="absolute inset-0 z-30 bg-black/50" onClick={toggleDidacticPanel} aria-hidden />
+      )}
+      <aside
+        ref={asideRef}
+        style={isOverlay ? undefined : { width: panelWidth }}
+        className={
+          isOverlay
+            ? 'absolute inset-y-0 right-0 z-40 flex w-[min(360px,85%)] flex-col border-l border-border bg-panel shadow-2xl'
+            : 'relative flex shrink-0 flex-col border-l border-border bg-panel'
+        }
+      >
       {/* Handle de resize (T23): franja de 6px sobre el borde izquierdo. El
           ancho nuevo es la distancia del puntero al borde DERECHO del aside
           (el panel crece hacia la izquierda); el clamp vive en el store. */}
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Redimensionar panel didáctico"
-        title="Arrastrar para redimensionar; doble click restaura el ancho por defecto"
-        className="absolute inset-y-0 -left-[3px] z-10 w-1.5 cursor-col-resize touch-none hover:bg-accent/50 active:bg-accent/70"
-        onPointerDown={(e) => {
-          e.preventDefault()
-          e.currentTarget.setPointerCapture(e.pointerId)
-        }}
-        onPointerMove={(e) => {
-          if (!e.currentTarget.hasPointerCapture(e.pointerId)) return
-          const right = asideRef.current?.getBoundingClientRect().right ?? window.innerWidth
-          setPanelWidth(right - e.clientX)
-        }}
-        onDoubleClick={() => setPanelWidth(DIDACTIC_PANEL_DEFAULT_WIDTH)}
-      />
+      {!isOverlay && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Redimensionar panel didáctico"
+          title="Arrastrar para redimensionar; doble click restaura el ancho por defecto"
+          className="absolute inset-y-0 -left-[3px] z-10 w-1.5 cursor-col-resize touch-none hover:bg-accent/50 active:bg-accent/70"
+          onPointerDown={(e) => {
+            e.preventDefault()
+            e.currentTarget.setPointerCapture(e.pointerId)
+          }}
+          onPointerMove={(e) => {
+            if (!e.currentTarget.hasPointerCapture(e.pointerId)) return
+            const right = asideRef.current?.getBoundingClientRect().right ?? window.innerWidth
+            setPanelWidth(right - e.clientX)
+          }}
+          onDoubleClick={() => setPanelWidth(DIDACTIC_PANEL_DEFAULT_WIDTH)}
+        />
+      )}
       <header className="flex flex-col gap-0.5 border-b border-border px-3 py-2.5">
         <div className="flex items-center justify-between">
           <span className="flex items-center gap-1.5 text-sm font-semibold text-text">
@@ -111,7 +137,7 @@ export function DidacticPanel(): React.JSX.Element {
         </div>
       </header>
 
-      <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-4">
+      <div className={`flex flex-1 flex-col gap-3 overflow-y-auto ${tier.w === 'xl' ? 'p-4' : 'p-3'}`}>
         {selectedPr ? (
           <DidacticAnalysisArea
             key={selectedPr.id}
@@ -123,6 +149,7 @@ export function DidacticPanel(): React.JSX.Element {
           <DidacticPlaceholder />
         )}
       </div>
-    </aside>
+      </aside>
+    </>
   )
 }

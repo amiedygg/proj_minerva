@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useAppStore } from '../../stores/app-store'
+import { useLayoutTier } from '../../hooks/use-layout-tier'
 import type { CommentThread, PullRequestDetail } from '../../../../shared/types'
 import { Avatar } from '../ui/Avatar'
 import { Markdown } from '../ui/Markdown'
@@ -27,6 +28,7 @@ export function ConversationTab({
   reload,
 }: ConversationTabProps): React.JSX.Element {
   const openLineThread = useAppStore((s) => s.openLineThread)
+  const tier = useLayoutTier()
   const [draft, setDraft] = useState('')
   const [posting, setPosting] = useState(false)
   const [postError, setPostError] = useState<string | null>(null)
@@ -60,7 +62,14 @@ export function ConversationTab({
   }
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-y-auto p-4">
+    // Columna de lectura centrada (F16/T87): sin el `max-w`, en una ventana
+    // completa de 1920px los comentarios se estiraban a líneas de 1200px+.
+    // El padding se achica en el tier más angosto, donde cada px cuenta.
+    <div
+      className={`mx-auto flex h-full w-full max-w-[900px] flex-col gap-4 overflow-y-auto ${
+        tier.w === 'sm' ? 'p-2' : 'p-4'
+      }`}
+    >
       <article className="rounded-md border border-border bg-panel p-3">
         <div className="mb-2 flex items-center gap-2 text-xs text-muted">
           <Avatar user={pr.author} size={18} />

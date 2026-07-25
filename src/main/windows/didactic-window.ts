@@ -25,8 +25,12 @@ import { installExternalLinkGuard } from './external-link-guard'
 
 const DIDACTIC_WINDOW_WIDTH = 1000
 const DIDACTIC_WINDOW_HEIGHT = 900
-const DIDACTIC_WINDOW_MIN_WIDTH = 700
-const DIDACTIC_WINDOW_MIN_HEIGHT = 600
+// Mínimos bajados en F16/T87: con 700x600 esta ventana no entraba como columna
+// en un tiling de tres, que es justo el uso que tiene (dejarla al lado del
+// editor mientras se lee el PR). El contenido es una columna de lectura
+// (`DidacticWindowApp`), así que 520px alcanzan.
+const DIDACTIC_WINDOW_MIN_WIDTH = 520
+const DIDACTIC_WINDOW_MIN_HEIGHT = 420
 
 let didacticWindow: BrowserWindow | null = null
 

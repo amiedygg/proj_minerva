@@ -2,6 +2,7 @@ import { GraduationCap } from 'lucide-react'
 import type { DidacticRouteTarget } from '../../shared/didactic-route'
 import { DidacticAnalysisArea } from './components/didactic/DidacticAnalysisArea'
 import { usePrHeadSha } from './hooks/use-pr-head-sha'
+import { useLayoutTier } from './hooks/use-layout-tier'
 
 interface DidacticWindowAppProps {
   target: DidacticRouteTarget
@@ -28,13 +29,21 @@ export function DidacticWindowApp({ target }: DidacticWindowAppProps): React.JSX
   // `repo`+`number`+`title` en el hash), así que no tiene `headSha` gratis
   // como `DidacticPanel` — un fetch liviano y único al montar lo consigue.
   const { headSha: currentHeadSha } = usePrHeadSha(target.repo, target.number)
+  // F16/T87: esta ventana admite 520px de ancho (tiling de tres columnas), donde
+  // `p-6` + título de 18px desperdiciaban buena parte del renglón.
+  const tier = useLayoutTier()
+  const narrow = tier.w === 'sm'
 
   return (
     <div className="flex h-full flex-col items-center overflow-y-auto bg-bg">
-      <div className="flex w-full max-w-[900px] flex-col gap-3 p-6">
+      <div className={`flex w-full max-w-[900px] flex-col gap-3 ${narrow ? 'p-3' : 'p-6'}`}>
         <header className="flex flex-col gap-0.5 border-b border-border pb-3">
-          <span className="flex items-center gap-2 text-lg font-semibold text-text">
-            <GraduationCap size={20} className="text-accent" />
+          <span
+            className={`flex items-center gap-2 font-semibold text-text ${
+              narrow ? 'text-base' : 'text-lg'
+            }`}
+          >
+            <GraduationCap size={narrow ? 16 : 20} className="shrink-0 text-accent" />
             {target.title ?? prLabel}
           </span>
           <span className="text-xs text-muted">{prLabel}</span>
