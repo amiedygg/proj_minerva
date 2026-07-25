@@ -47,6 +47,50 @@ jobs:
       - name: Test
         run: npm test
 
+  # Suite e2e Playwright (e2e/): lanza la app CONSTRUIDA con mocks y userData
+  # aislado bajo Xvfb. Solo Linux: la suite controla ella misma el ciclo de
+  # vida del proceso Electron (spawn + connectOverCDP, ver e2e/fixtures.ts),
+  # así que no necesita browsers de Playwright ni display real. El spec de
+  # packaged se auto-skipea (aquí no se corre electron-builder).
+  e2e:
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Ubuntu 24.04 restringe user namespaces sin privilegios (AppArmor) y el
+      # sandbox de Electron lanzado desde node_modules muere al arrancar.
+      - name: Allow Electron sandbox (unprivileged userns)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Build (electron-vite)
+        run: npm run build
+
+      - name: E2E (Playwright bajo Xvfb)
+        run: xvfb-run -a -s "-screen 0 1600x1000x24" npx playwright test
+
+      # Las capturas por test son parte de la verificación (CLAUDE.md):
+      # subirlas SIEMPRE, también (sobre todo) cuando la suite falla.
+      - name: Upload test-results (capturas)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-test-results
+          path: test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
   build:
     needs: checks
     strategy:

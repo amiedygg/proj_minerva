@@ -173,14 +173,36 @@ scripts/            smoke-*.mjs (e2e vía CDP), screenshot-app.sh, debug-*.mjs
 9. El snapshot mock se cachea en disco por `headSha` (`userData/snapshots/`): si
    cambias `fixtures-snapshot.ts` hay que borrar el dir del snapshot afectado (y
    reiniciar la app entera: el hot reload de main a veces no re-escribe el árbol).
+10. **E2E: NUNCA volver a `_electron.launch` de Playwright.** Con Electron 43 +
+    Playwright 1.62, `electronApp.close()` se cuelga PARA SIEMPRE en ciertos
+    escenarios (reproducido por bisección el 2026-07-24: escribir al clipboard
+    y cerrar ~2s después; también la didáctica abierta a mitad de streaming)
+    aunque el proceso de Electron salga limpio e inmediato (EXIT 0). El wedge
+    vive en el bookkeeping interno de Playwright: ni SIGKILL, ni destruir los
+    streams stdio, ni `emit('close')`, ni cerrar páginas antes lo destraban, y
+    contamina el teardown del worker (120s + exit 1 en TODA la corrida). Bug
+    upstream cerrado como not-planned (microsoft/playwright#39248). La
+    arquitectura correcta ya está en `e2e/fixtures.ts`: spawn propio de
+    Electron + `--remote-debugging-port=0` + `chromium.connectOverCDP` — misma
+    API de locators/aserciones, teardown = desconexión WS + SIGTERM nuestro
+    (escalada SIGKILL 3s por el shutdown colgante de Chromium bajo Xvfb sin
+    clipboard manager). No re-litigar salvo evidencia de fix upstream probada
+    en una rama aparte.
 
 ## Comandos
 
 - `npm run dev` — Electron con hot reload (main cambia ⇒ reinicio completo).
-- `npm run dev -- -- --remote-debugging-port=9222` — dev + CDP para las suites e2e.
+- `npm run dev -- -- --remote-debugging-port=9222` — dev + CDP para los scripts de
+  depuración (`scripts/debug-*.mjs`, `scripts/screenshot-cdp.mjs`).
 - `npm run build` / `npm run typecheck` / `npm run lint` / `npm test` (vitest).
 - `npm run verify` — typecheck + lint + test encadenados; es el mismo gate que el
   job `checks` de los workflows de CI (pr-dev-builds y release).
+- `npm run test:e2e` — build + suite Playwright (`e2e/`): lanza la app CONSTRUIDA
+  con mocks y userData aislado por test (no necesita la app corriendo ni CDP
+  manual). Sin sesión gráfica (tty/CI): `npm run build && xvfb-run -a -s
+  "-screen 0 1600x1000x24" npx playwright test` (sin `-s` el Xvfb default es
+  640x480x8 y las capturas salen mutiladas). Las capturas por test quedan en
+  `test-results/` — mirarlas sigue siendo parte de la verificación.
 - `MINERVA_MOCK=1 npm run dev` — demo: PRs mock + IA real del proveedor activo (si su
   CLI está autenticado; si no, cae al mock de IA).
 - `MINERVA_MOCK=1 MINERVA_MOCK_AI=1 npm run dev` — demo/e2e 100% determinista: PRs
@@ -190,54 +212,55 @@ scripts/            smoke-*.mjs (e2e vía CDP), screenshot-app.sh, debug-*.mjs
 ## Verificación (obligatoria antes de dar algo por hecho)
 
 1. `typecheck`, `lint` y `npm test` en verde.
-2. Suites e2e vía CDP: app corriendo con `--remote-debugging-port=9222`, luego
-   `node scripts/smoke-<suite>.mjs`. Reglas para escribir/tocar suites:
-   - El target CDP SIEMPRE excluye la ventana didáctica: `!url.includes('#didactic')`.
-   - Limpia el estado global al arrancar: buscador, cache del PR bajo prueba
-     (`ai:invalidateAnalysis`), y panel didáctico (selecciona un PR neutral).
+2. **Suite e2e Playwright** (`e2e/` — LA suite; la migración desde los smoke CDP
+   terminó el 2026-07-25 y los `scripts/smoke-*.mjs` fueron retirados):
+   `npm run test:e2e`, o sin sesión gráfica
+   `npm run build && xvfb-run -a -s "-screen 0 1600x1000x24" npx playwright test`.
+   Lanza la app construida con mocks y userData aislado por test (fixtures en
+   `e2e/fixtures.ts` — ver gotcha 10 sobre por qué usa `connectOverCDP` y no
+   `_electron`; `launchMinerva` acepta env extra y ejecutable alterno). En CI
+   corre como job `e2e` de pr-dev-builds. Dos specs con condición:
+   `packaged.spec.ts` se auto-skipea sin binario (`npm run dist:dir` antes para
+   cubrirlo — un binario VIEJO no sirve: ignoraría `MINERVA_USER_DATA_DIR` y
+   escribiría en el userData real); el paso de modelo inválido de
+   `settings.spec.ts` se auto-skipea sin sesión real de OpenCode.
+   Reglas al escribir specs (heredadas de la era smoke, siguen vigentes):
    - Espera señales inequívocas (botón "Re-analizar" habilitado), no textos que ya
      existen en el placeholder ("Resumen").
-   - Con IA real las secciones varían por corrida: checks de snippet/diagrama con
-     fallback a otro PR. Para suites deterministas lanza la app con
-     `MINERVA_MOCK_AI=1` (fuerza el mock de IA); `smoke-settings` necesita IA real
-     de OpenCode para su paso de modelo inválido (se auto-skipea si no hay sesión).
-   - Verifica **contenido**, no solo URLs o rects: `getBoundingClientRect` ignora el
-     clipping (un visor colapsado a 0px "pasaba" los checks geométricos).
-3. **Verificación visual**: toda verificación de UI termina MIRANDO una captura:
+   - Verifica **contenido**, no solo URLs o rects: un regex laxo sobre el body
+     puede matchear el título del PR en vez del diff ("refunds"), y un visor
+     colapsado a 0px "pasaba" los checks geométricos (usa `toBeVisible`, que
+     exige bounding box real).
+   - No heredes los rituales de limpieza de las suites CDP (buscador, cache,
+     PR neutral): el userData aislado por test los reemplaza por construcción.
+3. **Verificación visual**: toda verificación de UI termina MIRANDO una captura
+   (los tests Playwright ya adjuntan PNG por test en `test-results/` — mirarlos
+   cuenta). Para la app corriendo en dev:
    `scripts/screenshot-app.sh <salida.png> [patrón-título]` (hyprctl + grim, no
    interactivo; 2º argumento para la ventana didáctica). No sirve con hyprlock activo.
 
-### Receta e2e paso a paso (shell de agente / sesión tty)
+### App dev desde un shell de agente / sesión tty
 
-El shell de un agente NO hereda la sesión gráfica de Hyprland: sin estos exports
-Electron muere con "Missing X server or $DISPLAY" y `hyprctl` con
-"HYPRLAND_INSTANCE_SIGNATURE not set". Receta completa, en orden:
+La suite Playwright no necesita nada de esto (corre bajo `xvfb-run`). Esta
+receta es para levantar la app dev de verdad (probar a mano, capturas, scripts
+de depuración): el shell de un agente NO hereda la sesión gráfica de Hyprland —
+sin estos exports Electron muere con "Missing X server or $DISPLAY" y `hyprctl`
+con "HYPRLAND_INSTANCE_SIGNATURE not set".
 
 1. **Arrancar la app** (en background, log a archivo):
 
    ```bash
    WAYLAND_DISPLAY=wayland-1 DISPLAY=:0 \
-     MINERVA_MOCK=1 OPENROUTER_API_KEY= \
+     MINERVA_MOCK=1 MINERVA_MOCK_AI=1 \
      npm run dev -- -- --remote-debugging-port=9222 > /tmp/minerva-dev.log 2>&1 &
    ```
 
-   - `WAYLAND_DISPLAY`/`DISPLAY`: los sockets reales están en
-     `/run/user/$(id -u)/` (`wayland-1`) y `/tmp/.X11-unix/` (`X0`) — verifica ahí
-     si estos valores no funcionan.
-   - `OPENROUTER_API_KEY=` (vacío) fuerza el mock de IA ⇒ suites deterministas.
-     Omítelo solo si la suite necesita IA real.
-   - `MINERVA_WATCH_INTERVAL_MS=1500` extra para `smoke-pr-list` (el caso del
-     watcher espera un push que con el default de 60s haría timeout).
+   Los sockets reales están en `/run/user/$(id -u)/` (`wayland-1`) y
+   `/tmp/.X11-unix/` (`X0`) — verifica ahí si estos valores no funcionan. El
+   target CDP tarda ~10–15 s: `curl -s http://127.0.0.1:9222/json/list` debe
+   listar una `page` con `localhost:5173`.
 
-2. **Esperar el target CDP** (~10–15 s): `curl -s http://127.0.0.1:9222/json/list`
-   debe listar una `page` con `localhost:5173`. Recién entonces correr suites.
-
-3. **Correr las suites**: `node scripts/smoke-<suite>.mjs`. Si encadenas varias en
-   la misma sesión de app, haz `location.reload()` (vía CDP) entre suites: algunas
-   dejan estado global (p. ej. `smoke-search` deja "refunds" en el buscador y
-   `smoke-comments` no limpia al arrancar). El reload resetea el store zustand.
-
-4. **Captura** (verificación visual obligatoria):
+2. **Captura** (verificación visual obligatoria):
 
    ```bash
    export WAYLAND_DISPLAY=wayland-1 \
@@ -249,7 +272,7 @@ Electron muere con "Missing X server or $DISPLAY" y `hyprctl` con
    `/run/user/$(id -u)/hypr/`. Después MIRA la captura (leer el PNG), no basta
    con que el comando salga 0.
 
-5. **Matar la app**: `pkill -f "[e]lectron"` en un comando/llamada SEPARADO y
+3. **Matar la app**: `pkill -f "[e]lectron"` en un comando/llamada SEPARADO y
    solo. Si la app es hija de tu propio shell (la arrancaste con `&` en esa
    sesión), un compound command `pkill ...; git ...` muere entero con exit 144
    antes de ejecutar lo que sigue — el truco del corchete no salva eso.

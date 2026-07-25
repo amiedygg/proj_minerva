@@ -97,8 +97,9 @@ PLAN.md (contexto) ──► TASKS.md (tarea bien descrita, con aceptación y go
 
 ## Lecciones acumuladas (resumen; detalle en la bitácora de TASKS.md)
 
-1. **Verificar siempre, e2e, desde fuera**: suites `scripts/smoke-*.mjs` contra la app
-   real vía CDP. El unit test verde no garantiza nada del flujo completo.
+1. **Verificar siempre, e2e, desde fuera**: la suite Playwright (`e2e/`, antes
+   suites `scripts/smoke-*.mjs` vía CDP — retiradas al completar la migración
+   el 2026-07-25). El unit test verde no garantiza nada del flujo completo.
 2. **Las suites también tienen bugs** — y más seguido que la app. Tres rondas de
    "bugs fantasma" fueron contaminación de estado entre suites, un target CDP que
    apuntaba a la ventana equivocada, y matchers ambiguos.
