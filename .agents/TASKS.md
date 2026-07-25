@@ -3428,7 +3428,11 @@ instalación al salir, check al arrancar + cada 6 h + botón manual,
   Redimensionar es `setViewport` por CDP, nunca `page.setViewportSize()`
   (gotcha 12).
 
-- [ ] **T95. Verificación del update REAL con provider `generic` local** — _orquestador, no subagente_
+- [x] **T95. Verificación del update REAL** — _orquestador_
+  _(hecha contra el feed REAL de GitHub en vez del `generic` local: al existir
+  v0.7.1 publicada ya no hacía falta montar un servidor. Cazó el bug de interop
+  ESM/CJS que tenía el updater MUDO en producción —ver abajo— y, tras el fix,
+  verificó el ciclo completo. Ciclo observado y medido, no inferido.)_
   Probar la mecánica de reemplazo del AppImage **sin quemar releases**:
   `npm run dist` con `version` 0.7.0-rc.1 y luego 0.7.0-rc.2, servir un `dist/`
   con ambos + `latest-linux.yml` desde `python3 -m http.server`, apuntar el
@@ -3585,3 +3589,35 @@ exactamente para lo que existía esa tarea.
   exporta con un getter que no sea el patrón de TypeScript, hay que ir por
   `default`. Y un `catch {}` justificado por "otro ya reporta el error" tiene
   que verificar que ese otro EXISTA en ese punto del flujo.
+
+### T95 — cierre: el ciclo real, medido de punta a punta (2026-07-25)
+
+Con v0.7.1 publicada y el fix del interop en ambos lados, se ejercitó el ciclo
+completo con una AppImage empaquetada de verdad (`npm run dist` en 0.7.0, es
+decir una versión MENOR que la publicada) corriendo bajo Xvfb contra el feed
+real de GitHub:
+
+| paso | evidencia |
+|---|---|
+| detecta | `{"phase":"available","info":{"version":"0.7.1","releaseUrl":"…/releases/tag/v0.7.1"}}` — la URL la construyó main, no vino del feed |
+| descarga | **diferencial**: `Full: 134,513.25 KB, To download: 144.66 KB (0%)` por rangos de bytes. El blockmap embebido en el AppImage funciona |
+| instala al salir | `Auto install update on quit` + `Install: isSilent: true, isForceRunAfter: false` |
+| reemplaza el binario | `Minerva-0.7.0.AppImage` desaparece y queda `Minerva-0.7.1.AppImage` (AppImageUpdater RENOMBRA al nombre de la versión nueva) |
+| integridad | sha512 del archivo resultante == el publicado en `latest-linux.yml` |
+| arranca actualizado | la nueva instancia reporta `0.7.1` y su chequeo devuelve `idle` con `lastCheckedAt` |
+
+Dos gotchas nuevos, ambos de método:
+
+- **`pkill`/SIGTERM NO dispara la instalación al salir.** El primer intento
+  mató el proceso y el archivo quedó intacto: `autoInstallOnAppQuit` cuelga del
+  evento `quit` de Electron, que un SIGTERM se saltea. Hay que cerrar la
+  VENTANA (acá: `curl .../json/close/<target>` por CDP → `window-all-closed` →
+  `app.quit()`). Si alguna vez esto "no anda", primero comprobar que la app se
+  cerró de verdad y no que la mataron.
+- **Un sufijo de prerelease define un CANAL en electron-updater.** El primer
+  build de prueba fue `0.7.1-t95.0` y el chequeo murió con `No published
+  versions on GitHub`: la versión instalada tenía canal `t95` y no hay
+  releases en ese canal. Con `allowPrerelease: true` esto tiene una
+  consecuencia REAL de producto: quien instale un `X.Y.Z-rc.N` se queda en el
+  canal `rc` y NO recibe la estable `X.Y.Z` automáticamente. Para probar
+  contra el canal estable hay que versionar la prueba sin sufijo.
