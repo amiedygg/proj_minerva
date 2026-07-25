@@ -104,12 +104,44 @@ function toUpdateInfoLite(info: UpdateInfo): UpdateInfoLite | undefined {
   return { version: info.version, releaseUrl, releaseDate: info.releaseDate }
 }
 
+/**
+ * Saca `autoUpdater` del módulo `electron-updater` contemplando el interop
+ * ESM/CJS. **No es defensa paranoica: sin esto el updater real no funciona.**
+ *
+ * `electron-updater` es CommonJS y exporta `autoUpdater` con
+ * `Object.defineProperty(exports, 'autoUpdater', { get: () => ... })` — un
+ * getter con ARROW FUNCTION, definido al final del módulo. `cjs-module-lexer`
+ * (lo que usa Node para derivar los exports nombrados de un CJS importado
+ * desde ESM) reconoce el patrón que emite TypeScript
+ * (`get: function () { return X }`) pero NO ese, así que al importarlo desde
+ * nuestro bundle de main —que es ESM— `mod.autoUpdater` llega `undefined` y
+ * el objeto solo existe colgado de `mod.default`. El resto de los exports
+ * (`AppUpdater`, `NsisUpdater`, …) sí se detectan; el único roto es
+ * justamente el que necesitamos.
+ *
+ * Verificado a mano contra electron-updater 6.8.9 corriendo bajo Electron 43:
+ * `typeof mod.autoUpdater === 'undefined'` y `typeof mod.default.autoUpdater
+ * === 'object'`. Sin este fallback, `instance.autoDownload = false` lanzaba un
+ * TypeError que el `catch` de `realCheckNow` se tragaba: el updater quedaba
+ * MUDO en producción (v0.7.0) mientras dev y toda la suite e2e seguían en
+ * verde, porque ahí el camino real nunca se ejecuta (`disabled` o mock).
+ */
+export function resolveAutoUpdaterExport(mod: ElectronUpdaterModule): AppUpdaterInstance {
+  const named = mod.autoUpdater
+  if (named) return named
+  const fromDefault = (mod as { default?: ElectronUpdaterModule }).default?.autoUpdater
+  if (fromDefault) return fromDefault
+  throw new Error(
+    'electron-updater no expuso `autoUpdater` ni como export nombrado ni en `default`; el auto-update no puede inicializarse.',
+  )
+}
+
 /** Wiring de `electron-updater` (una sola vez, perezoso — ver comentario del módulo). */
 async function ensureRealAutoUpdater(): Promise<AppUpdaterInstance> {
   if (realAutoUpdater) return realAutoUpdater
 
   const mod = await import('electron-updater')
-  const instance = mod.autoUpdater
+  const instance = resolveAutoUpdaterExport(mod)
   instance.autoDownload = false
   instance.autoInstallOnAppQuit = true
   instance.allowPrerelease = ALLOW_PRERELEASE
@@ -167,8 +199,18 @@ async function ensureRealAutoUpdater(): Promise<AppUpdaterInstance> {
 
 async function realCheckNow(): Promise<void> {
   if (capability.mode === 'disabled') return
+  let instance: AppUpdaterInstance
   try {
-    const instance = await ensureRealAutoUpdater()
+    instance = await ensureRealAutoUpdater()
+  } catch (error) {
+    // El SETUP falla ANTES de que exista el listener 'error' (import roto,
+    // interop ESM/CJS, wiring). Nadie más va a transicionar el estado, así que
+    // se hace acá: tragárselo dejaba el updater mudo para siempre — fue
+    // exactamente el bug de v0.7.0 (ver `resolveAutoUpdaterExport`).
+    setStatus({ phase: 'error', message: displayMessage(error), lastCheckedAt })
+    return
+  }
+  try {
     await instance.checkForUpdates()
   } catch {
     // El listener 'error' de arriba ya transicionó el estado y emitió el
@@ -185,11 +227,19 @@ async function realDownload(): Promise<void> {
   // seguro en esos modos, sin importar qué dispare la llamada.
   if (capability.mode !== 'auto') return
   if (status.phase !== 'available') return
+  let instance: AppUpdaterInstance
   try {
-    const instance = await ensureRealAutoUpdater()
+    instance = await ensureRealAutoUpdater()
+  } catch (error) {
+    // Idem `realCheckNow`: si el setup falla no hay listener 'error' que
+    // pueda reportarlo, así que el estado se transiciona acá.
+    setStatus({ phase: 'error', message: displayMessage(error), lastCheckedAt })
+    return
+  }
+  try {
     await instance.downloadUpdate()
   } catch {
-    // Idem `realCheckNow`: el listener 'error' ya dejó el estado correcto.
+    // Acá SÍ: el listener 'error' ya dejó el estado correcto.
   }
 }
 
