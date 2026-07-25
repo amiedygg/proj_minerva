@@ -1,12 +1,11 @@
 import { defineConfig } from '@playwright/test'
 
 /**
- * E2E con Playwright + soporte Electron (_electron): cada test lanza la app
- * CONSTRUIDA (out/) con GitHub e IA mock y un userData aislado — ver
- * `e2e/fixtures.ts`. Correr con `npm run test:e2e` (hace el build antes).
- *
- * Convive con las suites smoke legacy de `scripts/smoke-*.mjs` (CDP a mano
- * contra la app dev) mientras dura la migración incremental.
+ * E2E con Playwright: cada test lanza la app CONSTRUIDA (out/) con GitHub e
+ * IA mock y un userData aislado — ver `e2e/fixtures.ts` (spawn propio +
+ * connectOverCDP, NO _electron: gotcha 10 de CLAUDE.md). Correr con
+ * `npm run test:e2e` (hace el build antes). Única suite e2e desde 2026-07-25
+ * (las smoke CDP legacy fueron retiradas al completar la migración).
  */
 export default defineConfig({
   testDir: './e2e',

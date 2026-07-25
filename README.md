@@ -98,11 +98,12 @@ npm run build
 ## 🧪 Desarrollo y verificación
 
 - **Unit tests**: `npm test` (vitest).
-- **Suites e2e** (contra la app corriendo): arranca con
-  `MINERVA_MOCK=1 npm run dev -- -- --remote-debugging-port=9222` y corre
-  `node scripts/smoke-<suite>.mjs` (e2e, diff, comments, search, streaming, settings,
-  didactic, detach, bugfixes). Las reglas para escribir suites sin falsos positivos
-  están en `CLAUDE.md` § Verificación.
+- **Suite e2e** (Playwright, `e2e/`): `npm run test:e2e` — lanza la app
+  construida con datos mock y userData aislado por test; no necesita la app
+  corriendo. Sin sesión gráfica:
+  `npm run build && xvfb-run -a -s "-screen 0 1600x1000x24" npx playwright test`.
+  Las reglas para escribir specs sin falsos positivos están en
+  `CLAUDE.md` § Verificación.
 - **Verificación visual**: `scripts/screenshot-app.sh salida.png` captura la ventana
   de la app (hyprctl + grim) — toda verificación de UI termina mirando una captura.
 - **Flujo multi-agente** (orquestador Fable 5 + subagentes Sonnet 5, planes y control
@@ -133,9 +134,9 @@ npm run build
 - En sistemas sin `libfuse.so.2` (Arch trae fuse3): correr el AppImage con
   `--appimage-extract-and-run`, instalar el paquete `fuse2`, o usar
   `dist/linux-unpacked/minerva` directo.
-- Verificación del empaquetado: `MINERVA_MOCK=1 ./dist/Minerva-<v>.AppImage
-  --appimage-extract-and-run --remote-debugging-port=5175` y en otra terminal
-  `node scripts/smoke-packaged.mjs captura.png`.
+- Verificación del empaquetado: `npm run dist:dir` y luego la suite e2e — el
+  spec `e2e/packaged.spec.ts` lanza el binario de `dist/linux-unpacked/` con
+  mocks (se auto-skipea si el binario no existe).
 - **Release multi-OS**: al publicar un release en GitHub, el workflow
   `.github/workflows/release.yml` construye AppImage (Linux), instalador NSIS
   (Windows x64) y DMG (macOS arm64+x64) en runners hosteados de GitHub

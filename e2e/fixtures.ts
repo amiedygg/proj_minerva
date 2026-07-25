@@ -24,6 +24,22 @@ export interface MinervaApp {
   context: BrowserContext
 }
 
+export interface LaunchOptions {
+  /**
+   * Env extra mezclado SOBRE el default del fixture. Un valor `undefined`
+   * BORRA la variable (p. ej. `{ MINERVA_MOCK_AI: undefined }` lanza con IA
+   * real del proveedor activo — lo usa el paso condicional de settings).
+   */
+  env?: Record<string, string | undefined>
+  /** Ejecutable alterno (p. ej. el binario empaquetado de dist/). Default: el Electron de node_modules. */
+  executable?: string
+  /**
+   * Args ANTES de `--remote-debugging-port=0`. Default `['out/main/index.js']`;
+   * el binario empaquetado no lleva script (pasar `[]`).
+   */
+  args?: string[]
+}
+
 /**
  * Lanza la app construida (`out/main/index.js`; el script `test:e2e` corre
  * `electron-vite build` antes) y conecta Playwright por CDP.
@@ -44,16 +60,28 @@ export interface MinervaApp {
  *   de CERO en cada test y no pisan el userData real — reemplaza toda la
  *   limpieza manual de estado que las suites CDP hacían al arrancar.
  */
-export async function launchMinerva(userDataDir: string): Promise<MinervaApp> {
-  const proc = spawn(electronPath, ['out/main/index.js', '--remote-debugging-port=0'], {
-    env: {
-      ...process.env,
-      MINERVA_MOCK: '1',
-      MINERVA_MOCK_AI: '1',
-      MINERVA_USER_DATA_DIR: userDataDir,
+export async function launchMinerva(
+  userDataDir: string,
+  opts: LaunchOptions = {},
+): Promise<MinervaApp> {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    MINERVA_MOCK: '1',
+    MINERVA_MOCK_AI: '1',
+    MINERVA_USER_DATA_DIR: userDataDir,
+    ...opts.env,
+  }
+  for (const key of Object.keys(env)) {
+    if (env[key] === undefined) delete env[key]
+  }
+  const proc = spawn(
+    opts.executable ?? electronPath,
+    [...(opts.args ?? ['out/main/index.js']), '--remote-debugging-port=0'],
+    {
+      env: env as NodeJS.ProcessEnv,
+      stdio: ['ignore', 'ignore', 'pipe'],
     },
-    stdio: ['ignore', 'ignore', 'pipe'],
-  })
+  )
   const wsEndpoint = await new Promise<string>((resolve, reject) => {
     let buf = ''
     const onData = (d: Buffer) => {

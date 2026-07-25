@@ -13,7 +13,8 @@ import { Badge } from '../ui/Badge'
  * reemplaza el botón cuadrado de solo-icono para que la config vigente sea
  * visible SIN abrir el modal (pedido de Edilson, ver `PLAN.md` § F12).
  * SIEMPRE mantiene el icono `Settings` de `lucide-react` DENTRO del botón —
- * `smoke-settings.mjs` localiza el engrane por `svg.lucide-settings`, no
+ * los specs e2e (`e2e/settings.spec.ts`, `e2e/github-mode.spec.ts`) localizan
+ * el engrane por `svg.lucide-settings`, no
  * puede sacarse de acá — y agrega el texto recién cuando `useSettings().info`
  * ya cargó (antes de eso solo el icono, igual que el `IconButton` viejo).
  *

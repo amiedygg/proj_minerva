@@ -2977,25 +2977,35 @@ mermaid.parse NO se agenda por ahora. Docs: CLAUDE.md (sección cloud + gotchas
 ## E2E Playwright (2026-07-24/25, rama feature/playwright-e2e)
 
 Migración del smoke testing a Playwright manteniendo checks y capturas.
-Suite en `e2e/` (9 specs, 18 tests, 18/18 verde bajo Xvfb en ~3.5m, EXIT=0):
-didactic, search, diff, comments, copy-url, streaming, analysis-cache,
-detach, cloud-section, persistence. Los scripts legacy siguen intactos.
+**MIGRACIÓN COMPLETA (2026-07-25)**: suite en `e2e/` con 17 specs / 32 tests,
+32/32 verde bajo Xvfb en ~7.4m. Los `scripts/smoke-*.mjs` fueron RETIRADOS
+(quedan solo `debug-*.mjs`, `screenshot-*` y `watch-auth.mjs`).
 
 - [x] Gate `npm run verify` + job `checks` en pr-dev-builds/release (PR #17)
 - [x] Fixture `connectOverCDP` + specs núcleo (commits 98c3f2e/40e33e0)
-- [ ] Portar smoke-e2e (comentario general end-to-end; el resto ya cubierto)
-- [ ] Portar smoke-settings (modal Settings; paso de modelo inválido necesita
-      OpenCode real ⇒ test.skip condicional)
-- [ ] Portar smoke-pr-list (watcher: parametrizar env del fixture con
-      MINERVA_WATCH_INTERVAL_MS=1500)
-- [ ] Portar smoke-github-mode (F14: settings gh-cli; partes con gh real ⇒
-      skip condicional)
-- [ ] Portar smoke-f9-ui (banner generatedWith/staleness)
-- [ ] Portar smoke-bugfixes (triar qué regresiones siguen vigentes)
-- [ ] Portar smoke-harness-activity (buffer activity en eventos de progreso)
-- [ ] Portar smoke-packaged (parametrizar launchMinerva al binario de dist/)
-- [ ] Job `e2e` en pr-dev-builds.yml (xvfb-run tras el gate checks)
-- [ ] Al terminar: retirar scripts legacy portados y su sección en CLAUDE.md
+- [x] Portar smoke-e2e → `general-comment.spec.ts` (solo el comentario
+      general; el resto ya estaba cubierto)
+- [x] Portar smoke-settings → `settings.spec.ts` (contrato IPC + modal F12;
+      el paso de modelo inválido lanza SIN `MINERVA_MOCK_AI` y se
+      auto-skipea si opencode no está authenticated)
+- [x] Portar smoke-pr-list → `pr-list.spec.ts` (watcher con
+      `MINERVA_WATCH_INTERVAL_MS=1500` vía `LaunchOptions.env`)
+- [x] Portar smoke-github-mode → `github-mode.spec.ts` (probe de gh REAL;
+      los checks aceptan los 3 estados válidos ⇒ sin skip)
+- [x] Portar smoke-f9-ui → `f9-ui.spec.ts` (banner sellado; staleness
+      sembrada por el test reescribiendo `analyses.json` entre lanzamientos —
+      ya no necesita seeding manual del orquestador)
+- [x] Portar smoke-bugfixes → `bugfixes.spec.ts` (triado: markdown, botones
+      de snippet y CSP; el visor NO se duplicó — ya lo cubre detach.spec)
+- [x] Portar smoke-harness-activity → `harness-activity.spec.ts`
+- [x] Portar smoke-packaged → `packaged.spec.ts` (`LaunchOptions.executable`
+      → `dist/linux-unpacked/minerva`; auto-skip si no hay binario)
+- [x] `LaunchOptions` en `launchMinerva` (env extra con borrado por
+      `undefined`, ejecutable y args alternos)
+- [x] Job `e2e` en pr-dev-builds.yml (xvfb-run tras el gate checks; sube
+      `test-results/` como artifact SIEMPRE, también en rojo)
+- [x] Retirados los scripts legacy + docs (CLAUDE.md §Verificación y receta,
+      README §Desarrollo y §Empaquetado, WORKFLOW.md lección 1)
 
 ### Bitácora — gotchas
 
@@ -3021,3 +3031,22 @@ detach, cloud-section, persistence. Los scripts legacy siguen intactos.
   setPath antes de whenReady) reemplaza TODA la limpieza de estado que las
   suites CDP legacy hacían a mano (buscador, invalidateAnalysis, PR neutral) —
   los specs nuevos no deben heredar esos rituales.
+- **Un binario empaquetado VIEJO invalida packaged.spec en silencio**: el
+  dist/linux-unpacked/ de la máquina era de antes de `MINERVA_USER_DATA_DIR`
+  ⇒ habría corrido contra el userData REAL (sin aislamiento y escribiéndolo).
+  El spec no puede detectar la antigüedad del binario: correr `npm run
+  dist:dir` antes de confiar en ese spec (en CI ni se intenta: auto-skip).
+- **Regex laxo sobre el body matchea el título del PR**: el check del tab
+  Archivos con `/migrations|refunds/` pasaba SIN diff porque el título del
+  #479 contiene "refunds" (se vio en la captura: "Cargando archivos…" con el
+  test verde). Señal correcta: un nombre de archivo del fixture
+  (`2026070401_create_refunds.sql`).
+- **Nombre accesible duplicado "Actualizar"**: el botón de la barra de
+  staleness colisiona con el refresh de la lista (aside) en modo estricto de
+  Playwright — escopar al contenedor (`div` más interno con el texto del
+  aviso) antes del `getByRole`.
+- **Colas de la migración**: `e2e/` se lintea (eslint.config.js) pero NO entra
+  a ningún tsconfig del typecheck — Playwright transpila al vuelo; los tipos
+  de los specs solo los valida el editor. El paso de "modelo inválido" de
+  settings.spec.ts SÍ corre entero en esta máquina (opencode authenticated,
+  ~50 s de análisis real rechazado).
