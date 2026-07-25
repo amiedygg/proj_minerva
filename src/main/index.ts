@@ -12,6 +12,14 @@ import { hydratePathFromLoginShell } from './system/shell-path'
 
 const isDev = !app.isPackaged
 
+// Aislamiento para e2e (Playwright): un userData alternativo evita que los
+// tests pisen settings/cache/snapshots reales y arranca cada corrida desde
+// cero. Debe correr ANTES de `app.whenReady()` (todas las lecturas de
+// `app.getPath('userData')` en main son lazy, dentro de funciones).
+if (process.env.MINERVA_USER_DATA_DIR) {
+  app.setPath('userData', process.env.MINERVA_USER_DATA_DIR)
+}
+
 /**
  * Password store de Chromium en Linux: en desktops que Chromium NO reconoce
  * (Hyprland/sway/wlroots en general, p. ej. Omarchy) cae a `basic_text`, con

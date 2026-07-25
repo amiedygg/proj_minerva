@@ -1,0 +1,93 @@
+import { test, expect } from './fixtures'
+import type { Page } from './fixtures'
+
+/**
+ * Port piloto de `scripts/smoke-didactic.mjs` a Playwright.
+ *
+ * Diferencias deliberadas con la suite CDP legacy:
+ * - Cada test lanza SU app con userData limpio ⇒ no hay que limpiar buscador,
+ *   invalidar cache ni seleccionar un PR neutral: el placeholder está
+ *   garantizado por construcción.
+ * - Las esperas son aserciones auto-wait (`toBeEnabled`, `toBeVisible`), no
+ *   sleeps: `toBeVisible` exige bounding box no vacío, así que el bug del
+ *   visor colapsado a 0px que engañaba a getBoundingClientRect aquí FALLA.
+ * - Cada test adjunta una captura como artifact (verificación visual).
+ */
+
+/** Selecciona un PR por título y lanza el análisis didáctico. */
+async function analyze(window: Page, prTitle: string): Promise<void> {
+  await window.getByText(prTitle).first().click()
+  await window.getByRole('button', { name: 'Analizar PR' }).click()
+  // Señal inequívoca de término (regla de la suite legacy): "Re-analizar"
+  // solo existe con resultado y está deshabilitado mientras carga. NO esperar
+  // por "Resumen": el placeholder ya dice "Resumen didáctico del cambio".
+  await expect(window.getByRole('button', { name: /Re-?analizar/i })).toBeEnabled({
+    timeout: 90_000,
+  })
+}
+
+async function attachScreenshot(window: Page, testInfo: { outputPath(name: string): string; attach(name: string, opts: { path: string; contentType: string }): Promise<void> }, name: string): Promise<void> {
+  const path = testInfo.outputPath(name + '.png')
+  await window.screenshot({ path, fullPage: false })
+  await testInfo.attach(name, { path, contentType: 'image/png' })
+}
+
+const setupCard = (window: Page) =>
+  window
+    .locator('section')
+    .filter({ has: window.locator('header', { hasText: 'Cómo levantar la app' }) })
+
+test('PR #482: resumen, endpoint con snippet y diagrama C4', async ({ window }, testInfo) => {
+  await analyze(window, 'Add POST /carts/:id/apply-coupon')
+
+  await expect(window.getByText('Resumen').first()).toBeVisible()
+  // Sección de endpoint: snippet curl copiable.
+  await expect(window.locator('pre', { hasText: 'curl' }).first()).toBeVisible()
+  await expect(window.getByRole('button', { name: /Copiar/ }).first()).toBeVisible()
+  // Diagrama mermaid renderizado como SVG (render lazy ⇒ timeout de expect).
+  await expect(window.locator('svg[aria-roledescription]').first()).toBeVisible()
+
+  // Card "Cómo levantar la app" (T20): env vars nuevas + snippets copiables.
+  // El check del env var es estricto contra la fixture — válido porque la IA
+  // es SIEMPRE mock aquí (MINERVA_MOCK_AI=1 en el fixture).
+  const card = setupCard(window)
+  await expect(card).toBeVisible()
+  await expect(card.getByText('COUPON_MAX_DISCOUNT_RATE').first()).toBeVisible()
+  expect(await card.locator('pre').count()).toBeGreaterThanOrEqual(1)
+  await expect(card.getByRole('button', { name: /Copiar/ }).first()).toBeVisible()
+
+  await attachScreenshot(window, testInfo, 'pr-482-didactic')
+})
+
+test('PR #479: esquema con diagrama ER y setup sin env vars', async ({ window }, testInfo) => {
+  await analyze(window, 'Add refunds table and migration')
+
+  await expect(window.getByText('refunds').first()).toBeVisible()
+  await expect(
+    window.locator('svg[aria-roledescription="er"], svg[id*="mermaid"]').first(),
+  ).toBeVisible()
+
+  // Caso contrario de T20: la sección setup declara explícitamente que el PR
+  // NO agrega variables de entorno (nunca debe omitir ese dato).
+  const card = setupCard(window)
+  await expect(card).toBeVisible()
+  await expect(card.getByText('no agrega ni cambia variables de entorno')).toBeVisible()
+
+  await attachScreenshot(window, testInfo, 'pr-479-didactic')
+})
+
+test('PR #201: sección de arquitectura con diagrama', async ({ window }, testInfo) => {
+  await analyze(window, 'Refactor checkout state machine')
+
+  await expect(window.getByText('Arquitectura').first()).toBeVisible()
+  await expect(window.locator('svg[aria-roledescription]').first()).toBeVisible()
+
+  await attachScreenshot(window, testInfo, 'pr-201-didactic')
+})
+
+test('cambiar de PR resetea el panel al placeholder', async ({ window }) => {
+  await analyze(window, 'Add POST /carts/:id/apply-coupon')
+  await window.getByText('Add dark mode toggle').first().click()
+  // El remount por key debe volver al placeholder con el botón de análisis.
+  await expect(window.getByRole('button', { name: 'Analizar PR' })).toBeVisible()
+})
