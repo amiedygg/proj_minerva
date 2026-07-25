@@ -1,6 +1,6 @@
 {
   "name": "proj-minerva",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Revisa Pull Requests de GitHub y entiendelos de verdad antes de aprobarlos.",
   "private": true,
   "type": "module",
@@ -17,6 +17,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test": "vitest run",
+    "verify": "npm run typecheck && npm run lint && npm test",
     "dist": "electron-vite build && electron-builder --linux",
     "dist:dir": "electron-vite build && electron-builder --linux dir"
   },
