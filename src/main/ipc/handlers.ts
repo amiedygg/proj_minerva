@@ -103,6 +103,9 @@ export async function registerIpcHandlers(): Promise<{ stopPrWatcher: () => void
   handle('auth:getStatus', () => authManager.getStatus())
   handle('auth:startDeviceFlow', () => authManager.startDeviceFlow())
   handle('auth:signOut', () => authManager.signOut())
+  // Cuentas de `gh` para el selector de Settings (F18). Lectura pura y
+  // cacheada (TTL 5s) en `ghCliAuth`; solo logins, nunca tokens.
+  handle('auth:listGhAccounts', () => ghCliAuth.listAccounts())
 
   const githubService = createGithubService()
   // `unread` (T51, F10) se decora ACÁ, en el handler — no en el servicio: los
@@ -357,18 +360,17 @@ export async function registerIpcHandlers(): Promise<{ stopPrWatcher: () => void
     return getAiSettingsInfo()
   })
 
-  // Modo de acceso a GitHub (F14, v0.5.0): persiste el modo, cancela un
-  // device flow oauth que hubiera quedado a mitad de camino si el modo nuevo
-  // es `gh-cli` (huérfano — la UI ya cambió de modo, nadie lo va a
-  // completar), calienta el probe de `gh` (así la UI ve el estado fresco de
-  // inmediato en vez de esperar al próximo poll) y responde el mismo
-  // `AiSettingsInfo` agregado que los canales `settings:set*` de IA.
-  handle('settings:setGithubAccessMode', async (req) => {
-    settingsStore.setGithubAccessMode(req.mode)
-    if (req.mode === 'gh-cli') {
-      authManager.cancelDeviceFlowIfPending()
-      await ghCliAuth.getStatus()
-    }
+  // Cuenta de `gh` a usar (F18): persiste el login elegido (`null` = seguir
+  // la cuenta activa del CLI), TIRA las caches del puente de token — sin esto
+  // el `getStatus()` siguiente serviría el probe de la cuenta anterior por
+  // hasta 5s, y peor, `getToken()` seguiría entregando su token a la ruta de
+  // datos — y calienta el probe con la cuenta nueva, para que la UI vea el
+  // resultado sin esperar al próximo poll. Responde el mismo `AiSettingsInfo`
+  // agregado que los canales `settings:set*` de IA.
+  handle('settings:setGithubAccount', async (req) => {
+    settingsStore.setGithubAccount(req.login)
+    ghCliAuth.invalidate()
+    await ghCliAuth.getStatus()
     return getAiSettingsInfo()
   })
 

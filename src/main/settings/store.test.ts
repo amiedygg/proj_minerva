@@ -35,10 +35,15 @@ function orphanedOpenRouterKeyFilePath(): string {
 describe('SettingsStore', () => {
   beforeEach(() => {
     userDataDir = mkdtempSync(join(tmpdir(), 'minerva-settings-test-'))
+    // F18: `getGithubAccessMode()` lee el entorno, no el disco. Se limpia acá
+    // para que un `MINERVA_GITHUB_ACCESS` del shell que corre los tests (o el
+    // que dejó puesto un test anterior) no cambie el resultado.
+    delete process.env.MINERVA_GITHUB_ACCESS
   })
 
   afterEach(() => {
     rmSync(userDataDir, { recursive: true, force: true })
+    delete process.env.MINERVA_GITHUB_ACCESS
   })
 
   it('devuelve null si no hay settings.json (defaults, sin crashear)', () => {
@@ -395,38 +400,39 @@ describe('SettingsStore', () => {
     })
   })
 
-  describe('githubAccessMode (F14)', () => {
-    it('default "oauth" cuando no hay nada persistido', () => {
-      const store = new SettingsStore()
-      expect(store.getGithubAccessMode()).toBe('oauth')
+  describe('githubAccessMode (F14, redefinido en F18)', () => {
+    // F18 retiró el toggle de Settings: el modo ya no se persiste, lo decide
+    // el entorno. `MINERVA_GITHUB_ACCESS` se limpia en el `beforeEach` global
+    // de este archivo (ver arriba) y cada test que lo necesita lo pone.
+    it('default "gh-cli" cuando no hay env que lo fuerce', () => {
+      expect(new SettingsStore().getGithubAccessMode()).toBe('gh-cli')
     })
 
-    it('roundtrip: setGithubAccessMode + getGithubAccessMode en la misma instancia (cache)', () => {
-      const store = new SettingsStore()
-      store.setGithubAccessMode('gh-cli')
-      expect(store.getGithubAccessMode()).toBe('gh-cli')
+    it('MINERVA_GITHUB_ACCESS=oauth fuerza el escape hatch', () => {
+      process.env.MINERVA_GITHUB_ACCESS = 'oauth'
+      expect(new SettingsStore().getGithubAccessMode()).toBe('oauth')
     })
 
-    it('roundtrip tras "reinicio": una instancia nueva lee el modo persistido', () => {
-      new SettingsStore().setGithubAccessMode('gh-cli')
-
-      const restarted = new SettingsStore()
-      expect(restarted.getGithubAccessMode()).toBe('gh-cli')
+    it('un valor de env fuera de la whitelist se ignora (cae al default)', () => {
+      process.env.MINERVA_GITHUB_ACCESS = 'ssh-key'
+      expect(new SettingsStore().getGithubAccessMode()).toBe('gh-cli')
     })
 
-    it('un settings.json de la forma pre-F14 (sin "githubAccessMode") se lee OK, con default "oauth"', () => {
+    it('IGNORA un githubAccessMode persistido por una versión ≤0.6.x, pero no invalida el archivo', () => {
       writeFileSync(
         settingsFilePath(),
-        JSON.stringify({ aiProvider: 'opencode', models: { opencode: 'opencode/big-pickle' } }),
+        JSON.stringify({
+          aiProvider: 'opencode',
+          models: { opencode: 'opencode/big-pickle' },
+          githubAccessMode: 'oauth',
+        }),
         'utf-8',
       )
 
       const store = new SettingsStore()
-      expect(store.getGithubAccessMode()).toBe('oauth')
-      expect(store.getPersistedSettings()).toEqual({
-        aiProvider: 'opencode',
-        models: { opencode: 'opencode/big-pickle' },
-      })
+      expect(store.getGithubAccessMode()).toBe('gh-cli')
+      // El resto de los settings de ese archivo se siguen leyendo.
+      expect(store.getPersistedModel('opencode')).toBe('opencode/big-pickle')
     })
 
     it('devuelve null si "githubAccessMode" tiene un valor fuera de la whitelist (settings.json corrupto/editado a mano)', () => {
@@ -442,53 +448,122 @@ describe('SettingsStore', () => {
       expect(new SettingsStore().getPersistedSettings()).toBeNull()
     })
 
-    it('setAiProvider NO pisa un githubAccessMode ya guardado', () => {
-      const store = new SettingsStore()
-      store.setGithubAccessMode('gh-cli')
-      store.setAiProvider('claude-code')
+    it('deja de escribir githubAccessMode: la clave vieja desaparece en la próxima escritura', () => {
+      writeFileSync(
+        settingsFilePath(),
+        JSON.stringify({ aiProvider: 'opencode', models: {}, githubAccessMode: 'gh-cli' }),
+        'utf-8',
+      )
 
-      expect(store.getGithubAccessMode()).toBe('gh-cli')
+      new SettingsStore().setAiProvider('claude-code')
+
+      expect(JSON.parse(readFileSync(settingsFilePath(), 'utf-8'))).not.toHaveProperty(
+        'githubAccessMode',
+      )
+    })
+  })
+
+  describe('githubAccount (F18)', () => {
+    it('default null cuando no hay nada persistido', () => {
+      expect(new SettingsStore().getGithubAccount()).toBeNull()
+    })
+
+    it('roundtrip: setGithubAccount + getGithubAccount en la misma instancia (cache)', () => {
+      const store = new SettingsStore()
+      store.setGithubAccount('octocat')
+      expect(store.getGithubAccount()).toBe('octocat')
+    })
+
+    it('roundtrip tras "reinicio": una instancia nueva lee la cuenta persistida', () => {
+      new SettingsStore().setGithubAccount('octocat')
+      expect(new SettingsStore().getGithubAccount()).toBe('octocat')
+    })
+
+    it('setGithubAccount(null) borra la clave y vuelve a "la cuenta activa de gh"', () => {
+      const store = new SettingsStore()
+      store.setGithubAccount('octocat')
+      store.setGithubAccount(null)
+
+      expect(store.getGithubAccount()).toBeNull()
+      expect(JSON.parse(readFileSync(settingsFilePath(), 'utf-8'))).not.toHaveProperty(
+        'githubAccount',
+      )
+    })
+
+    it('un settings.json pre-F18 (sin "githubAccount") se lee OK, con default null', () => {
+      writeFileSync(
+        settingsFilePath(),
+        JSON.stringify({ aiProvider: 'opencode', models: { opencode: 'opencode/big-pickle' } }),
+        'utf-8',
+      )
+
+      const store = new SettingsStore()
+      expect(store.getGithubAccount()).toBeNull()
       expect(store.getPersistedSettings()).toEqual({
-        aiProvider: 'claude-code',
-        models: {},
-        githubAccessMode: 'gh-cli',
+        aiProvider: 'opencode',
+        models: { opencode: 'opencode/big-pickle' },
       })
     })
 
-    it('setProviderModel NO pisa un githubAccessMode ya guardado', () => {
+    it('devuelve null si "githubAccount" no es un login usable (settings.json editado a mano)', () => {
+      writeFileSync(
+        settingsFilePath(),
+        JSON.stringify({ aiProvider: 'opencode', models: {}, githubAccount: 'con espacios' }),
+        'utf-8',
+      )
+      expect(new SettingsStore().getPersistedSettings()).toBeNull()
+    })
+
+    // El gotcha de F14 que F18 hereda con otra clave: los setters construyen
+    // el objeto persistido A MANO, así que cada uno debe arrastrar
+    // `githubAccount` o lo borraría en silencio.
+    it('setAiProvider NO pisa un githubAccount ya guardado', () => {
       const store = new SettingsStore()
-      store.setGithubAccessMode('gh-cli')
+      store.setGithubAccount('octocat')
+      store.setAiProvider('claude-code')
+
+      expect(store.getGithubAccount()).toBe('octocat')
+      expect(store.getPersistedSettings()).toEqual({
+        aiProvider: 'claude-code',
+        models: {},
+        githubAccount: 'octocat',
+      })
+    })
+
+    it('setProviderModel NO pisa un githubAccount ya guardado', () => {
+      const store = new SettingsStore()
+      store.setGithubAccount('octocat')
       store.setProviderModel('codex', 'gpt-5.5-codex')
 
-      expect(store.getGithubAccessMode()).toBe('gh-cli')
+      expect(store.getGithubAccount()).toBe('octocat')
     })
 
-    it('setModelOption NO pisa un githubAccessMode ya guardado', () => {
+    it('setModelOption NO pisa un githubAccount ya guardado', () => {
       const store = new SettingsStore()
-      store.setGithubAccessMode('gh-cli')
+      store.setGithubAccount('octocat')
       store.setModelOption('codex', 'effort', 'high')
 
-      expect(store.getGithubAccessMode()).toBe('gh-cli')
+      expect(store.getGithubAccount()).toBe('octocat')
     })
 
-    it('setGithubAccessMode NO pisa la selección de IA ya guardada', () => {
+    it('setGithubAccount NO pisa la selección de IA ya guardada', () => {
       const store = new SettingsStore()
       store.setProviderModel('claude-code', 'claude-sonnet-5')
       store.setAiProvider('claude-code')
-      store.setGithubAccessMode('gh-cli')
+      store.setGithubAccount('octocat')
 
       expect(store.getPersistedSettings()).toEqual({
         aiProvider: 'claude-code',
         models: { 'claude-code': 'claude-sonnet-5' },
-        githubAccessMode: 'gh-cli',
+        githubAccount: 'octocat',
       })
     })
 
-    it('escribe settings.json SIN la clave githubAccessMode mientras nunca se llamó a setGithubAccessMode', () => {
+    it('escribe settings.json SIN la clave githubAccount mientras nunca se llamó a setGithubAccount', () => {
       new SettingsStore().setProviderModel('opencode', 'opencode/big-pickle')
 
       const raw = readFileSync(settingsFilePath(), 'utf-8')
-      expect(JSON.parse(raw)).not.toHaveProperty('githubAccessMode')
+      expect(JSON.parse(raw)).not.toHaveProperty('githubAccount')
     })
   })
 })

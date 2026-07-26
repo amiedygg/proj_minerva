@@ -236,7 +236,9 @@ export function getAiSettingsInfo(): AiSettingsInfo {
     // el estado de la IA — ver el comentario de `mockGithub` en
     // `../../shared/types.ts`.
     mockGithub: process.env.MINERVA_MOCK === '1',
-    // F14: modo de acceso a GitHub persistido (o el default 'oauth').
+    // F14/F18: modo de acceso VIGENTE ('gh-cli' salvo el escape hatch por env)
+    // + la cuenta de `gh` elegida a mano (`null` = la activa del CLI).
     githubAccessMode: settingsStore.getGithubAccessMode(),
+    githubAccount: settingsStore.getGithubAccount(),
   }
 }

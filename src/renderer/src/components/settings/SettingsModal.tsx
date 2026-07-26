@@ -5,7 +5,7 @@ import { useSettings } from '../../hooks/use-settings'
 import { useProviderStatus } from '../../hooks/use-provider-status'
 import { useLayoutTier } from '../../hooks/use-layout-tier'
 import type { AiProviderId } from '../../../../shared/ai-providers'
-import type { AiProviderStatus, AiSettingsInfo, GithubAccessMode } from '../../../../shared/types'
+import type { AiProviderStatus, AiSettingsInfo } from '../../../../shared/types'
 import { IconButton } from '../ui/IconButton'
 import { ActiveConfigSummary } from './ActiveConfigSummary'
 import { GithubAccessSection } from './GithubAccessSection'
@@ -54,7 +54,7 @@ import { UpdateSection } from './UpdateSection'
  */
 export function SettingsModal(): React.JSX.Element {
   const closeSettings = useAppStore((s) => s.closeSettings)
-  const { info, error, selectProvider, saveModel, setModelOption, setGithubAccessMode } = useSettings()
+  const { info, error, selectProvider, saveModel, setModelOption, setGithubAccount } = useSettings()
   const providerStatus = useProviderStatus()
   const tier = useLayoutTier()
   const cardRef = useRef<HTMLDivElement>(null)
@@ -109,7 +109,7 @@ export function SettingsModal(): React.JSX.Element {
             selectProvider={selectProvider}
             saveModel={saveModel}
             setModelOption={setModelOption}
-            setGithubAccessMode={setGithubAccessMode}
+            setGithubAccount={setGithubAccount}
             twoColumn={twoColumn}
             compact={tier.h !== 'tall'}
           />
@@ -128,7 +128,7 @@ interface SettingsModalBodyProps {
   selectProvider: (provider: AiProviderId) => Promise<boolean>
   saveModel: (provider: AiProviderId, model: string) => Promise<boolean>
   setModelOption: (provider: AiProviderId, optionId: string, value: string) => Promise<boolean>
-  setGithubAccessMode: (mode: GithubAccessMode) => Promise<boolean>
+  setGithubAccount: (login: string | null) => Promise<boolean>
   /** Reparte GitHub | IA en dos columnas con scroll propio (ventana ≥980px). */
   twoColumn: boolean
   /** Ventana baja (`short`/`xshort`): densidad reducida en las cabeceras de sección. */
@@ -154,7 +154,7 @@ function SettingsModalBody({
   selectProvider,
   saveModel,
   setModelOption,
-  setGithubAccessMode,
+  setGithubAccount,
   twoColumn,
   compact,
 }: SettingsModalBodyProps): React.JSX.Element {
@@ -164,7 +164,7 @@ function SettingsModalBody({
   // nada relacionado a proveedor/modelo. En una columna va arriba con
   // `border-b`; en dos columnas pasa a ser la columna izquierda y el separador
   // es el `border-r` del contenedor (F16/T80).
-  const github = <GithubAccessSection info={info} setGithubAccessMode={setGithubAccessMode} compact={compact} />
+  const github = <GithubAccessSection info={info} setGithubAccount={setGithubAccount} compact={compact} />
 
   // Sección "Actualizaciones" (T93, F17): en una columna va al final de todo
   // el scroll; en dos columnas (≥980px) va debajo de GitHub, la columna más

@@ -15,7 +15,8 @@ El objetivo: que quien aprueba un PR lo haga **entendiendo** lo que aprueba.
 ## ✨ Características
 
 ### Revisión de PRs (base)
-- 🔐 Conexión con GitHub (OAuth Device Flow) a todas las cuentas/orgs con acceso.
+- 🔐 Conexión con GitHub a través de tu **GitHub CLI (`gh`)** ya autenticado: nada que
+  autorizar por equipo, y si tenés varias cuentas en `gh` elegís con cuál revisar.
 - 📋 Listado de PRs abiertos en todos los repos accesibles, con filtros y búsqueda.
 - 💬 Ver hilos de comentarios (de PR y de líneas) y **comentar** desde la app.
 - ✅ Ver estado de checks/CI, reviewers y estado de aprobación.
@@ -53,7 +54,7 @@ El objetivo: que quien aprueba un PR lo haga **entendiendo** lo que aprueba.
 | Runtime desktop | Electron + [electron-vite](https://electron-vite.org/) 5 |
 | UI | React 19 + TypeScript estricto + Tailwind CSS v4 |
 | Estado | Zustand |
-| GitHub API | [Octokit](https://github.com/octokit) (GraphQL para listados, REST para acciones) — OAuth Device Flow, token cifrado con safeStorage |
+| GitHub API | [Octokit](https://github.com/octokit) (GraphQL para listados, REST para acciones) — auth delegada al CLI `gh` (puente de token, solo en memoria de main) |
 | IA | Claude Code / Codex / [OpenCode](https://opencode.ai/) — CLIs oficiales, proveedor+modelo configurables desde la UI, streaming con protocolo de secciones tagged |
 | Diagramas | [Mermaid](https://mermaid.js.org/) (C4, `erDiagram`, flowchart) — import lazy, `securityLevel: strict` |
 | Diff | parser de patches propio + resaltado con Shiki |
@@ -203,6 +204,10 @@ npm run build
 - [x] Panel de IA: sección "Infraestructura cloud" v0.6.0 — si el repo declara infra AWS/Cloudflare (Terraform, CDK, SAM, serverless.yml, wrangler.toml…), big picture del sistema desplegado + zoom a dónde incide el PR, en Mermaid `architecture-beta` con logos oficiales (icon packs locales: `@iconify-json/logos` + pack `cf` vendoreado con R2/D1/KV/Durable Objects/Pages/Queues) _(GCP/DO: pendiente)_
 - [x] Layout responsivo para tiling v0.6.3: la UI se adapta a la ventana partida (mitad vertical/horizontal, hasta 4 por monitor) — lista de PRs y árbol de archivos pasan a drawer cuando falta ancho, el diff cae a inline antes de volverse ilegible, y el modal de Settings deja de recortar contenido (scroll único; dos columnas en ventanas anchas)
 - [x] Auto-updater v0.7.0: Minerva avisa cuando hay versión nueva y se actualiza sola — chequeo al arrancar y cada 6 h (más un botón manual en Settings), **la descarga solo empieza con tu confirmación** y la instalación ocurre **al salir**, para no interrumpir una review a medias. En Linux (AppImage) y Windows el update es real; en macOS, mientras no haya Developer ID, la app avisa y enlaza a la release en vez de fingir que puede actualizarse sola
+- [x] Acceso a GitHub v0.8.0: **`gh` es el modo, sin toggle** — el Device Flow propio
+  resultó menos conveniente en el uso real y queda como escape hatch por entorno
+  (`MINERVA_GITHUB_ACCESS=oauth`). Y si tu `gh` tiene **varias cuentas**, Settings deja
+  elegir con cuál trabaja Minerva, sin tocar la cuenta activa de tu terminal
 - [ ] Comentar en un PR real de prueba (verificación con cuenta real)
 
 > Estado detallado, bitácora de gotchas y control de tareas: `.agents/TASKS.md`.

@@ -180,22 +180,14 @@ export class AuthManager {
     return this.oauthStatus()
   }
 
-  /**
-   * Cancela un device flow oauth EN CURSO sin tocar el token OAuth persistido
-   * (F14): la llama el handler de `settings:setGithubAccessMode` cuando el
-   * usuario activa `gh-cli` mientras había un login oauth a mitad de camino
-   * (esperando el código en github.com/login/device) — ese polling quedaría
-   * huérfano (nadie lo va a completar desde la UI, que ya cambió de modo) si
-   * no se cancela. Si NO hay un device flow pendiente (p. ej. ya estaba
-   * `signed_in` o `signed_out`), es un no-op: en particular, un usuario ya
-   * `signed_in` con OAuth conserva esa sesión en memoria, lista para
-   * reaparecer si vuelve a modo `oauth`.
+  /*
+   * F14 tenía acá `cancelDeviceFlowIfPending()`: cancelaba un device flow a
+   * mitad de camino cuando el usuario cambiaba a `gh-cli` desde Settings, para
+   * que ese polling no quedara huérfano. F18 lo retira junto con el toggle —
+   * el modo se decide en el arranque de main desde el entorno, así que ya no
+   * existe el evento "cambio de modo con un login oauth en vuelo" que ese
+   * método venía a limpiar.
    */
-  cancelDeviceFlowIfPending(): void {
-    if (this.state.kind !== 'device_pending') return
-    if (this.state.pollTimer !== null) clearTimeout(this.state.pollTimer)
-    this.state = { kind: 'signed_out' }
-  }
 
   private schedulePoll(pending: DevicePendingState): void {
     pending.pollTimer = setTimeout(() => {

@@ -159,12 +159,23 @@ export function Sidebar(): React.JSX.Element | null {
           {isGhCliMode ? (
             // Modo gh-cli (F14/T71): `signIn()` arrancaría un device flow que
             // `main` ignora en este modo (no-op) — el CTA guía a la terminal
-            // en vez de llamarlo.
+            // en vez de llamarlo. F18: si hay una cuenta elegida a mano, se la
+            // nombra — "corré gh auth login" a secas sería un consejo
+            // equivocado cuando el CLI está bien y lo que falla es la
+            // elección (mismo criterio que `GithubAccessSection`).
             <>
-              <p className="text-sm text-muted">
-                Autentícate con GitHub CLI: ejecuta{' '}
-                <span className="font-mono text-text">gh auth login</span> en una terminal.
-              </p>
+              {authStatus.ghAccount !== undefined ? (
+                <p className="text-sm text-muted">
+                  La cuenta <span className="font-mono text-text">{authStatus.ghAccount}</span> no
+                  tiene sesión válida en gh. Elegí otra en configuración, o renovala con{' '}
+                  <span className="font-mono text-text">gh auth login</span>.
+                </p>
+              ) : (
+                <p className="text-sm text-muted">
+                  Autentícate con GitHub CLI: ejecuta{' '}
+                  <span className="font-mono text-text">gh auth login</span> en una terminal.
+                </p>
+              )}
               <button
                 type="button"
                 onClick={openSettings}

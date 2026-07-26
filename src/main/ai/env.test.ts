@@ -16,10 +16,11 @@ vi.mock('../settings/store', () => ({
   settingsStore: {
     getPersistedSettings: vi.fn(() => null),
     getPersistedModelOptions: vi.fn(() => ({})),
-    // F14: `getAiSettingsInfo` incluye `githubAccessMode` — default 'oauth'
-    // acá, sin ejercitar el modo en sí (eso lo cubren `store.test.ts` y
-    // `gh-cli-auth.test.ts`).
-    getGithubAccessMode: vi.fn(() => 'oauth'),
+    // F14/F18: `getAiSettingsInfo` incluye `githubAccessMode` + `githubAccount`
+    // — valores fijos acá, sin ejercitar el modo ni la cuenta en sí (eso lo
+    // cubren `settings/store.test.ts` y `auth/gh-cli-auth.test.ts`).
+    getGithubAccessMode: vi.fn(() => 'gh-cli'),
+    getGithubAccount: vi.fn(() => null),
   },
 }))
 

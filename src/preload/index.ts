@@ -180,6 +180,7 @@ const minervaApi = {
     getStatus: invoke('auth:getStatus'),
     startDeviceFlow: invoke('auth:startDeviceFlow'),
     signOut: invoke('auth:signOut'),
+    listGhAccounts: invoke('auth:listGhAccounts'),
   },
   github: {
     listPullRequests: invoke('github:listPullRequests'),
@@ -202,7 +203,7 @@ const minervaApi = {
     setAiProvider: invoke('settings:setAiProvider'),
     setProviderModel: invoke('settings:setProviderModel'),
     setModelOption: invoke('settings:setModelOption'),
-    setGithubAccessMode: invoke('settings:setGithubAccessMode'),
+    setGithubAccount: invoke('settings:setGithubAccount'),
   },
   window: {
     openDidactic: invoke('window:openDidactic'),

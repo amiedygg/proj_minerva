@@ -35,14 +35,20 @@ Regla de oro: **ninguna tarea pasa a `[x]` sin verificación del orquestador** �
     Compilado a **CJS** (obligatorio con `sandbox: true`, ver gotchas).
   - `src/renderer/` — UI React 19 + TypeScript estricto + Tailwind v4 (CSS-first,
     `@theme` en `styles.css`) + Zustand.
-- **GitHub:** Octokit (GraphQL para listados, REST para acciones). Auth por **OAuth
-  Device Flow** (Client ID público en `src/main/auth/config.ts`); el token se guarda
-  cifrado con `safeStorage` en userData. **Desde F14 (v0.5.0) hay un segundo modo de
-  acceso, `gh-cli`** (toggle en Settings, `githubAccessMode` en settings.json): para
-  orgs enterprise con *OAuth app access restrictions* que bloquean la OAuth App de
-  Minerva pero permiten GitHub CLI. Es un **puente de token**: `main/auth/gh-cli-auth.ts`
-  obtiene el token con `execFile(gh, ['auth','token',...])` (probe TTL 5s, validado
-  contra `GET /user`) y los datos siguen por el mismo `RealGithubService`/Octokit;
+- **GitHub:** Octokit (GraphQL para listados, REST para acciones). **Desde F18
+  (v0.8.0) el modo de acceso es `gh-cli` y punto**: F14 lo había agregado como
+  alternativa al OAuth Device Flow y resultó ser el camino bueno (nada que autorizar
+  por equipo, y las orgs con *OAuth app access restrictions* que bloquean la OAuth App
+  de Minerva sí aprueban GitHub CLI), así que F18 retiró el toggle de Settings. El
+  modo ya **no se persiste**: lo decide `resolveGithubAccessMode()`
+  (`main/settings/store.ts`) desde la env `MINERVA_GITHUB_ACCESS=oauth`, único escape
+  hatch para quien no pueda instalar `gh`. Todo el camino OAuth (`auth/device-flow.ts`,
+  `auth/token-store.ts`, Client ID público en `auth/config.ts`, token cifrado con
+  `safeStorage`, la máquina de estados de `AuthManager` y sus vistas en
+  TitleBar/Sidebar) sigue vivo y probado detrás de ese flag — no lo borres.
+  El modo gh es un **puente de token**: `main/auth/gh-cli-auth.ts` obtiene el token con
+  `execFile(gh, ['auth','token','--hostname',…])` (probe TTL 5s, validado contra
+  `GET /user`) y los datos siguen por el mismo `RealGithubService`/Octokit;
   `withGhCliTokenRetry` (`main/github/gh-retry.ts`) reintenta UNA vez ante 401
   re-pidiendo el token a gh. El token de gh vive SOLO en memoria de main (Minerva
   jamás lo persiste ni loguea); `signOut`/`startDeviceFlow` son no-op en modo gh
@@ -50,7 +56,16 @@ Regla de oro: **ninguna tarea pasa a `[x]` sin verificación del orquestador** �
   env crudo, NO `buildSanitizedSpawnEnv` (ese saneado borra `GH_TOKEN`/`GITHUB_TOKEN`
   y es solo para CLIs de IA). En desktops que Chromium no reconoce
   (Hyprland/sway) `main/index.ts` fuerza `--password-store=gnome-libsecret` — sin eso
-  `safeStorage` cae a `basic_text` y el token no persiste (re-login en cada arranque).
+  `safeStorage` cae a `basic_text` y el token no persiste (re-login en cada arranque;
+  solo aplica al escape hatch OAuth).
+  **Multicuenta (F18):** `gh` admite varias cuentas por host y sin `--user` resuelve
+  la suya activa — antes eso hacía imposible revisar PRs con la cuenta personal si la
+  activa era la del trabajo. Ahora `githubAccount` en settings.json (`null` = seguir a
+  gh) se pasa como `--user`, y `auth:listGhAccounts` puebla el selector de Settings
+  leyendo `gh auth status --json hosts`, con fallback al parseo del reporte de texto
+  para versiones viejas de gh (parsers PUROS en `main/auth/gh-accounts.ts`). Minerva
+  **jamás** corre `gh auth switch`: la elección es local, la cuenta activa del CLI es
+  del usuario y mutarla afectaría su git y sus scripts.
   `MINERVA_MOCK=1` activa la capa GitHub mock (universo "shopwave", 8 PRs) — solo
   afecta GitHub, NO a la IA.
 - **IA (F11, v0.4.0): tres proveedores AGÉNTICOS vía CLIs oficiales**, sin API keys
@@ -235,6 +250,9 @@ scripts/            smoke-*.mjs (e2e vía CDP), screenshot-app.sh, debug-*.mjs
   auto-updater (F17). LA única vía de ejercitar esa UI fuera de un binario
   empaquetado: sin empaquetar el updater real queda `disabled` a propósito.
 - `MINERVA_UPDATER=off` — kill switch del updater (default de las fixtures e2e).
+- `MINERVA_GITHUB_ACCESS=oauth` — escape hatch al Device Flow de siempre (F18): la
+  ÚNICA vía a la rama oauth desde que Settings dejó de tener el toggle. Se lee en el
+  arranque de main, así que no se puede cambiar en caliente.
 
 ## Auto-updater (F17, v0.7.0)
 

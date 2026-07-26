@@ -29,6 +29,8 @@ const MAX_OPTION_ID_LEN = 50
 const MAX_OPTION_VALUE_LEN = 50
 const MAX_PR_ID_LEN = 200
 const MAX_UPDATED_AT_LEN = 64
+/** Login de GitHub (F18): 39 en github.com, con holgura por GHES. */
+const MAX_GH_LOGIN_LEN = 64
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -160,15 +162,18 @@ function isSetModelOptionPayload(value: unknown): boolean {
 }
 
 /**
- * `settings:setGithubAccessMode` (F14): `mode` es uno de los dos valores
- * literales de `GithubAccessMode` — whitelist explícita (no se importa
- * `isAiProviderId`-style guard genérico porque solo hay dos valores posibles
- * y nunca crece desde un catálogo externo), sin claves extra.
+ * `settings:setGithubAccount` (F18): `login` es el nombre de una cuenta de
+ * `gh`, o `null` para volver a la cuenta activa del CLI. Se exige sin
+ * espacios y acotado (`MAX_GH_LOGIN_LEN`) porque este valor termina como
+ * argumento de `gh auth token --user <login>` (`execFile`, sin shell — no hay
+ * inyección posible, pero tampoco tiene sentido dejar pasar un payload
+ * arbitrario hasta el spawn) y se persiste en `settings.json`.
  */
-function isSetGithubAccessModePayload(value: unknown): boolean {
+function isSetGithubAccountPayload(value: unknown): boolean {
   if (!isPlainObject(value)) return false
-  if (!hasOnlyKeys(value, ['mode'])) return false
-  return value.mode === 'oauth' || value.mode === 'gh-cli'
+  if (!hasOnlyKeys(value, ['login'])) return false
+  if (value.login === null) return true
+  return isNonEmptyString(value.login, MAX_GH_LOGIN_LEN) && !/\s/.test(value.login)
 }
 
 /** `window:openDidactic` (T14): mismo `repo`/`number` que `isRepoAndNumberPayload`, más el título humano del PR. */
@@ -191,6 +196,7 @@ export const payloadValidators: Record<IpcChannel, (payload: unknown) => boolean
   'auth:getStatus': isVoidPayload,
   'auth:startDeviceFlow': isVoidPayload,
   'auth:signOut': isVoidPayload,
+  'auth:listGhAccounts': isVoidPayload,
   'github:listPullRequests': isListPullRequestsPayload,
   'github:markPrSeen': isMarkPrSeenPayload,
   'github:getPullRequestDetail': isRepoAndNumberPayload,
@@ -207,7 +213,7 @@ export const payloadValidators: Record<IpcChannel, (payload: unknown) => boolean
   'settings:setAiProvider': isSetAiProviderPayload,
   'settings:setProviderModel': isSetProviderModelPayload,
   'settings:setModelOption': isSetModelOptionPayload,
-  'settings:setGithubAccessMode': isSetGithubAccessModePayload,
+  'settings:setGithubAccount': isSetGithubAccountPayload,
   'window:openDidactic': isOpenDidacticWindowPayload,
   // Auto-updater (T90, F17): los 5 canales son `req: void` — mismo guard que
   // `minerva:ping`/`auth:getStatus`, rechaza cualquier cosa distinta de `undefined`.

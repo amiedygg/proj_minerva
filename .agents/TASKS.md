@@ -3621,3 +3621,117 @@ Dos gotchas nuevos, ambos de método:
   consecuencia REAL de producto: quien instale un `X.Y.Z-rc.N` se queda en el
   canal `rc` y NO recibe la estable `X.Y.Z` automáticamente. Para probar
   contra el canal estable hay que versionar la prueba sin sufijo.
+
+## F18 — GitHub CLI como único modo de acceso + selector de cuenta (2026-07-25, rama feature/gh-multi-account)
+
+> Motivación (del usuario, 2026-07-25): en una máquina con VARIAS cuentas
+> autenticadas en `gh`, Minerva no dejaba elegir cuál usar — tomaba siempre la
+> activa del CLI. Y, a la vez: OAuth "a largo plazo resultó no ser tan
+> conveniente como el CLI", así que había que ocultar esa opción.
+>
+> Decisiones tomadas con el usuario antes de escribir código:
+> 1. **Ocultar la UI de OAuth, NO borrar el código.** El camino OAuth queda
+>    detrás de `MINERVA_GITHUB_ACCESS=oauth` para quien no pueda instalar `gh`
+>    (equipo administrado). Borrarlo dejaría a esa persona sin ninguna vía y
+>    volver atrás sería rehacerlo.
+> 2. **La elección de cuenta es SOLO de Minerva.** Nada de `gh auth switch`:
+>    eso mutaría la sesión del CLI del usuario para todo el sistema (git, otras
+>    terminales, scripts). Con `gh auth token --user <login>` se puede tener gh
+>    en la cuenta del trabajo y Minerva revisando PRs con la personal.
+
+- [x] **T96. Retirar el modo persistido; `gh-cli` por defecto**
+  - `main/settings/store.ts`: `resolveGithubAccessMode()` — env
+    `MINERVA_GITHUB_ACCESS` o `'gh-cli'`. **Ya NO se lee de disco**: un
+    `githubAccessMode: "oauth"` escrito por una versión ≤0.6.x dejaría esa
+    instalación en un modo que ninguna pantalla muestra ni permite cambiar
+    (estado invisible). La clave se sigue ACEPTANDO al leer, para no invalidar
+    el archivo entero, y desaparece en la próxima escritura.
+  - Se retiran `setGithubAccessMode()`, el canal `settings:setGithubAccessMode`,
+    su validador y su método de preload. Efecto colateral bueno: el gotcha de
+    F14 ("los setters construyen el objeto a mano y deben arrastrar
+    `githubAccessMode`") se muda a `githubAccount`, no se duplica.
+
+- [x] **T97. Puente de token multicuenta**
+  - `shared/types.ts`: `GhAccount { login, active, valid }`;
+    `AuthStatus.ghAccount?` (login que se le pidió a gh, solo si se eligió a
+    mano — nunca el token).
+  - `main/auth/gh-accounts.ts` (NUEVO): parsers PUROS
+    `parseGhAccountsJson` (camino preferido, `gh auth status --json hosts`) y
+    `parseGhAccountsText` (fallback para gh sin `--json`). Toda la fragilidad
+    de parsear la salida de un CLI ajeno queda en un módulo testeable, aparte
+    del spawn.
+  - `main/auth/gh-cli-auth.ts`: `--user <login>` en `gh auth token`;
+    `listAccounts()` con cache/single-flight propios; `invalidate()`.
+  - `settings.json` gana `githubAccount?` (el NOMBRE, jamás el token).
+
+- [x] **T98. UI: sección "Acceso a GitHub" reescrita**
+  - Fuera el toggle de dos cards. Queda: guía de instalación + feedback del
+    probe + selector de cuenta (cards tipo radio) + botón "Actualizar".
+  - En modo oauth (escape hatch) la sección lo DICE en vez de mostrar
+    controles de gh que no aplican.
+  - `use-gh-accounts.ts` (NUEVO), `use-settings.setGithubAccount`.
+
+- [x] **T99. Verificación**
+  - `npm run verify` verde (40 archivos, 734 tests). Suite e2e completa verde
+    (39/39; `packaged.spec.ts` exigió `npm run dist:dir` — el binario de
+    `dist/` era 0.7.0 contra un `package.json` 0.7.1).
+  - `e2e/github-mode.spec.ts` reescrito: default gh-cli sin rastro de OAuth,
+    selector de cuenta, y un segundo test que lanza su propia app con
+    `MINERVA_GITHUB_ACCESS=oauth` para cubrir el escape hatch.
+
+### Bitácora F18 — gotchas
+
+1. **`gh auth status` sin `--json` escribe a STDERR y sale con 1** en cuanto
+   UNA cuenta tiene el token vencido — que es EXACTAMENTE el caso que el
+   selector viene a resolver. Tratar el exit code como fallo, o leer solo
+   stdout, deja la lista vacía justo cuando más se la necesita. El fallback de
+   texto junta stdout+stderr e ignora el exit code; la única señal que usa es
+   la FORMA de la salida. (Con `--json hosts` sí es stdout + exit 0 siempre,
+   por eso es el camino preferido.)
+2. **`parseGhAccountsJson` devuelve `null`, no `[]`, cuando el JSON no tiene la
+   forma esperada.** Es la diferencia entre "gh no habla este formato, probá el
+   fallback de texto" y "gh no tiene ninguna cuenta en este host". Colapsarlas
+   a `[]` hace que un `gh` viejo se vea como "sin cuentas" y el fallback nunca
+   corra.
+3. **La cache TTL del probe tiene que llevar la cuenta con la que se calculó.**
+   Si no, cambiar de cuenta sirve hasta 5s el `AuthStatus` de la identidad
+   ANTERIOR — y peor, `getToken()` sigue entregando su token a la ruta de
+   datos. `cachedForAccount` cubre cualquier camino; `invalidate()` desde el
+   handler cubre el explícito.
+4. **`invalidate()` NO borra `lastToken`** a propósito: dejar un hueco donde
+   `getToken()` devuelve `null` produce un 401 evitable en la ruta de datos.
+   El probe siguiente lo pisa.
+5. Gotcha 11 del CLAUDE.md, versión hook: `react-hooks/set-state-in-effect`
+   rechaza el `setState` síncrono en el cuerpo de un efecto, incluido el de la
+   rama "deshabilitado". La salida es derivar el estado en el `return`
+   (`accounts === null` ⇒ `loading`) y hacer `setState` solo dentro del
+   callback de la promesa — mismo criterio que ya seguían `useAuth`/`useSettings`.
+6. Un `null` que es un VALOR legítimo ("seguir la cuenta activa de gh") no
+   puede ser también el sentinel de "nada en vuelo". En `GithubAccessSection`
+   el estado `saving` es `string | null | undefined`: `undefined` = idle.
+
+7. **Hacer `gh-cli` el default puso una llamada de RED en el arranque.**
+   `main/index.ts` hacía `await ghCliAuth.getStatus()` — barato mientras el
+   modo era opt-in, pero desde F18 lo paga TODO arranque, y el probe incluye
+   `GET /user`. Bajo Xvfb eso reventó por timeout specs que no tienen nada que
+   ver (updater ×3, responsive, packaged): la ventana no aparecía a tiempo. El
+   síntoma engañaba — parecía contención de recursos, no una regresión propia.
+   Arreglo doble: el warm-up ya no se espera (`void`; el single-flight lo hace
+   igual de útil) y `fetchGithubUser` lleva `AbortSignal.timeout(10s)`, porque
+   una promesa colgada ahí se propagaría por la cache single-flight a TODOS
+   los `auth:getStatus` siguientes.
+8. **`pkill -f "[e]lectron"` también mata a `electron-builder`** — el truco del
+   corchete evita que el patrón matchee tu propio shell, no que matchee
+   `electron-builder`. Y electron-builder REESCRIBE `package.json` del repo
+   durante el empaquetado (le saca `scripts` y `devDependencies`) para
+   restaurarlo al terminar: matarlo a mitad deja el archivo truncado y
+   `npm run dev` responde `Missing script: "dev"`. Se recupera con
+   `git checkout -- package.json`. Antes de un `pkill` así, comprobar que no
+   hay un build en vuelo.
+9. **Una lista que todavía carga NO es una lista vacía.** La card "esta cuenta
+   ya no está en gh" se derivaba de `!accounts.some(...)`, y durante el primer
+   `auth:listGhAccounts` (que spawnea `gh auth status`, con red de por medio)
+   `accounts` es `[]` — así que TODA cuenta elegida se acusaba, un instante, de
+   haber desaparecido, con el tono más alarmante de la sección. Va gateada por
+   `!loading`. Lo encontró la verificación visual, no los tests: el e2e pasaba
+   porque su cuenta fantasma efectivamente no existe, y Playwright espera.
