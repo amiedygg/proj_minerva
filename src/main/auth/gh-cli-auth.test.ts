@@ -22,6 +22,12 @@ vi.mock('./github-user', () => ({
   fetchGithubUser: (...args: unknown[]) => fetchGithubUserMock(...args),
 }))
 
+/** F18: el probe lee la cuenta elegida del store de settings (que a su vez necesita Electron). */
+const getGithubAccountMock = vi.fn()
+vi.mock('../settings/store', () => ({
+  settingsStore: { getGithubAccount: () => getGithubAccountMock() },
+}))
+
 const { GhCliAuth } = await import('./gh-cli-auth')
 
 type ExecFileCallback = (error: Error | null, stdout: string, stderr: string) => void
@@ -35,6 +41,22 @@ function mockExecFileResult(error: Error | null, stdout = ''): void {
   )
 }
 
+/**
+ * Igual que `mockExecFileResult` pero despachando por subcomando: `listAccounts()`
+ * corre `gh auth status` y, si ese falla, reintenta sin `--json` — hay hasta
+ * tres formas de invocación distintas en juego.
+ */
+function mockExecFileByArgs(
+  responder: (args: string[]) => { error?: Error | null; stdout?: string; stderr?: string },
+): void {
+  execFileMock.mockImplementation(
+    (_path: string, args: string[], _opts: unknown, cb: ExecFileCallback) => {
+      const { error = null, stdout = '', stderr = '' } = responder(args)
+      cb(error, stdout, stderr)
+    },
+  )
+}
+
 const validUser = { login: 'edygg', avatarUrl: 'https://avatars.githubusercontent.com/u/1' }
 
 describe('GhCliAuth', () => {
@@ -44,7 +66,10 @@ describe('GhCliAuth', () => {
     execFileMock.mockReset()
     resolveCliPathMock.mockReset()
     fetchGithubUserMock.mockReset()
+    getGithubAccountMock.mockReset()
     resolveCliPathMock.mockReturnValue('/usr/local/bin/gh')
+    // Default de los tests heredados de F14: sin cuenta elegida a mano.
+    getGithubAccountMock.mockReturnValue(null)
     auth = new GhCliAuth()
   })
 
@@ -235,6 +260,192 @@ describe('GhCliAuth', () => {
 
       expect(auth.getTokenSync()).toBeNull()
       await auth.getStatus()
+      expect(execFileMock).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  describe('cuenta elegida (F18)', () => {
+    it('pasa --user cuando hay una cuenta elegida', async () => {
+      getGithubAccountMock.mockReturnValue('am-i-edygg')
+      mockExecFileResult(null, 'ghp_good_token')
+      fetchGithubUserMock.mockResolvedValue(validUser)
+
+      await auth.getStatus()
+
+      expect(execFileMock).toHaveBeenCalledWith(
+        '/usr/local/bin/gh',
+        ['auth', 'token', '--hostname', 'github.com', '--user', 'am-i-edygg'],
+        expect.anything(),
+        expect.any(Function),
+      )
+    })
+
+    it('NO pasa --user cuando no hay cuenta elegida (gh resuelve su activa)', async () => {
+      mockExecFileResult(null, 'ghp_good_token')
+      fetchGithubUserMock.mockResolvedValue(validUser)
+
+      await auth.getStatus()
+
+      const [, args] = execFileMock.mock.calls[0] as [unknown, string[]]
+      expect(args).not.toContain('--user')
+    })
+
+    it('refetchTokenAfter401() también respeta la cuenta elegida', async () => {
+      getGithubAccountMock.mockReturnValue('am-i-edygg')
+      mockExecFileResult(null, 'ghp_new')
+
+      await auth.refetchTokenAfter401()
+
+      const [, args] = execFileMock.mock.calls[0] as [unknown, string[]]
+      expect(args).toContain('--user')
+      expect(args).toContain('am-i-edygg')
+    })
+
+    it('signed_in lleva ghAccount cuando la cuenta se eligió a mano', async () => {
+      getGithubAccountMock.mockReturnValue('am-i-edygg')
+      mockExecFileResult(null, 'ghp_good_token')
+      fetchGithubUserMock.mockResolvedValue(validUser)
+
+      await expect(auth.getStatus()).resolves.toEqual({
+        mode: 'gh-cli',
+        state: 'signed_in',
+        user: validUser,
+        ghAccount: 'am-i-edygg',
+      })
+    })
+
+    it('cli_unauthenticated lleva ghAccount: la UI puede decir CUÁL cuenta falló', async () => {
+      getGithubAccountMock.mockReturnValue('edyggclevr')
+      // `gh auth token --user X` sale con exit≠0 si X ya no está logueada.
+      mockExecFileResult(new Error('exit status 1'))
+
+      await expect(auth.getStatus()).resolves.toEqual({
+        mode: 'gh-cli',
+        state: 'cli_unauthenticated',
+        ghAccount: 'edyggclevr',
+      })
+    })
+
+    it('sin cuenta elegida, el status NO inventa un ghAccount', async () => {
+      mockExecFileResult(new Error('exit status 1'))
+
+      const status = await auth.getStatus()
+
+      expect(status).not.toHaveProperty('ghAccount')
+    })
+
+    it('cambiar de cuenta invalida el cache TTL aunque no haya pasado el tiempo', async () => {
+      mockExecFileResult(null, 'ghp_token_a')
+      fetchGithubUserMock.mockResolvedValue(validUser)
+      await auth.getStatus()
+      expect(execFileMock).toHaveBeenCalledTimes(1)
+
+      // Misma cuenta: sirve el cache.
+      await auth.getStatus()
+      expect(execFileMock).toHaveBeenCalledTimes(1)
+
+      // Otra cuenta: el probe cacheado habla de otra identidad, hay que rehacerlo.
+      getGithubAccountMock.mockReturnValue('otra')
+      await auth.getStatus()
+      expect(execFileMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('invalidate() fuerza un probe nuevo sin borrar el token vigente', async () => {
+      mockExecFileResult(null, 'ghp_good_token')
+      fetchGithubUserMock.mockResolvedValue(validUser)
+      await auth.getStatus()
+
+      auth.invalidate()
+
+      // El token sigue disponible para la ruta de datos mientras se re-probea.
+      expect(auth.getTokenSync()).toBe('ghp_good_token')
+      await auth.getStatus()
+      expect(execFileMock).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  describe('listAccounts() (F18)', () => {
+    const jsonPayload = JSON.stringify({
+      hosts: {
+        'github.com': [
+          { state: 'success', active: true, login: 'am-i-edygg' },
+          { state: 'error', active: false, login: 'edyggclevr' },
+        ],
+      },
+    })
+
+    it('lee el camino --json y marca activa/válida por cuenta', async () => {
+      mockExecFileByArgs(() => ({ stdout: jsonPayload }))
+
+      await expect(auth.listAccounts()).resolves.toEqual([
+        { login: 'am-i-edygg', active: true, valid: true },
+        { login: 'edyggclevr', active: false, valid: false },
+      ])
+    })
+
+    it('cae al parseo de texto si gh no soporta --json (flag desconocido)', async () => {
+      const textReport = [
+        'github.com',
+        '  ✓ Logged in to github.com account am-i-edygg (/home/u/.config/gh/hosts.yml)',
+        '  - Active account: true',
+        '  X Failed to log in to github.com account edyggclevr (default)',
+        '  - Active account: false',
+      ].join('\n')
+
+      mockExecFileByArgs((args) =>
+        args.includes('--json')
+          ? { error: new Error('unknown flag: --json'), stderr: 'unknown flag: --json' }
+          : // El reporte de texto va a STDERR y gh sale con 1 cuando alguna
+            // cuenta tiene el token vencido: ambas cosas deben ignorarse.
+            { error: new Error('exit status 1'), stderr: textReport },
+      )
+
+      await expect(auth.listAccounts()).resolves.toEqual([
+        { login: 'am-i-edygg', active: true, valid: true },
+        { login: 'edyggclevr', active: false, valid: false },
+      ])
+    })
+
+    it('devuelve [] si gh no está instalado, sin spawnear', async () => {
+      resolveCliPathMock.mockReturnValue(null)
+
+      await expect(auth.listAccounts()).resolves.toEqual([])
+      expect(execFileMock).not.toHaveBeenCalled()
+    })
+
+    it('devuelve [] si ninguno de los dos formatos se entiende', async () => {
+      mockExecFileByArgs(() => ({ error: new Error('boom'), stdout: 'ruido' }))
+
+      await expect(auth.listAccounts()).resolves.toEqual([])
+    })
+
+    it('nunca pide --show-token: la lista no debe traer secretos', async () => {
+      mockExecFileByArgs(() => ({ stdout: jsonPayload }))
+
+      await auth.listAccounts()
+
+      for (const call of execFileMock.mock.calls) {
+        expect(call[1]).not.toContain('--show-token')
+        expect(call[1]).not.toContain('-t')
+      }
+    })
+
+    it('cachea: dos llamadas seguidas spawnean una sola vez', async () => {
+      mockExecFileByArgs(() => ({ stdout: jsonPayload }))
+
+      await auth.listAccounts()
+      await auth.listAccounts()
+
+      expect(execFileMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('invalidate() tira también el cache de cuentas', async () => {
+      mockExecFileByArgs(() => ({ stdout: jsonPayload }))
+      await auth.listAccounts()
+
+      auth.invalidate()
+      await auth.listAccounts()
+
       expect(execFileMock).toHaveBeenCalledTimes(2)
     })
   })

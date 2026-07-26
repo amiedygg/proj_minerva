@@ -102,13 +102,18 @@ void app.whenReady().then(async () => {
   // `signed_in` sin que nada haya disparado ese cambio.
   await authManager.init()
 
-  // F14: si el modo de acceso a GitHub persistido es `gh-cli`, calienta el
-  // probe de `gh` ANTES de registrar los handlers, mismo criterio que
-  // `authManager.init()` arriba (para que la primera `auth:getStatus` del
-  // renderer no reporte "cargando" un instante). El timeout interno de
-  // `ghCliAuth` (3s por spawn) garantiza no bloquear el arranque más de eso.
+  // F14/F18: calienta el probe de `gh` para que la primera `auth:getStatus`
+  // del renderer no tenga que esperar el spawn entero.
+  //
+  // SIN `await` (F18): hasta F14 esto era opt-in — solo lo pagaba quien había
+  // elegido `gh-cli` en Settings. Desde que ese modo es el DEFAULT lo paga
+  // TODO arranque, y el probe incluye una llamada de red (`GET /user`): con
+  // `await`, una red lenta o caída retrasaba la aparición de la ventana. El
+  // single-flight de `ghCliAuth` hace que esta llamada valga igual — la
+  // primera consulta del renderer se engancha a ESTA misma promesa en vuelo
+  // en vez de spawnear otro `gh`.
   if (settingsStore.getGithubAccessMode() === 'gh-cli') {
-    await ghCliAuth.getStatus()
+    void ghCliAuth.getStatus()
   }
 
   const { stopPrWatcher } = await registerIpcHandlers()

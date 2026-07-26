@@ -12,8 +12,8 @@ function toErrorMessage(error: unknown): string {
  * Cuándo el polling debe estar activo (T71, F14): `device_pending` (motivo
  * original, T6 — descubrir cuándo `main` termina el device flow) o, en modo
  * `gh-cli`, cualquier estado que no sea `signed_in` (F14 — si el usuario
- * corre `gh auth login` en una terminal, o si el modo cambia desde Settings,
- * la UI debe enterarse sola sin plumbing manual). Recibe los primitivos
+ * corre `gh auth login` en una terminal, la UI debe enterarse sola sin
+ * plumbing manual). Recibe los primitivos
  * (`state`/`mode`), no el objeto `AuthStatus` completo, para que el efecto de
  * abajo pueda declarar EXACTAMENTE esas dos dependencias primitivas.
  */
@@ -37,10 +37,12 @@ interface UseAuthResult {
  * limpia en el cleanup en cuanto deja de serlo (incluido el desmontaje).
  * Cubre dos casos con el mismo mecanismo: `device_pending` (login OAuth en
  * curso) y modo `gh-cli` mientras no haya sesión (`cli_unavailable`/
- * `cli_unauthenticated`) — correr `gh auth login` en una terminal, o cambiar
- * el modo desde Settings, se refleja solo en ≤`POLL_INTERVAL_MS` + el TTL del
- * probe de `gh` (5s, `main/auth/gh-cli-auth.ts`), sin arrancar/parar el
- * intervalo a mano desde `signIn`/`setGithubAccessMode`.
+ * `cli_unauthenticated`) — correr `gh auth login` en una terminal se refleja
+ * solo en ≤`POLL_INTERVAL_MS` + el TTL del probe de `gh` (5s,
+ * `main/auth/gh-cli-auth.ts`), sin arrancar/parar el intervalo a mano desde
+ * `signIn`. Cambiar de CUENTA (F18) no depende de este polling: el handler
+ * invalida el probe y `useSettings().setGithubAccount` empuja el `AuthStatus`
+ * fresco al store de inmediato.
  *
  * El estado vive en el store de zustand (`authStatus`), no en estado local:
  * hay varios consumidores (TitleBar, Sidebar, hooks de datos) y todos deben

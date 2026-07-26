@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { AiProviderId } from '../../../shared/ai-providers'
-import type { AiSettingsInfo, GithubAccessMode } from '../../../shared/types'
+import type { AiSettingsInfo } from '../../../shared/types'
 import { useAppStore } from '../stores/app-store'
 
 function toErrorMessage(error: unknown): string {
@@ -32,14 +32,15 @@ interface UseSettingsResult {
    */
   setModelOption: (provider: AiProviderId, optionId: string, value: string) => Promise<boolean>
   /**
-   * Cambia el modo de acceso a GitHub (T72, F14; patrón `selectProvider`):
-   * persiste vía `settings:setGithubAccessMode` y ADEMÁS refresca
-   * `auth:getStatus` al store (`setAuthStatus`) para que TitleBar/Sidebar
-   * reaccionen de inmediato, sin esperar al polling declarativo de
-   * `use-auth.ts`. `true` si se guardó bien; `false` si falló (revisar
-   * `error`) — el refresco de auth es best-effort y no afecta este resultado.
+   * Elige la cuenta de `gh` a usar (F18; patrón `selectProvider`), o `null`
+   * para volver a la cuenta activa del CLI: persiste vía
+   * `settings:setGithubAccount` y ADEMÁS refresca `auth:getStatus` al store
+   * (`setAuthStatus`) para que TitleBar/Sidebar muestren la identidad NUEVA de
+   * inmediato, sin esperar al polling declarativo de `use-auth.ts`. `true` si
+   * se guardó bien; `false` si falló (revisar `error`) — el refresco de auth
+   * es best-effort y no afecta este resultado.
    */
-  setGithubAccessMode: (mode: GithubAccessMode) => Promise<boolean>
+  setGithubAccount: (login: string | null) => Promise<boolean>
   reload: () => void
 }
 
@@ -141,11 +142,11 @@ export function useSettings(): UseSettingsResult {
     [setInfo],
   )
 
-  const setGithubAccessMode = useCallback(
-    async (mode: GithubAccessMode): Promise<boolean> => {
+  const setGithubAccount = useCallback(
+    async (login: string | null): Promise<boolean> => {
       setError(null)
       try {
-        const result = await window.minerva.settings.setGithubAccessMode({ mode })
+        const result = await window.minerva.settings.setGithubAccount({ login })
         setInfo(result)
         try {
           const authStatus = await window.minerva.auth.getStatus()
@@ -170,7 +171,7 @@ export function useSettings(): UseSettingsResult {
     selectProvider,
     saveModel,
     setModelOption,
-    setGithubAccessMode,
+    setGithubAccount,
     reload,
   }
 }

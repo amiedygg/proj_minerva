@@ -14,7 +14,7 @@ import type {
   CommentThread,
   DidacticAnalysis,
   DiffFile,
-  GithubAccessMode,
+  GhAccount,
   PrComment,
   PrStateFilter,
   PullRequestDetail,
@@ -39,6 +39,17 @@ export interface IpcContract {
   'auth:getStatus': { req: void; res: AuthStatus }
   'auth:startDeviceFlow': { req: void; res: AuthStatus }
   'auth:signOut': { req: void; res: AuthStatus }
+
+  /**
+   * Cuentas que el CLI `gh` conoce en `github.com` (F18), para el selector de
+   * la sección "Acceso a GitHub" de Settings. LECTURA pura: spawnea
+   * `gh auth status` (cache TTL 5s + single-flight en
+   * `main/auth/gh-cli-auth.ts`) y no cambia nada. Devuelve `[]` si `gh` no
+   * está instalado, no tiene sesión, o su salida no se pudo interpretar — la
+   * UI lo trata como "no hay nada que elegir" y sigue con la cuenta activa
+   * del CLI. Nunca incluye tokens, solo logins.
+   */
+  'auth:listGhAccounts': { req: void; res: GhAccount[] }
 
   /**
    * `state` (T50, F10): filtro de estado (`PrStateFilter`, `./types.ts`),
@@ -163,17 +174,23 @@ export interface IpcContract {
   }
 
   /**
-   * Cambia el modo de acceso a GitHub (F14, v0.5.0): `oauth` (Device Flow,
-   * comportamiento previo) o `gh-cli` (delega la auth al CLI `gh` ya
-   * logueado). El handler (`main/ipc/handlers.ts`) persiste el modo
-   * (`settingsStore.setGithubAccessMode`), cancela cualquier device flow
-   * pendiente si el modo nuevo es `gh-cli` (`authManager.cancelDeviceFlowIfPending`),
-   * calienta el probe de `gh` (`ghCliAuth.getStatus()`) y responde el mismo
-   * `AiSettingsInfo` agregado que los canales `settings:set*` de IA (mismo
-   * patrón: la UI refresca sin un roundtrip adicional).
+   * Elige con QUÉ cuenta de `gh` habla Minerva (F18), o vuelve a "la cuenta
+   * activa de `gh`" con `login: null`. El handler persiste el login
+   * (`settingsStore.setGithubAccount`), invalida las caches del puente de
+   * token (`ghCliAuth.invalidate()`), calienta el probe con la cuenta nueva y
+   * responde el mismo `AiSettingsInfo` agregado que los canales
+   * `settings:set*` de IA (la UI refresca sin un roundtrip adicional).
+   *
+   * NO toca la cuenta activa del CLI: nunca se corre `gh auth switch`. La
+   * elección es local a Minerva, así que la terminal del usuario puede
+   * quedarse en otra cuenta sin conflicto.
+   *
+   * Reemplaza a `settings:setGithubAccessMode` (F14), retirado en F18 junto
+   * con el toggle OAuth ⇄ gh-cli de Settings: el modo ya no se elige desde la
+   * UI (ver `GithubAccessMode` en `./types.ts`).
    */
-  'settings:setGithubAccessMode': {
-    req: { mode: GithubAccessMode }
+  'settings:setGithubAccount': {
+    req: { login: string | null }
     res: AiSettingsInfo
   }
 
@@ -239,6 +256,7 @@ export const IPC_CHANNELS = [
   'auth:getStatus',
   'auth:startDeviceFlow',
   'auth:signOut',
+  'auth:listGhAccounts',
   'github:listPullRequests',
   'github:markPrSeen',
   'github:getPullRequestDetail',
@@ -255,7 +273,7 @@ export const IPC_CHANNELS = [
   'settings:setAiProvider',
   'settings:setProviderModel',
   'settings:setModelOption',
-  'settings:setGithubAccessMode',
+  'settings:setGithubAccount',
   'window:openDidactic',
   'updater:getStatus',
   'updater:check',

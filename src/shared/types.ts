@@ -130,8 +130,27 @@ export interface CommentThread {
  * restrictions*) pero sí permiten GitHub CLI. En ambos modos los datos
  * siguen fluyendo por el mismo `RealGithubService` (Octokit), solo cambia de
  * dónde sale el token (ver `main/github/index.ts` y `./PLAN.md` § F14).
+ *
+ * F18: `gh-cli` es el ÚNICO modo con UI. `oauth` sobrevive como escape hatch
+ * detrás de la env `MINERVA_GITHUB_ACCESS=oauth` (`main/settings/store.ts`,
+ * `resolveGithubAccessMode`) para quien no pueda instalar `gh`; ya no hay
+ * toggle en Settings ni canal IPC para cambiarlo en caliente.
  */
 export type GithubAccessMode = 'oauth' | 'gh-cli'
+
+/**
+ * Una cuenta que `gh` conoce en el host de GitHub (F18): `gh` admite varias a
+ * la vez y, sin `--user`, resuelve la que él considera "activa". Minerva
+ * ofrece elegir cuál usar (persistida como `githubAccount`) sin tocar esa
+ * elección global del CLI — ver `main/auth/gh-accounts.ts`.
+ */
+export interface GhAccount {
+  login: string
+  /** `true` en la cuenta activa del propio `gh` (la que se usaría sin `--user`). */
+  active: boolean
+  /** `false` cuando `gh` reporta el token de esa cuenta como inválido/expirado. */
+  valid: boolean
+}
 
 /**
  * `cli_unavailable`/`cli_unauthenticated` (F14) solo aplican en modo
@@ -153,6 +172,15 @@ export interface AuthStatus {
   mode: GithubAccessMode
   state: AuthState
   user?: UserRef
+  /**
+   * Login que Minerva le pidió a `gh` con `--user` (F18), presente SOLO en
+   * modo `gh-cli` y solo si hay una cuenta elegida a mano. Sirve para que un
+   * `cli_unauthenticated` pueda decir *cuál* cuenta falló ("la cuenta elegida
+   * ya no tiene sesión en gh") en vez del genérico "corré gh auth login" —
+   * que sería un consejo equivocado si el usuario SÍ tiene otras cuentas
+   * sanas. Nunca es el token, solo el nombre de usuario.
+   */
+  ghAccount?: string
   deviceCode?: {
     userCode: string
     verificationUri: string
@@ -287,10 +315,15 @@ export type AiModelSource = 'settings' | 'env' | 'default'
  * instalado (vía `MockAiService`), así que la card NO debe aparecer aunque
  * los tres proveedores reales reporten `unavailable`.
  *
- * `githubAccessMode` (F14): el modo de acceso a GitHub persistido (o el
- * default `'oauth'` si no hay nada guardado, ver
- * `settingsStore.getGithubAccessMode()`) — expuesto acá para que la sección
- * "Acceso a GitHub" de Settings (T72) no necesite un canal aparte.
+ * `githubAccessMode` (F14, redefinido en F18): el modo de acceso a GitHub
+ * VIGENTE — ya no una preferencia persistida sino el resultado de
+ * `settingsStore.getGithubAccessMode()`, que es `'gh-cli'` salvo que la env
+ * `MINERVA_GITHUB_ACCESS=oauth` fuerce el escape hatch. La UI lo usa para
+ * decidir si la sección "Acceso a GitHub" muestra los controles de `gh` o la
+ * nota de "modo OAuth forzado por entorno".
+ *
+ * `githubAccount` (F18): el login de `gh` elegido a mano, o `null` para
+ * "seguir la cuenta activa de gh". Solo tiene sentido en modo `gh-cli`.
  */
 export interface AiSettingsInfo {
   provider: AiProviderId
@@ -301,6 +334,7 @@ export interface AiSettingsInfo {
   selectedOptions?: Partial<Record<AiProviderId, Record<string, string>>>
   mockGithub: boolean
   githubAccessMode: GithubAccessMode
+  githubAccount: string | null
 }
 
 /**

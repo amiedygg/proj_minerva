@@ -396,31 +396,38 @@ describe('payloadValidators', () => {
     })
   })
 
-  describe('settings:setGithubAccessMode', () => {
-    const validate = payloadValidators['settings:setGithubAccessMode']
+  describe('settings:setGithubAccount', () => {
+    const validate = payloadValidators['settings:setGithubAccount']
 
-    it('acepta "oauth"', () => {
-      expect(validate({ mode: 'oauth' })).toBe(true)
+    it('acepta un login de gh', () => {
+      expect(validate({ login: 'octocat' })).toBe(true)
+      expect(validate({ login: 'am-i-edygg' })).toBe(true)
     })
 
-    it('acepta "gh-cli"', () => {
-      expect(validate({ mode: 'gh-cli' })).toBe(true)
+    it('acepta null (volver a la cuenta activa de gh)', () => {
+      expect(validate({ login: null })).toBe(true)
     })
 
-    it('rechaza un modo fuera de la whitelist', () => {
-      expect(validate({ mode: 'ssh-key' })).toBe(false)
-      expect(validate({ mode: 'OAuth' })).toBe(false)
+    it('rechaza un login con espacios (terminaría en el argv de gh)', () => {
+      expect(validate({ login: 'oct cat' })).toBe(false)
+      expect(validate({ login: 'octocat\n--otro-flag' })).toBe(false)
     })
 
-    it('rechaza mode que no es string', () => {
-      expect(validate({ mode: 42 })).toBe(false)
+    it('rechaza login vacío o desmedido', () => {
+      expect(validate({ login: '' })).toBe(false)
+      expect(validate({ login: 'a'.repeat(65) })).toBe(false)
+    })
+
+    it('rechaza login que no es string ni null', () => {
+      expect(validate({ login: 42 })).toBe(false)
+      expect(validate({ login: undefined })).toBe(false)
     })
 
     it('rechaza claves desconocidas', () => {
-      expect(validate({ mode: 'gh-cli', evil: true })).toBe(false)
+      expect(validate({ login: 'octocat', evil: true })).toBe(false)
     })
 
-    it('rechaza payload sin mode o no-objeto', () => {
+    it('rechaza payload sin login o no-objeto', () => {
       expect(validate({})).toBe(false)
       expect(validate(undefined)).toBe(false)
       expect(validate('x')).toBe(false)
