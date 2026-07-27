@@ -230,15 +230,35 @@ function delay(ms: number): Promise<void> {
 let serverPromise: Promise<OpencodeServerHandle> | null = null
 let serverChild: ChildProcess | null = null
 
+/**
+ * Generación del intento de arranque en curso. `stopOpencodeServer()` la
+ * incrementa para CANCELAR un arranque que todavía no llegó al `spawn`.
+ *
+ * Hace falta porque `spawnOpencodeServer` espera `findEphemeralPort()` (async:
+ * abre y cierra un socket) ANTES de spawnear: un stop dentro de esa ventana
+ * limpiaba el singleton y devolvía sin nada que matar, y la promesa en vuelo
+ * seguía adelante y spawneaba el proceso DESPUÉS —ya con la app cerrándose—,
+ * garantizando un huérfano. Es la segunda mitad del leak de F20: registrar el
+ * hijo desde el `spawn` cubre "arrancando", esto cubre "todavía no arrancó".
+ */
+let spawnGeneration = 0
+
 function spawnOpencodeServer(): Promise<OpencodeServerHandle> {
   const binary = resolveCliPath('opencode')
   if (binary === null) {
     return Promise.reject(new Error(describeUnresolvedOpencodeBinary()))
   }
 
+  const generation = spawnGeneration
+
   return findEphemeralPort().then(
     (port) =>
       new Promise<OpencodeServerHandle>((resolve, reject) => {
+        if (generation !== spawnGeneration) {
+          reject(new Error('El arranque del server de OpenCode se canceló antes de lanzarlo.'))
+          return
+        }
+
         const env = {
           ...buildSanitizedSpawnEnv(),
           OPENCODE_CONFIG_CONTENT: JSON.stringify(OPENCODE_READONLY_CONFIG),
@@ -256,6 +276,23 @@ function spawnOpencodeServer(): Promise<OpencodeServerHandle> {
           return
         }
 
+        // Se registra ACÁ, no cuando el server imprime su línea de "ready".
+        // Antes se asignaba en el handler de stdout, así que durante todo el
+        // arranque (que en frío son segundos: el wrapper resuelve el binario por
+        // npx) `serverChild` seguía en `null` y `stopOpencodeServer()` era un
+        // no-op: cerrar la app en esa ventana dejaba un `opencode serve` de
+        // ~300 MB reparentado a init (`detached: true` lo hace líder de su
+        // propio grupo, así que tampoco se lo lleva la muerte del padre) y
+        // vivo para siempre. Con 39 tests e2e que lo spawnean al arrancar
+        // —el panel didáctico pide `ai:getProviderStatus` en cada montaje— eso
+        // acumulaba decenas de procesos y >15 GB de RAM. Registrarlo desde el
+        // spawn hace que SIEMPRE haya a quién matar.
+        serverChild = child
+        /** Baja el registro solo si sigue apuntando a ESTE hijo (no pisar un server posterior). */
+        const unregister = (): void => {
+          if (serverChild === child) serverChild = null
+        }
+
         let settled = false
         let stdout = ''
         let stderr = ''
@@ -264,6 +301,7 @@ function spawnOpencodeServer(): Promise<OpencodeServerHandle> {
           if (settled) return
           settled = true
           if (child.pid !== undefined) killProcessGroup(child.pid, 'SIGKILL')
+          unregister()
           reject(
             new Error(
               'El server de OpenCode no arrancó dentro de ' +
@@ -281,6 +319,7 @@ function spawnOpencodeServer(): Promise<OpencodeServerHandle> {
           if (settled) return
           settled = true
           clearTimeout(timeoutId)
+          unregister()
           reject(new Error(describeSpawnFailure(binary, error)))
         })
 
@@ -291,7 +330,14 @@ function spawnOpencodeServer(): Promise<OpencodeServerHandle> {
           if (url === null) return
           settled = true
           clearTimeout(timeoutId)
-          serverChild = child
+          // `serverChild` ya quedó registrado en el spawn; si mientras
+          // arrancábamos alguien llamó a `stopOpencodeServer()`, el registro es
+          // `null` y este server ya está condenado (recibió el SIGTERM del
+          // grupo): no se lo re-publica como el singleton vivo.
+          if (serverChild !== child) {
+            reject(new Error('El server de OpenCode se detuvo mientras arrancaba.'))
+            return
+          }
           resolve({ url })
         })
 
@@ -312,6 +358,7 @@ function spawnOpencodeServer(): Promise<OpencodeServerHandle> {
           }
           settled = true
           clearTimeout(timeoutId)
+          unregister()
           reject(
             new Error(
               'El proceso de OpenCode terminó antes de quedar listo (code=' +
@@ -349,8 +396,14 @@ export function getOpencodeServer(): Promise<OpencodeServerHandle> {
  * (llamar sin un server activo es un no-op) y resetea el singleton para que
  * la próxima `getOpencodeServer()` spawnee uno nuevo. El cableado en
  * `before-quit` de `main/index.ts` lo hace el orquestador, NO este módulo.
+ *
+ * También CANCELA un arranque en vuelo que todavía no llegó al `spawn` (ver
+ * `spawnGeneration`): sin eso, "no había nada que matar" no significaba "no
+ * queda nada corriendo", significaba "el proceso se va a crear en un momento y
+ * nadie lo va a matar".
  */
 export async function stopOpencodeServer(): Promise<void> {
+  spawnGeneration++
   const child = serverChild
   serverChild = null
   serverPromise = null

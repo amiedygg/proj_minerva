@@ -4,9 +4,13 @@ import { createGithubService } from '../github'
 import { createPrWatcher, type PrWatcher } from '../github/pr-watcher'
 import { seenStore } from '../github/seen-store'
 import { createAiService } from '../ai'
-import { getAiSettingsInfo, getEffectiveAiSelection } from '../ai/env'
+import {
+  getAiSettingsInfo,
+  getEffectiveAiSelection,
+  providerNeedingCatalogWarmup,
+} from '../ai/env'
 import { getAiProviderStatusMap } from '../ai/providers/provider-status'
-import { getProviderModels } from '../ai/providers/provider-models'
+import { getProviderModels, warmProviderModels } from '../ai/providers/provider-models'
 import { analysisCache } from '../ai/analysis-cache'
 import { settingsStore } from '../settings/store'
 import { authManager } from '../auth/auth-manager'
@@ -207,6 +211,19 @@ export async function registerIpcHandlers(): Promise<{ stopPrWatcher: () => void
         // problema que T41 arregló para cambios POSTERIORES al análisis).
         // Queda una ventana teórica de milisegundos entre esta captura y la
         // lectura interna del servicio — irrelevante frente a la de 30-60s.
+        //
+        // Antes de resolver: calentar el catálogo dinámico SOLO si hace falta
+        // (F19). `getEffectiveAiSelection()` es SÍNCRONO y resuelve las
+        // opciones del modelo (el `effort`/`variant` elegido en Settings)
+        // contra el último catálogo dinámico conocido
+        // (`../ai/providers/model-catalog-snapshot.ts`), que en un arranque en
+        // frío está vacío si el usuario nunca abrió Settings — y un modelo
+        // NUEVO solo existe en el catálogo dinámico, así que sin esto su opción
+        // se descartaría justo en el análisis. `providerNeedingCatalogWarmup()`
+        // devuelve `null` cuando los descriptores ya están a mano: calentar
+        // spawnea el CLI del proveedor y no hay que pagarlo en cada análisis.
+        const providerToWarm = providerNeedingCatalogWarmup()
+        if (providerToWarm) await warmProviderModels(providerToWarm)
         const selectionAtStart = getEffectiveAiSelection()
         const aiService = await createAiService(githubService)
         const generated = await aiService.analyzePullRequest(req, {

@@ -1,47 +1,48 @@
 /**
- * Agregado de "modelos disponibles" por proveedor de IA (T35, F8; OpenCode
- * en T57), consumido por el canal IPC `ai:getProviderModels`
- * (`../../ipc/handlers.ts`):
- * - Claude Code: catálogo ESTÁTICO curado (`AI_PROVIDER_CATALOG`, T26/T34) —
- *   no hay nada que refrescar, se devuelve tal cual, envuelto en una promesa
- *   ya resuelta para que el canal sea uniformemente async sin importar el
- *   proveedor.
- * - Codex: catálogo DINÁMICO vía `fetchCodexModelCatalog`
- *   (`./codex-model-catalog.ts`), que spawnea un `codex app-server` efímero y
- *   pagina `model/list`.
- * - OpenCode: catálogo DINÁMICO vía `fetchOpencodeModelCatalog`
- *   (`./opencode-model-catalog.ts`), que habla con el server local
- *   (singleton lazy de `./opencode-runtime.ts`, T55, compartido con el probe)
- *   y filtra por providers `connected`.
+ * Agregado de "modelos disponibles" por proveedor de IA (T35, F8; OpenCode en
+ * T57; Claude Code en F19), consumido por el canal IPC `ai:getProviderModels`
+ * (`../../ipc/handlers.ts`). Desde F19 los TRES proveedores son dinámicos —le
+ * preguntan a su CLI qué modelos tiene disponibles la sesión— así que un modelo
+ * nuevo aparece en el picker sin publicar una release de Minerva:
+ * - Claude Code: `fetchClaudeCodeModelCatalog` (`./claude-code-model-catalog.ts`),
+ *   `supportedModels()` del Agent SDK sobre una sesión efímera que no gasta
+ *   tokens. Hasta F19 este era el único caso ESTÁTICO ("no hay nada que
+ *   refrescar"), y por eso Opus 5 no aparecía en la lista.
+ * - Codex: `fetchCodexModelCatalog` (`./codex-model-catalog.ts`), que spawnea
+ *   un `codex app-server` efímero y pagina `model/list`.
+ * - OpenCode: `fetchOpencodeModelCatalog` (`./opencode-model-catalog.ts`), que
+ *   habla con el server local (singleton lazy de `./opencode-runtime.ts`, T55,
+ *   compartido con el probe) y filtra por providers `connected`.
+ *
+ * Los tres degradan solos a su slice del catálogo curado
+ * (`AI_PROVIDER_CATALOG`) ante cualquier fallo, así que este módulo nunca
+ * lanza ni deja el picker vacío.
  *
  * Como la pantalla de Settings puede abrirse/refrescarse varias veces
- * seguidas, cada catálogo dinámico se cachea con un TTL corto
- * (`DYNAMIC_CACHE_TTL_MS`) — mismo patrón que `./cli-probe.ts`
- * (`getCliProviderStatus`): nunca bloqueante, y un rechazo no se cachea
- * (aunque ninguno de los dos `fetch*ModelCatalog` lanza en la práctica, ver
- * sus respectivas cabeceras, esta defensa evita que un rechazo inesperado
- * deje el proveedor "atascado" en error durante todo el TTL). Un `Map` por
- * proveedor generaliza la cache sin duplicar la lógica de TTL/rechazo entre
- * Codex y OpenCode.
+ * seguidas, cada catálogo se cachea con un TTL corto (`DYNAMIC_CACHE_TTL_MS`) —
+ * mismo patrón que `./cli-probe.ts` (`getCliProviderStatus`): nunca
+ * bloqueante, y un rechazo no se cachea (aunque ninguno de los tres
+ * `fetch*ModelCatalog` lanza en la práctica, ver sus respectivas cabeceras,
+ * esta defensa evita que un rechazo inesperado deje el proveedor "atascado" en
+ * error durante todo el TTL).
+ *
+ * Cada resultado se deposita además en `./model-catalog-snapshot.ts`, que es
+ * de donde `../env.ts` lee (SÍNCRONAMENTE) los descriptores de opción del
+ * modelo activo — ver la cabecera de ese módulo para el por qué.
  */
 import type { AiModelOption, AiProviderId } from '../../../shared/ai-providers'
-import { AI_PROVIDER_CATALOG } from '../../../shared/ai-providers'
+import { fetchClaudeCodeModelCatalog } from './claude-code-model-catalog'
 import { fetchCodexModelCatalog } from './codex-model-catalog'
 import { fetchOpencodeModelCatalog } from './opencode-model-catalog'
+import { recordProviderModels } from './model-catalog-snapshot'
 
-/** TTL de la cache de modelos dinámicos (Codex/OpenCode): evita re-spawnear/re-consultar el server en cada apertura de Settings. */
+/** TTL de la cache de modelos: evita re-spawnear/re-consultar el CLI en cada apertura de Settings. */
 const DYNAMIC_CACHE_TTL_MS = 60_000
 
-/** Proveedores con catálogo DINÁMICO (el resto usa `AI_PROVIDER_CATALOG` estático tal cual). */
-type DynamicProvider = 'codex' | 'opencode'
-
-const DYNAMIC_FETCHERS: Record<DynamicProvider, () => Promise<readonly AiModelOption[]>> = {
+const DYNAMIC_FETCHERS: Record<AiProviderId, () => Promise<readonly AiModelOption[]>> = {
+  'claude-code': fetchClaudeCodeModelCatalog,
   codex: fetchCodexModelCatalog,
   opencode: fetchOpencodeModelCatalog,
-}
-
-function isDynamicProvider(provider: AiProviderId): provider is DynamicProvider {
-  return provider === 'codex' || provider === 'opencode'
 }
 
 interface CacheEntry {
@@ -49,33 +50,47 @@ interface CacheEntry {
   promise: Promise<readonly AiModelOption[]>
 }
 
-const dynamicCache = new Map<DynamicProvider, CacheEntry>()
+const dynamicCache = new Map<AiProviderId, CacheEntry>()
 
-function getDynamicModels(provider: DynamicProvider): Promise<readonly AiModelOption[]> {
+/**
+ * Modelos disponibles para `provider` (T35/T57/F19): dinámicos con cache TTL.
+ * Nunca lanza: los tres `fetch*ModelCatalog` ya degradan a su slice de
+ * `AI_PROVIDER_CATALOG` ante cualquier fallo.
+ */
+export function getProviderModels(provider: AiProviderId): Promise<readonly AiModelOption[]> {
   const now = Date.now()
   const cached = dynamicCache.get(provider)
   if (cached && cached.expiresAt > now) return cached.promise
 
   const promise = DYNAMIC_FETCHERS[provider]()
   dynamicCache.set(provider, { expiresAt: now + DYNAMIC_CACHE_TTL_MS, promise })
-  promise.catch(() => {
-    dynamicCache.delete(provider)
-  })
+  void promise.then(
+    (models) => {
+      recordProviderModels(provider, models)
+    },
+    () => {
+      dynamicCache.delete(provider)
+    },
+  )
   return promise
 }
 
 /**
- * Modelos disponibles para `provider` (T35/T57): dinámicos con cache TTL para
- * Codex/OpenCode, catálogo curado estático (envuelto en una promesa) para el
- * resto. Nunca lanza: `fetchCodexModelCatalog`/`fetchOpencodeModelCatalog` ya
- * degradan a su slice de `AI_PROVIDER_CATALOG` ante cualquier fallo.
+ * Calienta el catálogo de `provider` sin propagar errores ni resultado (F19):
+ * lo usa el handler de análisis (`../../ipc/handlers.ts`) para que el snapshot
+ * síncrono (`./model-catalog-snapshot.ts`) ya tenga los descriptores del modelo
+ * activo cuando `getEffectiveAiSelection()` resuelva sus opciones. Con la cache
+ * TTL poblada es instantáneo.
  */
-export function getProviderModels(provider: AiProviderId): Promise<readonly AiModelOption[]> {
-  if (isDynamicProvider(provider)) return getDynamicModels(provider)
-  return Promise.resolve(AI_PROVIDER_CATALOG[provider].models)
+export async function warmProviderModels(provider: AiProviderId): Promise<void> {
+  try {
+    await getProviderModels(provider)
+  } catch {
+    // Best-effort: si no se pudo refrescar, `../env.ts` cae al catálogo curado.
+  }
 }
 
-/** Solo para tests: fuerza a que la próxima llamada de un proveedor dinámico vuelva a refrescar en vez de servir la cache. */
+/** Solo para tests: fuerza a que la próxima llamada de un proveedor vuelva a refrescar en vez de servir la cache. */
 export function clearProviderModelsCache(): void {
   dynamicCache.clear()
 }

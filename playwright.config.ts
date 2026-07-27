@@ -9,6 +9,10 @@ import { defineConfig } from '@playwright/test'
  */
 export default defineConfig({
   testDir: './e2e',
+  // Red de seguridad de recursos: mata los `opencode serve` que se hayan
+  // escapado (timeout de un test, SIGKILL al worker, crash de Electron). Cada
+  // uno pesa ~300 MB; ver `e2e/global-teardown.ts`.
+  globalTeardown: './e2e/global-teardown.ts',
   // La IA es mock (~1s) pero el análisis descarga snapshot + renderiza
   // mermaid lazy; margen amplio por test.
   timeout: 120_000,

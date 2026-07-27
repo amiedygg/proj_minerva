@@ -3735,3 +3735,217 @@ Dos gotchas nuevos, ambos de método:
    haber desaparecido, con el tono más alarmante de la sección. Va gateada por
    `!loading`. Lo encontró la verificación visual, no los tests: el e2e pasaba
    porque su cuenta fantasma efectivamente no existe, y Playwright espera.
+
+## F19 — Catálogo de modelos dinámico también para Claude Code (2026-07-25)
+
+> Motivación (del usuario, 2026-07-25): «Claude Code ya tiene disponible Opus 5
+> y no aparece en la lista. El objetivo es que la lista se llene con los modelos
+> más nuevos de manera automática, y no tener que desplegar un release solo para
+> actualizar la lista de modelos por proveedor.»
+>
+> Diagnóstico: de los tres proveedores, Codex (T35) y OpenCode (T57) YA tenían
+> catálogo dinámico. Claude Code era el único que no: `provider-models.ts`
+> devolvía `AI_PROVIDER_CATALOG['claude-code'].models` tal cual, con el
+> comentario "no hay nada que refrescar". O sea: el problema no era general, era
+> ese hueco puntual — y su consecuencia exacta era la que reportó el usuario.
+
+- [x] **T100. Catálogo dinámico de Claude Code**
+  - `main/ai/providers/claude-code-model-catalog.ts` (NUEVO): `query()` del
+    Agent SDK en modo STREAMING INPUT con un generador que nunca yieldea →
+    `supportedModels()` (control request del protocolo, NO una llamada al
+    modelo: cero tokens) → `ModelInfo[]` mapeado a `AiModelOption[]`. Sesión
+    inyectable (`openSession`) para testear sin spawnear, igual que
+    `createClient` en `codex-model-catalog.ts`. `abortController.abort()` en el
+    `finally` + timeout de 15s.
+  - Verificado EMPÍRICAMENTE contra `claude` 2.1.220 + Agent SDK 0.3.203: 647 ms,
+    devuelve `opus[1m]`/`claude-fable-5[1m]`/`sonnet`/`haiku` y no deja procesos
+    huérfanos (`pgrep -c claude` idéntico antes y después).
+  - `provider-models.ts`: los tres proveedores pasan por `DYNAMIC_FETCHERS`
+    (desaparece la rama "estático"), misma cache TTL de 60s por proveedor.
+
+- [x] **T101. Las opciones del modelo activo se resuelven contra el catálogo dinámico**
+  - Bug latente desde T35 que F19 habría vuelto crónico: `resolveModelOptions`
+    (`main/ai/env.ts`) buscaba los descriptores SOLO en el catálogo curado. Un
+    modelo que solo existe en el dinámico —o sea, todo modelo nuevo— no
+    matcheaba, así que el `effort`/`variant` elegido en Settings se descartaba en
+    silencio: la UI mostraba el selector (ella sí ve la lista dinámica) y main
+    mandaba el análisis sin la opción.
+  - `main/ai/providers/model-catalog-snapshot.ts` (NUEVO): último catálogo
+    dinámico por proveedor, leíble SÍNCRONAMENTE (`getEffectiveAiSelection()` lo
+    es, y volverla async obligaría a propagar el await por los tres servicios).
+    `provider-models.ts` deposita cada resultado; `env.ts` lo consulta antes del
+    curado.
+  - `ipc/handlers.ts`: el handler de análisis hace `await warmProviderModels(...)`
+    antes de resolver, para que un arranque en frío (usuario que nunca abrió
+    Settings) no le toque justo al análisis.
+
+- [x] **T102. Matcheo por alias (`aliasFor`)**
+  - El catálogo dinámico devuelve filas ALIAS (`sonnet`, `opus[1m]`) mientras en
+    `settings.json` puede estar persistido el id canónico que el curado ofrecía
+    (`claude-sonnet-5`). `AiModelOption.aliasFor` (de `resolvedModel` del SDK) +
+    `findModelInList` (exacto primero, alias después) lo resuelven en los dos
+    lados: `env.ts` y `ProviderModelPanel.tsx`.
+  - La fila `value: 'default'` del SDK se DESCARTA: resuelve al mismo modelo que
+    una fila concreta, y dejarla haría que dos cards se leyeran como "Activo".
+
+- [x] **T103. Verificación**
+  - `npm run verify` verde (41 archivos, 757 tests) + suite e2e completa
+    (`packaged.spec.ts` exigió `npm run dist:dir`: el binario de `dist/` era
+    0.6.3 contra un `package.json` 0.8.0 — mismo tropiezo que T99).
+  - Captura ANTES/DESPUÉS del tab Claude Code (por bisección con `git stash`,
+    ver gotcha 3): main mostraba `claude-fable-5`/`claude-opus-4-8`/… sin Opus 5;
+    con F19 muestra `opus[1m]` (Opus 5) primero, con su selector de razonamiento.
+
+### Bitácora F19 — gotchas
+
+1. **`supportedModels()` exige modo STREAMING INPUT y un generador que NO
+   yieldee.** Con `prompt` como string no hay objeto `Query` sobre el que pedir
+   control requests; con un generador que cierra de inmediato, el CLI ve EOF en
+   stdin y puede salir antes de responder. El generador correcto se queda
+   esperando el `abort` y termina ahí. Como no yieldea, `eslint require-yield`
+   protesta: el disable va en su propia línea, pegado a la función (un comentario
+   multilínea entre el disable y el `function` rompe el targeting de
+   `eslint-disable-next-line` y el disable queda "unused" **y** el error sigue).
+2. **El fallback curado también envejece.** Dejarlo con ids versionados
+   (`claude-opus-4-8`) reproduce el bug original en el caso "CLI ausente". La
+   primera entrada es ahora el ALIAS DE FAMILIA `opus`, que resuelve siempre al
+   Opus más nuevo de la cuenta. Corolario: agregar modelos a mano a
+   `shared/ai-providers.ts` ya NO es necesario para que aparezcan.
+3. **Un aviso raro en una captura no es automáticamente tu regresión.** La
+   captura de verificación mostraba «No se encontró el CLI `claude`» en el tab de
+   Claude Code *mientras* el picker mostraba los modelos que ese mismo CLI acaba
+   de reportar. Antes de investigarlo como propio: `git stash -u` + build +
+   correr el MISMO test contra `main` — el aviso ya estaba. Es un desacuerdo
+   preexistente entre `cli-probe.ts` y `resolve-cli.ts` bajo Xvfb, sin relación
+   con F19 (queda pendiente, ver abajo).
+4. **Calentar el catálogo en TODO análisis rompió un spec que no tiene nada que
+   ver — otra vez el patrón del gotcha 7 de F18.** La primera versión de T101
+   hacía `await warmProviderModels(provider)` sin condición al empezar cada
+   análisis. Con OpenCode activo eso arranca su server (segundos en frío) ANTES
+   de que el streaming empiece, y `harness-activity.spec.ts` —que muestrea 14
+   veces cada 120 ms, o sea una ventana de 1,7 s— no llegaba a ver ni un solo
+   evento: `midState` quedaba `null` y el error hablaba de `activity`, no de
+   latencia. La lección repetida: **un await nuevo en un camino caliente se paga
+   en specs ajenos y el síntoma no lo señala.** Arreglo:
+   `providerNeedingCatalogWarmup()` devuelve `null` salvo que NINGÚN catálogo
+   (dinámico ni curado) conozca el modelo activo — el caso "modelo nuevo, app
+   recién arrancada", que es el único donde calentar aporta algo.
+5. **Un e2e que elige su dato del catálogo ESTÁTICO deja de ser determinista en
+   cuanto ese catálogo se vuelve dinámico.** `settings.spec.ts` tomaba
+   `snapshot.catalog['claude-code'].models[0].id` y después clickeaba la card con
+   ese texto: con F19 las cards ya no son las curadas. Ahora el target sale del
+   MISMO canal que puebla el picker (`ai:getProviderModels`), que degrada al
+   curado si el CLI no está — determinista con y sin `claude` instalado.
+
+### Pendiente detectado en F19 (no es parte de F19)
+
+- **`cli-probe.ts` reporta `not-found` para `claude` en un entorno donde
+  `resolve-cli.ts` SÍ lo encuentra** (reproducido bajo Xvfb, presente en `main`
+  desde antes de F19). Efecto: el tab de Claude Code muestra la guía "instalá el
+  CLI" aunque el CLI funcione y sus modelos se listen. Vale una tarea propia:
+  los dos módulos resuelven el binario por el mismo camino, así que la
+  divergencia apunta al `execFile(path, ['--version'])` con
+  `PROBE_TIMEOUT_MS = 4000` (arranque frío del CLI) o a la interacción con
+  `clearCliPathCache`.
+
+## F20 — Fuga de servers `opencode serve` huérfanos (2026-07-25)
+
+> Motivación (del usuario, 2026-07-25, con captura de btop): 53 procesos
+> `opencode` huérfanos y 14,4 GB de RAM ocupada tras las corridas de e2e.
+> «Podemos revisar la causa o agregar una limpieza al final de los tests».
+> Se hizo lo primero (era un bug de PRODUCCIÓN, no de los tests) y también lo
+> segundo, como red.
+
+- [x] **T104. Causa raíz: el hijo no quedaba registrado hasta estar "ready"**
+  - `main/ai/providers/opencode-runtime.ts` asignaba `serverChild = child` DENTRO
+    del handler de stdout, al parsear la línea `opencode server listening`.
+    Durante todo el arranque —segundos en frío: el wrapper de omarchy resuelve el
+    binario por npx— `serverChild` seguía en `null`, así que
+    `stopOpencodeServer()` (que arranca con `const child = serverChild`) era un
+    **no-op**. Cerrar la app en esa ventana dejaba el proceso vivo, y
+    `detached: true` (necesario para el kill de GRUPO) lo hace líder de su propio
+    grupo, así que tampoco se lo llevaba la muerte del padre: quedaba reparentado
+    a init (`ppid=1`), ~300 MB, para siempre.
+  - Arreglo: registrar `serverChild` INMEDIATAMENTE después del `spawn`, con un
+    `unregister()` en los tres caminos de fallo (timeout, `error`, `exit` antes de
+    ready) para no pisar un server posterior. En el handler de ready, si el
+    registro ya no apunta a este hijo, el server está condenado (recibió el
+    SIGTERM) y se rechaza en vez de publicarlo como singleton vivo — antes eso
+    habría dejado una URL muerta en la cache.
+  - **No era un problema solo de tests:** cualquier usuario que cerrara Minerva
+    mientras el server arrancaba dejaba el mismo huérfano de 300 MB.
+  - Por qué escalaba tanto en e2e: `DidacticAnalysisArea` pide
+    `ai:getProviderStatus` al montarse, y `probeOpencode()` levanta el server
+    local — o sea, **cada uno de los 39 launches spawnea uno**, incluso con
+    `MINERVA_MOCK_AI=1` (ese flag corta antes de la IA, no antes del probe de
+    CLIs).
+
+- [x] **T104.b Segunda mitad: cancelar el arranque que todavía no spawneó**
+  - Con T104 la suite completa bajó de decenas de huérfanos a **uno**, y el log
+    del teardown (diseñado para ser ruidoso) lo delató. Causa: `spawnOpencodeServer`
+    espera `findEphemeralPort()` —async, abre y cierra un socket— ANTES del
+    `spawn`. Un `stopOpencodeServer()` en esa ventana limpiaba el singleton y
+    devolvía sin nada que matar, y la promesa en vuelo seguía adelante creando el
+    proceso DESPUÉS, con la app ya cerrándose: huérfano garantizado.
+  - Arreglo: contador `spawnGeneration`, que `stopOpencodeServer()` incrementa;
+    el intento en vuelo compara su generación justo antes de spawnear y se
+    rechaza si cambió. "No hay nada que matar" ya no puede significar "el proceso
+    se va a crear en un segundo y nadie lo va a matar".
+
+- [x] **T105. Red de seguridad: barrido por test + `globalTeardown`**
+  - `e2e/opencode-sweep.ts` (NUEVO): mata servers huérfanos con selección
+    deliberadamente estrecha — SOLO si (a) tiene `PLAYWRIGHT_TEST=1` en
+    `/proc/<pid>/environ` (lo pone `fixtures.ts`), así la sesión de `opencode` del
+    usuario o la de Minerva en dev nunca entran, y (b) `ppid === 1`, así nunca se
+    le toca el server a una app que todavía vive. Mata el GRUPO (pid negativo).
+    Solo Linux (`/proc`); en otras plataformas devuelve `[]` y quien llama lo DICE,
+    en vez de fingir que barrió.
+  - Se llama en `closeMinerva` (**por test**, no solo al final) para que un leak
+    no se arrastre por los 10 min de suite, y en `e2e/global-teardown.ts` +
+    `globalTeardown` del config como red para el test que ni llega a su teardown.
+  - Loguea CUÁL test lo dejó (derivado de `MINERVA_USER_DATA_DIR`): un barrido
+    silencioso taparía la regresión siguiente. Fue justamente ese log el que
+    identificó al último superviviente en un minuto (ver gotcha 4).
+
+- [x] **T106. Verificación (bisección, no confianza)**
+  - Sonda e2e temporal que cierra la app EN PLENA ventana de arranque del server:
+    con el código viejo → `LEAKED = 1` (y el teardown lo reportó y lo mató, lo que
+    validó la red en la misma corrida); con el arreglo → `LEAKED = 0` y teardown
+    en silencio. La sonda se borró después.
+  - Test de regresión en `opencode-runtime.test.ts`: `stopOpencodeServer()` manda
+    `SIGTERM` al grupo de un server que todavía no imprimió su línea de ready, y
+    el arranque que termina después se rechaza en vez de publicarse.
+  - `npm run verify` verde (758 tests) + suite e2e completa, midiendo procesos y
+    RAM antes/después.
+  - Los 53 huérfanos acumulados se mataron con el mismo criterio del teardown
+    (`PLAYWRIGHT_TEST=1`): RAM de 14,4 GB a 2 GB.
+
+### Bitácora F20 — gotchas
+
+1. **`detached: true` convierte "el padre murió" en "el hijo vive para siempre".**
+   Se puso para poder matar el GRUPO (robustez ante wrappers que no hagan `exec`),
+   y el precio es que el hijo NO hereda la muerte del padre. Con eso, cualquier
+   camino en el que el registro del pid esté vacío no es "no había nada que
+   matar": es un huérfano garantizado. Dos reglas para futuros spawns `detached`:
+   registrar el pid en el MISMO tick del spawn (nunca cuando el proceso "esté
+   listo"), y hacer CANCELABLE todo lo asíncrono que ocurra ANTES del spawn — un
+   `await` previo (acá `findEphemeralPort()`) es una ventana en la que el killer
+   no ve nada y el proceso todavía va a nacer.
+2. **`MINERVA_MOCK_AI=1` no evita spawnear CLIs de IA.** Corta en
+   `createAiService` (main/ai/index.ts), que está DESPUÉS del probe de estado de
+   los proveedores. El panel didáctico pide ese probe al montarse, así que hasta
+   el test más ajeno a la IA levanta un `opencode serve` de 300 MB. Si alguna vez
+   hace falta bajar el consumo de la suite, ese es el lugar — no el teardown.
+3. **Un teardown que barre en silencio esconde la regresión que viene.** El
+   `console.log` con la cuenta es parte del diseño: la red existe para que la
+   máquina no se llene, no para que nadie note que la limpieza real se rompió.
+4. **`dist/linux-unpacked` es un TERCER build que hay que rehacer.** Con T104 +
+   T104.b aplicados, la suite seguía reportando exactamente 1 superviviente por
+   corrida. No era una tercera causa: `packaged.spec.ts` corre el binario de
+   `dist/`, empaquetado ANTES del arreglo, o sea con el main viejo. `npm run build`
+   no lo toca — hace falta `npm run dist:dir`. Dos corridas de 10 minutos se
+   fueron persiguiendo ese fantasma; lo que lo resolvió fue hacer que el barrido
+   dijera de QUÉ test venía el huérfano (un minuto). Regla: cuando se arregla algo
+   del proceso main y `packaged.spec.ts` está en juego, `dist:dir` también hay que
+   rehacerlo — es el mismo tropiezo que la versión desalineada de T99/T103, con
+   otra cara.

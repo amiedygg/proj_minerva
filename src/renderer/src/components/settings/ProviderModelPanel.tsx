@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Loader2 } from 'lucide-react'
-import type { AiProviderId } from '../../../../shared/ai-providers'
+import { findModelInList, type AiProviderId } from '../../../../shared/ai-providers'
 import type { AiProviderStatus, AiSettingsInfo } from '../../../../shared/types'
 import { useProviderModels } from '../../hooks/use-provider-models'
 import { Badge } from '../ui/Badge'
@@ -66,15 +66,20 @@ export function ProviderModelPanel({
 
   const isActiveTab = viewedProvider === info.provider
   const allowCustom = viewedProvider === 'opencode'
-  const activeModelInList = models.some((model) => model.id === info.model)
-  const customIsActive = isActiveTab && allowCustom && !activeModelInList
+  // Matcheo por id exacto y, si no, por `aliasFor` (F19): el catálogo dinámico
+  // de Claude Code devuelve filas alias (`sonnet`, `opus[1m]`) mientras en
+  // `settings.json` puede estar persistido el id canónico que el catálogo
+  // curado ofrecía (`claude-sonnet-5`). Sin esto, esa selección no marcaba
+  // ninguna card como "Activo" ni pintaba el selector de razonamiento.
+  const matchedActiveModel = findModelInList(models, info.model)
+  const customIsActive = isActiveTab && allowCustom && matchedActiveModel === undefined
 
   const [activating, setActivating] = useState<string | null>(null)
   const [activateError, setActivateError] = useState<string | null>(null)
   const [customValue, setCustomValue] = useState(() => (customIsActive ? info.model : ''))
 
   const anyActivating = activating !== null
-  const activeModel = isActiveTab ? models.find((model) => model.id === info.model) : undefined
+  const activeModel = isActiveTab ? matchedActiveModel : undefined
 
   async function activate(rawModelId: string): Promise<void> {
     const modelId = rawModelId.trim()
@@ -116,7 +121,7 @@ export function ProviderModelPanel({
           una columna única obligaba a scrollear el doble en ventanas bajas. */}
       <div className={wide ? 'grid grid-cols-2 gap-2' : 'space-y-2'}>
         {models.map((model) => {
-          const isModelActive = isActiveTab && model.id === info.model
+          const isModelActive = isActiveTab && model === matchedActiveModel
           const isThisActivating = activating === model.id
 
           return (

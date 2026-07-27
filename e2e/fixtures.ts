@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { test as base, expect, chromium } from '@playwright/test'
 import type { Browser, BrowserContext, CDPSession, Page, TestInfo } from '@playwright/test'
 import type { ChildProcess } from 'node:child_process'
+import { reportSwept, sweepOrphanedOpencodeServers } from './opencode-sweep'
 
 declare global {
   interface Window {
@@ -116,6 +117,14 @@ export async function launchMinerva(
  * Desconecta el CDP y termina el proceso. SIGTERM con escalada corta a
  * SIGKILL: un exit limpio tarda <1s; si tarda más es el cuelgue de shutdown
  * de Chromium bajo Xvfb (clipboard/X11) y esperar no lo arregla.
+ *
+ * Al final barre el server de `opencode` si quedó huérfano (F20): la limpieza
+ * REAL es `stopOpencodeServer()` en el `before-quit` de main, pero si algún
+ * camino se la saltea, cada launch deja ~300 MB colgados — con 39 tests eso
+ * llenaba la RAM de la máquina. Se hace por test, no solo al final de la suite,
+ * para que un leak no se arrastre por toda la corrida; y se loguea CUÁL test lo
+ * dejó, porque el barrido silencioso taparía la regresión. Solo toca procesos
+ * huérfanos de la suite — ver `./opencode-sweep.ts`.
  */
 export async function closeMinerva(app: MinervaApp): Promise<void> {
   await app.browser.close().catch(() => {})
@@ -131,6 +140,7 @@ export async function closeMinerva(app: MinervaApp): Promise<void> {
       resolve()
     })
   })
+  reportSwept('close', sweepOrphanedOpencodeServers())
 }
 
 /** Espera la ventana principal lista (lista de PRs mock cargada). */

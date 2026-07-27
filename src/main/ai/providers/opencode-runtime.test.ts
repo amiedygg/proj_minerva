@@ -406,6 +406,53 @@ describe('stopOpencodeServer', () => {
     expect(signals).toContain('SIGKILL')
   })
 
+  it('mata al server que TODAVÍA está arrancando (no esperó su línea de ready)', async () => {
+    // REGRESIÓN: el hijo se registraba al imprimir "ready", así que durante todo
+    // el arranque (segundos, en frío) `stopOpencodeServer()` era un no-op y
+    // cerrar la app en esa ventana dejaba un `opencode serve` de ~300 MB
+    // reparentado a init — `detached: true` lo hace líder de su propio grupo, así
+    // que tampoco se lo llevaba la muerte del padre. En la suite e2e (39 launches,
+    // cada uno spawnea uno al montar el panel didáctico) eso acumulaba >15 GB.
+    vi.useFakeTimers()
+    const pending = getOpencodeServer()
+    await flushMicrotasks()
+    expect(lastChild, 'el hijo ya fue spawneado').not.toBeNull()
+
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
+      if (signal === 0) throw new Error('ESRCH') // murió con el SIGTERM
+      return true
+    })
+
+    const stopPromise = stopOpencodeServer()
+    await vi.advanceTimersByTimeAsync(1_001)
+    await stopPromise
+
+    expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGTERM')
+
+    // Si el arranque termina DESPUÉS del stop, ese server ya está condenado: no
+    // se publica como el singleton vivo (quedaría una URL muerta en la cache).
+    lastChild!.stdout.emit('data', Buffer.from(readyLine('http://127.0.0.1:45000')))
+    await expect(pending).rejects.toThrow(/se detuvo mientras arrancaba/)
+  })
+
+  it('cancela un arranque que todavía NO llegó al spawn (no deja un proceso naciendo sin dueño)', async () => {
+    // REGRESIÓN (segunda mitad del leak de F20): `spawnOpencodeServer` espera
+    // `findEphemeralPort()` antes de spawnear. Un stop en esa ventana limpiaba el
+    // singleton y devolvía "nada que matar", pero la promesa en vuelo seguía y
+    // creaba el proceso DESPUÉS — con la app ya cerrándose, o sea un huérfano
+    // garantizado.
+    vi.useFakeTimers()
+    const pending = getOpencodeServer()
+
+    // SIN `flushMicrotasks()`: el stop llega mientras `findEphemeralPort()` está
+    // en vuelo, antes de que exista ningún hijo.
+    await stopOpencodeServer()
+    await flushMicrotasks()
+
+    await expect(pending).rejects.toThrow(/se canceló antes de lanzarlo/)
+    expect(spawnMock, 'no se spawneó nada tras el stop').not.toHaveBeenCalled()
+  })
+
   it('es idempotente: llamar dos veces seguidas no lanza', async () => {
     vi.useFakeTimers()
     const promise = getOpencodeServer()

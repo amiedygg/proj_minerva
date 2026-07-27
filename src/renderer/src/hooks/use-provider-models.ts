@@ -14,11 +14,11 @@ interface UseProviderModelsResult {
 
 /**
  * Modelos reales de `provider` (T35/T37, canal async `ai:getProviderModels`):
- * para Codex/OpenCode trae los modelos DINÁMICOS de la cuenta/server local
- * (con sus `supportedReasoningEfforts` reales vía `options` en el caso de
- * Codex); para Claude Code, hoy el mismo curado que ya vive en
- * `info.catalog` (el canal solo refresca de verdad para Codex/OpenCode, ver
- * `main/ai/providers/provider-models.ts`).
+ * los modelos DINÁMICOS que la sesión del CLI tiene disponibles, con sus
+ * niveles de razonamiento reales vía `options`. Desde F19 vale para los TRES
+ * proveedores —Claude Code incluido, antes servía el catálogo curado tal cual—
+ * así que un modelo nuevo aparece acá sin publicar una release; ver
+ * `main/ai/providers/provider-models.ts`.
  *
  * `fallback` (el catálogo ESTÁTICO de `info.catalog[provider].models`, T26)
  * es el valor inicial de `models` para que el picker nunca quede vacío

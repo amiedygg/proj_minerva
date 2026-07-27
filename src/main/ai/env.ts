@@ -30,12 +30,15 @@ import {
   AI_PROVIDER_CATALOG,
   DEFAULT_AI_PROVIDER,
   DEFAULT_MODEL_BY_PROVIDER,
+  findModelInList,
   getModelOption,
   isAiProviderId,
   resolveOptionValue,
   type AiProviderId,
+  type ModelOptionDescriptor,
 } from '../../shared/ai-providers'
 import type { AiModelSource, AiSettingsInfo } from '../../shared/types'
+import { getSnapshotProviderModels } from './providers/model-catalog-snapshot'
 import { settingsStore } from '../settings/store'
 
 /**
@@ -124,11 +127,56 @@ export interface EffectiveAiSelection {
  * anterior que ya no aplica al modelo activo (p. ej. `xhigh` guardado y
  * luego el usuario cambia a un modelo que no lo soporta) nunca se filtra tal
  * cual, siempre cae a algo que el modelo activo sí soporta. Un modelo sin
- * descriptores (o que no está en el catálogo curado, p. ej. un slug
- * "avanzado" de OpenCode) resuelve a `{}`.
+ * descriptores (o que no está en ningún catálogo, p. ej. un slug "avanzado" de
+ * OpenCode tecleado a mano) resuelve a `{}`.
+ *
+ * De dónde salen los descriptores (F19): primero del último catálogo DINÁMICO
+ * conocido del proveedor (`./providers/model-catalog-snapshot.ts`) y solo si
+ * ahí no hay nada, del curado. Ese orden es el punto: los modelos nuevos —los
+ * que aparecen sin release, justo lo que F19 habilita— existen únicamente en el
+ * catálogo dinámico, así que buscarlos solo en el curado descartaba en silencio
+ * el `effort`/`variant` que el usuario había elegido en Settings (la UI sí veía
+ * el selector, main mandaba el análisis sin la opción). Además el catálogo
+ * dinámico trae los niveles REALES de esa cuenta, no los curados a mano.
  */
+function findDescriptors(provider: AiProviderId, model: string): readonly ModelOptionDescriptor[] {
+  const dynamic = getSnapshotProviderModels(provider)
+  const fromDynamic = dynamic === undefined ? undefined : findModelInList(dynamic, model)
+  if (fromDynamic) return fromDynamic.options ?? []
+  return getModelOption(AI_PROVIDER_CATALOG, provider, model)?.options ?? []
+}
+
+/**
+ * Proveedor cuyo catálogo dinámico conviene refrescar ANTES de resolver la
+ * selección, o `null` si no hace falta (F19). Lo usa el handler de análisis
+ * (`../ipc/handlers.ts`): la resolución de opciones es síncrona y mira los dos
+ * catálogos de `findDescriptors`, así que solo hay algo que ganar cuando NINGUNO
+ * de los dos conoce todavía el modelo activo — el caso "modelo nuevo con la app
+ * recién arrancada".
+ *
+ * La condición importa por costo, no por corrección: calentar spawnea el CLI del
+ * proveedor (para OpenCode, arrancar su server, que en frío tarda segundos), y
+ * hacerlo en TODO análisis retrasaba el arranque del streaming lo suficiente
+ * para romper un e2e que muestrea la primera vuelta y a nadie le sirve pagarlo
+ * cuando los descriptores ya están a mano.
+ */
+export function providerNeedingCatalogWarmup(): AiProviderId | null {
+  const { provider, model } = getEffectiveAiSelection()
+  return findDescriptorSource(provider, model) === null ? provider : null
+}
+
+function findDescriptorSource(
+  provider: AiProviderId,
+  model: string,
+): 'dynamic' | 'curated' | null {
+  const dynamic = getSnapshotProviderModels(provider)
+  if (dynamic !== undefined && findModelInList(dynamic, model) !== undefined) return 'dynamic'
+  if (getModelOption(AI_PROVIDER_CATALOG, provider, model) !== undefined) return 'curated'
+  return null
+}
+
 function resolveModelOptions(provider: AiProviderId, model: string): Record<string, string> {
-  const descriptors = getModelOption(AI_PROVIDER_CATALOG, provider, model)?.options ?? []
+  const descriptors = findDescriptors(provider, model)
   if (descriptors.length === 0) return {}
 
   const saved = settingsStore.getPersistedModelOptions(provider)
