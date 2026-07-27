@@ -208,6 +208,12 @@ npm run build
   resultó menos conveniente en el uso real y queda como escape hatch por entorno
   (`MINERVA_GITHUB_ACCESS=oauth`). Y si tu `gh` tiene **varias cuentas**, Settings deja
   elegir con cuál trabaja Minerva, sin tocar la cuenta activa de tu terminal
+- [x] Lista de modelos siempre al día v0.8.1: los tres proveedores le preguntan a su CLI
+  qué modelos tiene tu sesión, así que un modelo nuevo (Opus 5, un GPT nuevo, lo que
+  sumes a tu OpenCode) aparece en Settings **sin esperar una versión nueva de Minerva**.
+  El catálogo escrito en el código quedó como red de emergencia para cuando el CLI no
+  está. Incluye el arreglo de una fuga: cerrar Minerva mientras el server de OpenCode
+  arrancaba dejaba un proceso de ~300 MB huérfano para siempre
 - [ ] Comentar en un PR real de prueba (verificación con cuenta real)
 
 > Estado detallado, bitácora de gotchas y control de tareas: `.agents/TASKS.md`.

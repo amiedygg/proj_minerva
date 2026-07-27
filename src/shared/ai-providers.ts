@@ -9,8 +9,15 @@
  * `openrouter/<id>` que produce la migración de `main/settings/store.ts`).
  * Claude Code, Codex y OpenCode no llaman a una API HTTP con un id de modelo
  * libre, usan los CLIs/SDK oficiales (T27/T28/T29/T55-T57), así que su
- * catálogo curado es el FALLBACK cuando no hay lista dinámica (T35, T57:
- * `main/ai/providers/{codex,opencode}-model-catalog.ts`).
+ * catálogo curado es el FALLBACK cuando no hay lista dinámica (T35, T57 y F19:
+ * `main/ai/providers/{claude-code,codex,opencode}-model-catalog.ts`).
+ *
+ * F19: los TRES proveedores tienen catálogo dinámico — Claude Code era el
+ * último que no lo tenía, y por eso su lista solo se actualizaba publicando
+ * una release de Minerva. Corolario para quien edite las listas de abajo: son
+ * fallbacks de emergencia (CLI ausente o que no responde), NO la fuente de
+ * verdad de "qué modelos hay"; agregar un modelo nuevo acá no es necesario
+ * para que aparezca en la UI.
  */
 export type AiProviderId = 'claude-code' | 'codex' | 'opencode'
 
@@ -53,6 +60,21 @@ export interface AiModelOption {
   vendor: string
   /** Descriptores de opción de este modelo (T34); ausente = el modelo no tiene opciones configurables. */
   options?: ModelOptionDescriptor[]
+  /**
+   * Id canónico al que resuelve `id` cuando `id` es un ALIAS de familia
+   * (F19: `sonnet` → `claude-sonnet-5`, `opus[1m]` → `claude-opus-5[1m]`), tal
+   * como lo reporta el proveedor (`resolvedModel` de `ModelInfo` en el Agent
+   * SDK de Claude Code). Existe para MATCHEAR una selección persistida contra
+   * la fila del catálogo que la cubre: quien eligió `claude-sonnet-5` cuando
+   * ese id estaba en el catálogo curado sigue teniendo eso en `settings.json`,
+   * y el catálogo dinámico hoy trae la fila como `sonnet` — sin este campo esa
+   * selección no matchearía ninguna fila y perdería tanto el badge "Activo"
+   * como el selector de razonamiento (ver `findModelInList`).
+   *
+   * Ausente cuando `id` YA es el id canónico (el caso de todos los modelos de
+   * Codex/OpenCode y de los curados de este archivo).
+   */
+  aliasFor?: string
 }
 
 export interface AiProviderCatalogEntry {
@@ -90,8 +112,19 @@ const EFFORT_CHOICE_DESCRIPTIONS: Record<string, string> = {
  * choices en cada entrada del catálogo de abajo. `defaultValue` DEBE estar en
  * `values` (invariante de los datos curados de este archivo, no se valida en
  * runtime porque es contenido estático, no input de usuario).
+ *
+ * Exportada desde F19 para que el catálogo DINÁMICO de Claude Code
+ * (`main/ai/providers/claude-code-model-catalog.ts`) arme sus descriptores con
+ * las MISMAS etiquetas y descripciones que los curados de acá: el Agent SDK
+ * reporta los niveles soportados (`supportedEffortLevels`) pero no texto
+ * humano para cada uno, así que reusar esta función es lo que evita una cuarta
+ * copia del mapa `low/medium/high/...` (Codex y OpenCode tienen la suya porque
+ * sus proveedores SÍ mandan descripciones/variantes propias).
  */
-function effortDescriptor(values: readonly string[], defaultValue: string): ModelOptionDescriptor {
+export function effortDescriptor(
+  values: readonly string[],
+  defaultValue: string,
+): ModelOptionDescriptor {
   return {
     id: 'effort',
     label: 'Razonamiento',
@@ -118,10 +151,24 @@ const CLAUDE_CODE_HAIKU_EFFORT = effortDescriptor(['low', 'medium', 'high'], 'hi
  * Alias de modelo que entiende `@anthropic-ai/claude-agent-sdk` (T28) vía
  * `query({ options: { model } })` — no son ids de vendor/model estilo
  * `openrouter.ai`, son los nombres que el SDK/CLI de Claude Code resuelve.
+ *
+ * Desde F19 esta lista es SOLO el fallback: el catálogo real lo trae
+ * `main/ai/providers/claude-code-model-catalog.ts` pidiéndole los modelos al
+ * propio CLI (`supportedModels()` del Agent SDK), así que un modelo nuevo de
+ * Anthropic aparece sin tocar este archivo ni publicar una release. Este
+ * fallback solo se ve cuando el CLI no está instalado / no responde.
+ *
+ * Por eso la primera entrada es el ALIAS DE FAMILIA `opus` y no un id con
+ * versión: un alias resuelve siempre al Opus más nuevo que la cuenta tenga
+ * disponible, así que ni el fallback envejece hacia atrás (era exactamente el
+ * síntoma que abrió F19: Opus 5 disponible en el CLI y el picker mostrando
+ * `claude-opus-4-8` como lo más nuevo). Los ids con versión que le siguen se
+ * mantienen porque siguen siendo ids válidos y son los que pueden estar
+ * persistidos en `settings.json` de instalaciones previas.
  */
 const CLAUDE_CODE_MODELS = [
+  { id: 'opus', label: 'Opus (última versión)', vendor: 'Anthropic', options: [CLAUDE_CODE_FULL_EFFORT] },
   { id: 'claude-fable-5', label: 'Fable 5', vendor: 'Anthropic', options: [CLAUDE_CODE_FULL_EFFORT] },
-  { id: 'claude-opus-4-8', label: 'Opus 4.8', vendor: 'Anthropic', options: [CLAUDE_CODE_FULL_EFFORT] },
   { id: 'claude-sonnet-5', label: 'Sonnet 5', vendor: 'Anthropic', options: [CLAUDE_CODE_FULL_EFFORT] },
   { id: 'claude-haiku-4-5', label: 'Haiku 4.5', vendor: 'Anthropic', options: [CLAUDE_CODE_HAIKU_EFFORT] },
 ] as const satisfies readonly AiModelOption[]
@@ -234,7 +281,32 @@ export function getModelOption(
   provider: AiProviderId,
   modelId: string,
 ): AiModelOption | undefined {
-  return catalog[provider].models.find((model) => model.id === modelId)
+  return findModelInList(catalog[provider].models, modelId)
+}
+
+/**
+ * Busca `modelId` en una lista de modelos (curada o DINÁMICA, F19) matcheando
+ * primero por id exacto y, solo si nada matchea, por `aliasFor` — el orden
+ * importa: `default`/`opus[1m]` pueden resolver al mismo id canónico, y probar
+ * el exacto primero garantiza que una selección concreta nunca se atribuya a
+ * la fila alias que la envuelve.
+ *
+ * Se usa en los dos lados de la frontera IPC: en main para resolver las
+ * opciones del modelo activo (`main/ai/env.ts`) y en el renderer para marcar
+ * "Activo" y pintar el selector de razonamiento
+ * (`components/settings/ProviderModelPanel.tsx`). Sin el paso por `aliasFor`,
+ * una selección persistida como `claude-sonnet-5` no matchearía la fila
+ * `sonnet` que hoy devuelve el catálogo dinámico de Claude Code y el usuario
+ * vería el picker sin ninguna card activa.
+ */
+export function findModelInList(
+  models: readonly AiModelOption[],
+  modelId: string,
+): AiModelOption | undefined {
+  return (
+    models.find((model) => model.id === modelId) ??
+    models.find((model) => model.aliasFor === modelId)
+  )
 }
 
 /**

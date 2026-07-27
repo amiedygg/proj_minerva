@@ -24,8 +24,12 @@ vi.mock('../settings/store', () => ({
   },
 }))
 
-const { getAiSettingsInfo, getEffectiveAiSelection, parseDotEnv } = await import('./env')
+const { getAiSettingsInfo, getEffectiveAiSelection, parseDotEnv, providerNeedingCatalogWarmup } =
+  await import('./env')
 const { settingsStore } = await import('../settings/store')
+const { recordProviderModels, clearProviderModelsSnapshot } = await import(
+  './providers/model-catalog-snapshot'
+)
 
 describe('parseDotEnv', () => {
   it('parsea pares KEY=VALUE simples', () => {
@@ -111,11 +115,11 @@ describe('getEffectiveAiSelection (T26, precedencia proveedor+modelo)', () => {
 
   it('MINERVA_AI_PROVIDER + MINERVA_AI_MODEL del entorno ganan sobre el default cuando no hay settings', () => {
     process.env.MINERVA_AI_PROVIDER = 'claude-code'
-    process.env.MINERVA_AI_MODEL = 'claude-opus-4-8'
+    process.env.MINERVA_AI_MODEL = 'claude-sonnet-5'
 
     expect(getEffectiveAiSelection()).toEqual({
       provider: 'claude-code',
-      model: 'claude-opus-4-8',
+      model: 'claude-sonnet-5',
       options: { effort: 'high' },
     })
   })
@@ -281,6 +285,155 @@ describe('getEffectiveAiSelection().options (T34, resolución de option descript
   })
 })
 
+/**
+ * F19: los descriptores del modelo activo se buscan PRIMERO en el último
+ * catálogo dinámico conocido (`./providers/model-catalog-snapshot.ts`) y solo
+ * después en el curado. Sin esto, cualquier modelo nuevo —que por definición no
+ * está en el curado— perdía en silencio el `effort` que el usuario había
+ * elegido en Settings.
+ */
+describe('getEffectiveAiSelection (F19, opciones desde el catálogo DINÁMICO)', () => {
+  beforeEach(() => {
+    clearProviderModelsSnapshot()
+    vi.mocked(settingsStore.getPersistedSettings).mockReturnValue(null)
+    vi.mocked(settingsStore.getPersistedModelOptions).mockReturnValue({})
+  })
+
+  afterEach(() => {
+    clearProviderModelsSnapshot()
+    vi.clearAllMocks()
+  })
+
+  it('un modelo que SOLO existe en el catálogo dinámico resuelve su effort guardado', () => {
+    recordProviderModels('claude-code', [
+      {
+        id: 'opus[1m]',
+        label: 'Opus (1M context)',
+        vendor: 'Anthropic',
+        aliasFor: 'claude-opus-5[1m]',
+        options: [
+          {
+            id: 'effort',
+            label: 'Razonamiento',
+            choices: [
+              { value: 'high', label: 'Alto', isDefault: true },
+              { value: 'max', label: 'Máximo' },
+            ],
+          },
+        ],
+      },
+    ])
+    vi.mocked(settingsStore.getPersistedSettings).mockReturnValue({
+      aiProvider: 'claude-code',
+      models: { 'claude-code': 'opus[1m]' },
+    })
+    vi.mocked(settingsStore.getPersistedModelOptions).mockReturnValue({ effort: 'max' })
+
+    expect(getEffectiveAiSelection()).toEqual({
+      provider: 'claude-code',
+      model: 'opus[1m]',
+      options: { effort: 'max' },
+    })
+  })
+
+  it('sin snapshot todavía (arranque en frío), el mismo modelo dinámico cae al curado y no resuelve nada', () => {
+    vi.mocked(settingsStore.getPersistedSettings).mockReturnValue({
+      aiProvider: 'claude-code',
+      models: { 'claude-code': 'opus[1m]' },
+    })
+    vi.mocked(settingsStore.getPersistedModelOptions).mockReturnValue({ effort: 'max' })
+
+    expect(getEffectiveAiSelection().options).toEqual({})
+  })
+
+  it('un id canónico persistido matchea la fila ALIAS del catálogo dinámico (claude-sonnet-5 → sonnet)', () => {
+    recordProviderModels('claude-code', [
+      {
+        id: 'sonnet',
+        label: 'Sonnet',
+        vendor: 'Anthropic',
+        aliasFor: 'claude-sonnet-5',
+        options: [
+          {
+            id: 'effort',
+            label: 'Razonamiento',
+            choices: [
+              { value: 'low', label: 'Bajo' },
+              { value: 'xhigh', label: 'Muy alto', isDefault: true },
+            ],
+          },
+        ],
+      },
+    ])
+    vi.mocked(settingsStore.getPersistedSettings).mockReturnValue({
+      aiProvider: 'claude-code',
+      models: { 'claude-code': 'claude-sonnet-5' },
+    })
+    vi.mocked(settingsStore.getPersistedModelOptions).mockReturnValue({ effort: 'low' })
+
+    expect(getEffectiveAiSelection().options).toEqual({ effort: 'low' })
+  })
+
+  it('providerNeedingCatalogWarmup: null cuando el curado ya conoce el modelo activo (no spawnear el CLI de gratis)', () => {
+    vi.mocked(settingsStore.getPersistedSettings).mockReturnValue({
+      aiProvider: 'opencode',
+      models: { opencode: 'opencode/big-pickle' },
+    })
+
+    expect(providerNeedingCatalogWarmup()).toBeNull()
+  })
+
+  it('providerNeedingCatalogWarmup: devuelve el proveedor cuando ningún catálogo conoce el modelo activo', () => {
+    vi.mocked(settingsStore.getPersistedSettings).mockReturnValue({
+      aiProvider: 'claude-code',
+      models: { 'claude-code': 'opus[1m]' },
+    })
+
+    expect(providerNeedingCatalogWarmup()).toBe('claude-code')
+  })
+
+  it('providerNeedingCatalogWarmup: null una vez que el snapshot dinámico trae ese modelo', () => {
+    recordProviderModels('claude-code', [
+      { id: 'opus[1m]', label: 'Opus (1M context)', vendor: 'Anthropic' },
+    ])
+    vi.mocked(settingsStore.getPersistedSettings).mockReturnValue({
+      aiProvider: 'claude-code',
+      models: { 'claude-code': 'opus[1m]' },
+    })
+
+    expect(providerNeedingCatalogWarmup()).toBeNull()
+  })
+
+  it('el catálogo dinámico manda sobre el curado para el MISMO id: sus niveles reales son los que aplican', () => {
+    // `claude-haiku-4-5` en el curado no soporta `xhigh`; si la cuenta real lo
+    // ofreciera, el snapshot debe ganar en vez de degradar al default curado.
+    recordProviderModels('claude-code', [
+      {
+        id: 'claude-haiku-4-5',
+        label: 'Haiku 4.5',
+        vendor: 'Anthropic',
+        options: [
+          {
+            id: 'effort',
+            label: 'Razonamiento',
+            choices: [
+              { value: 'high', label: 'Alto', isDefault: true },
+              { value: 'xhigh', label: 'Muy alto' },
+            ],
+          },
+        ],
+      },
+    ])
+    vi.mocked(settingsStore.getPersistedSettings).mockReturnValue({
+      aiProvider: 'claude-code',
+      models: { 'claude-code': 'claude-haiku-4-5' },
+    })
+    vi.mocked(settingsStore.getPersistedModelOptions).mockReturnValue({ effort: 'xhigh' })
+
+    expect(getEffectiveAiSelection().options).toEqual({ effort: 'xhigh' })
+  })
+})
+
 describe('getAiSettingsInfo (T34, selectedOptions)', () => {
   beforeEach(() => {
     vi.mocked(settingsStore.getPersistedSettings).mockReturnValue(null)
@@ -296,7 +449,7 @@ describe('getAiSettingsInfo (T34, selectedOptions)', () => {
   it('expone las opciones RESUELTAS del proveedor+modelo activo, indexadas por proveedor', () => {
     vi.mocked(settingsStore.getPersistedSettings).mockReturnValue({
       aiProvider: 'claude-code',
-      models: { 'claude-code': 'claude-opus-4-8' },
+      models: { 'claude-code': 'opus' },
     })
     vi.mocked(settingsStore.getPersistedModelOptions).mockReturnValue({ effort: 'xhigh' })
 

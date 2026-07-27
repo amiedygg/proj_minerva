@@ -84,7 +84,17 @@ test('modal F12: strip "En uso", tabs de proveedor y activación por card', asyn
   // userData virgen ⇒ el proveedor activo es el default (opencode); nada que
   // resincronizar: este test opera SOLO vía UI.
   const snapshot = await window.evaluate(() => window.minerva.settings.get())
-  const targetModel: string = snapshot.catalog['claude-code'].models[0].id
+  // El modelo objetivo sale del MISMO canal que puebla el picker
+  // (`ai:getProviderModels`), no de `snapshot.catalog`: desde F19 Claude Code
+  // tiene catálogo dinámico, así que en una máquina con `claude` instalado las
+  // cards son las que reporta el CLI y no las curadas. Con el CLI ausente (CI)
+  // el canal degrada al catálogo curado, y este test sigue siendo determinista
+  // en los dos casos.
+  const targetModel: string = await window.evaluate(() =>
+    window.minerva.ai
+      .getProviderModels({ provider: 'claude-code' })
+      .then((models: { id: string }[]) => models[0].id),
+  )
 
   await openSettingsModal(window)
 

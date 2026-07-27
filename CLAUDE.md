@@ -82,9 +82,25 @@ Regla de oro: **ninguna tarea pasa a `[x]` sin verificación del orquestador** �
   determinista. OpenRouter ya NO es proveedor directo (T59): sus modelos se usan
   DENTRO de OpenCode (`opencode auth login`), y settings.json viejos migran solos.
   - **Proveedor y modelo configurables** (Settings UI, engrane en la TitleBar):
-    catálogo por proveedor en `src/shared/ai-providers.ts` (OpenCode además refresca
-    modelos dinámicos vía `provider.list`). Precedencia: settings.json (userData) >
-    env `MINERVA_AI_PROVIDER`/`MINERVA_AI_MODEL` > default (`opencode/big-pickle`).
+    Precedencia: settings.json (userData) > env
+    `MINERVA_AI_PROVIDER`/`MINERVA_AI_MODEL` > default (`opencode/big-pickle`).
+    **Desde F19 los TRES proveedores tienen catálogo DINÁMICO**
+    (`main/ai/providers/{claude-code,codex,opencode}-model-catalog.ts`, agregados
+    por `provider-models.ts` con cache TTL 60s): le preguntan a su CLI qué
+    modelos tiene disponibles la sesión — Claude Code vía `supportedModels()`
+    del Agent SDK (`query()` en modo streaming input con un generador que NUNCA
+    yieldea: es un control request, no una llamada al modelo, así que no gasta
+    tokens), Codex vía `model/list`, OpenCode vía `provider.list`. El catálogo de
+    `src/shared/ai-providers.ts` es SOLO el fallback para cuando el CLI no está
+    o no responde: **no hace falta editarlo para que un modelo nuevo aparezca**,
+    y por eso su primera entrada de Claude Code es el alias de familia `opus`
+    (un id versionado ahí envejece y reproduce el bug que F19 arregló).
+    Los descriptores de opción (`effort`/`variant`) del modelo activo se
+    resuelven contra el último catálogo dinámico conocido
+    (`providers/model-catalog-snapshot.ts`, leíble síncrono) y solo después
+    contra el curado — sin eso, el `effort` elegido para un modelo nuevo se
+    descartaba en silencio. Las filas ALIAS traen `aliasFor` (`sonnet` →
+    `claude-sonnet-5`) y se matchean con `findModelInList` (exacto primero).
   - **Streaming**: SSE en main + protocolo de secciones **tagged**
     (`@@@SECTION kind=...`, `@@@MERMAID...@@@END_MERMAID`, `@@@SNIPPET...`) parseado
     incrementalmente por `StreamSectionParser`; progreso al renderer vía evento push
@@ -222,7 +238,29 @@ scripts/            smoke-*.mjs (e2e vía CDP), screenshot-app.sh, debug-*.mjs
     mide NUNCA (F16: el árbol de archivos se quedaba como columna a 580px porque
     `width` seguía en `null`). Usa el **callback ref** de `useElementWidth`, que
     corre cada vez que el nodo entra o sale del DOM.
-12. **Redimensionar la ventana de Electron en un test es
+12. **Un hijo `detached: true` NO muere con su padre** — se puso así para poder
+    matar el GRUPO (`process.kill(-pid, …)`), y el precio es que sobrevive al
+    proceso que lo lanzó. Por eso el pid tiene que registrarse en el MISMO tick
+    del `spawn`, nunca cuando el proceso "esté listo": `opencode-runtime.ts`
+    registraba `serverChild` al parsear la línea de ready, así que durante todo
+    el arranque (segundos en frío) `stopOpencodeServer()` era un no-op y cerrar
+    la app en esa ventana dejaba un `opencode serve` de ~300 MB reparentado a
+    init, para siempre (F20: 53 huérfanos y 14 GB tras unas corridas de e2e). Y
+    lo asíncrono ANTERIOR al spawn tiene que ser CANCELABLE (`spawnGeneration`):
+    el `await findEphemeralPort()` era una ventana en la que el killer no veía
+    nada y el proceso igual nacía después.
+    Ojo también con el volumen: `MINERVA_MOCK_AI=1` corta en `createAiService`,
+    que está DESPUÉS del probe de CLIs, y el panel didáctico pide ese probe al
+    montarse — o sea, TODO launch de la app levanta un server de opencode,
+    incluso en tests que no tocan la IA. `e2e/opencode-sweep.ts` barre los que se
+    escapen (solo huérfanos con `PLAYWRIGHT_TEST=1` en su environ, jamás la
+    sesión de opencode del usuario), se llama en `closeMinerva` y en el
+    `globalTeardown`, y loguea de QUÉ test venía: si imprime algo, la limpieza
+    real se rompió. Y si el arreglo es del proceso main, `dist/linux-unpacked`
+    (que usa `packaged.spec.ts`) es un TERCER build a rehacer con
+    `npm run dist:dir` — `npm run build` no lo toca, y un binario viejo ahí
+    simula perfectamente una fuga que ya arreglaste.
+13. **Redimensionar la ventana de Electron en un test es
     `Emulation.setDeviceMetricsOverride` por CDP** (`setViewport` en
     `e2e/fixtures.ts`), NO `page.setViewportSize()`: con `connectOverCDP` la
     página vive en una ventana que Playwright no creó y ese método la rechaza.
